@@ -1,0 +1,26 @@
+# Python environment
+.venv/
+__pycache__/
+*.pyc
+
+# Bundled third-party OMR engine (166MB, AGPL-3.0-licensed, downloaded separately -
+# see README for setup instructions instead of committing it)
+tools/Audiveris/
+
+# Input sheet-music PDFs and their annotated outputs - these are other people's
+# copyrighted music (some explicitly marked "sharing and photocopying prohibited"
+# by the source they were downloaded from), not this project's code, and must
+# not be redistributed via this repo.
+sheet/
+output/
+
+# Runtime job storage / logs for server.py (server_jobs/ holds uploaded PDFs too -
+# same copyright concern as above)
+server_jobs/
+server.log
+
+# Editor/IDE
+.idea/
+
+# Claude Code session state (local-only, not meant for the public repo)
+.claude/
