@@ -10,10 +10,20 @@ Run with:
     (or: .venv\\Scripts\\python.exe -m uvicorn server:app --host 0.0.0.0 --port 8000)
 
 Endpoints:
+    GET    /                               web UI (static/index.html) - local dev convenience only
     GET    /api/health                     liveness check
     POST   /api/sheets                     upload a PDF, kick off annotation
     GET    /api/sheets/{job_id}            poll job status
     GET    /api/sheets/{job_id}/download   fetch the annotated PDF once done
+                                            (?inline=1 for in-browser preview instead of a forced download)
+
+The UI (static/index.html + static/config.js) is deployment-independent from
+this API: locally it's served from "/" above for convenience, but it's a
+plain static file with no build step that can just as well be copied to
+S3/CloudFront and pointed at this API's real URL by editing config.js's
+API_BASE - no HTML/JS edits needed. Because that makes the UI a different
+origin from the API in that deployment, CORS is enabled below; set
+ALLOWED_ORIGINS to the UI's real origin(s) in production instead of "*".
 
 Jobs run one at a time on a single background worker thread, deliberately -
 Audiveris is CPU/memory-heavy per job, and this mirrors the "SQS + worker"
@@ -22,6 +32,7 @@ in-process. Job state and uploaded/output files live under ./server_jobs and
 are NOT cleaned up automatically, and job state is in-memory only (lost on
 restart) - both fine for local/dev use, not for production as-is.
 """
+import os
 import queue
 import shutil
 import threading
@@ -31,14 +42,28 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from run import annotate_pdf
 
 JOBS_DIR = Path(__file__).parent / "server_jobs"
 JOBS_DIR.mkdir(exist_ok=True)
+STATIC_DIR = Path(__file__).parent / "static"
 
 app = FastAPI(title="Music-Sheet Annotator API")
+
+# comma-separated list of allowed UI origins, e.g. "https://d123.cloudfront.net";
+# defaults to "*" (any origin) which is fine for local dev, not for production
+_allowed = os.environ.get("ALLOWED_ORIGINS", "*")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"] if _allowed == "*" else [o.strip() for o in _allowed.split(",")],
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+
 
 jobs = {}  # job_id -> dict; in-memory only, see module docstring
 jobs_lock = threading.Lock()
@@ -53,6 +78,8 @@ def _process(job_id):
 
     def log(msg, _jid=job_id):
         print(f"[{_jid[:8]}] {msg}")
+        with jobs_lock:
+            jobs[_jid]["stage"] = msg
 
     try:
         n = annotate_pdf(
@@ -118,7 +145,7 @@ async def submit_sheet(
             "work_dir": job_dir / "work",
             "style": style, "octave": octave, "font_size": font_size,
             "dpi": dpi, "auto_retry": auto_retry,
-            "error": None, "labeled_groups": None,
+            "error": None, "labeled_groups": None, "stage": None,
         }
     job_queue.put(job_id)
     return {"job_id": job_id, "status": "queued"}
@@ -141,17 +168,26 @@ def job_status(job_id: str):
         "input_filename": job["input_filename"],
         "labeled_groups": job["labeled_groups"],
         "error": job["error"],
+        "stage": job["stage"],
     }
 
 
 @app.get("/api/sheets/{job_id}/download")
-def job_download(job_id: str):
+def job_download(job_id: str, inline: bool = False):
     job = _job_or_404(job_id)
     if job["status"] != "done":
         raise HTTPException(409, f"job is '{job['status']}', not done yet")
     stem = Path(job["input_filename"]).stem
     return FileResponse(job["output_path"], media_type="application/pdf",
-                         filename=f"{stem} (annotated).pdf")
+                         filename=f"{stem} (annotated).pdf",
+                         content_disposition_type="inline" if inline else "attachment")
+
+
+# Local-dev convenience only: serves static/index.html at "/" and static/config.js
+# alongside it. Registered last so it doesn't shadow the /api/* routes above -
+# a real deployment skips this entirely and serves static/ from S3/CloudFront
+# instead (see the module docstring).
+app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 
 
 if __name__ == "__main__":
