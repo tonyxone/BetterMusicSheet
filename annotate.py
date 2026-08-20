@@ -275,6 +275,7 @@ def _build_records_inner(pdf_doc, omr_path, num_pages, style, octave, verbose, p
                         'labels': labels,
                         'measure': measure,
                         'scale': scale,
+                        'notehead_w_pt': group_w * px_to_pt,
                     })
 
     if verbose:
@@ -288,25 +289,29 @@ ARIAL_PATH = r"C:\Windows\Fonts\arialuni.ttf"  # arial.ttf lacks the U+266D flat
 
 
 def _layout_page_records(page_records, font_size, measure_font, margin_pt):
-    """Compute each record's draw positions, resolving two distinct kinds of
-    crowding differently:
+    """Compute each record's draw positions.
 
-    - Two DIFFERENT beats on the same staff landing close together: nudge them
-      apart horizontally (a same-system, "neighboring note" conflict).
-    - A stack's vertical reach colliding with a different system/line above or
-      below: there's no room to grow further up/down, so the stack is
-      repositioned as a whole - still vertically stacked, in the same order -
-      to sit beside the note (vertically centered on it) instead of above or
-      below it, using the open horizontal space before the next note. It keeps
-      being a real vertical stack; it just moves sideways instead of growing
-      into a neighboring line it doesn't have room for.
+    Each multi-note stack (dyad or bigger chord) picks one of two placements:
 
-    Vertical stacking otherwise stays reserved for genuinely simultaneous notes
-    (already grouped into one record) - two records from different beats never
-    overlap or look stacked.
+    - "beside": vertically centered on the note, offset right by the note's
+      own half-width (so it clears the physical notehead - a whole note's open
+      "O" glyph is much wider than the label's own half-width, which used to
+      be the only clearance applied, letting labels sit on top of the note)
+      plus a visual gap. Preferred whenever there's room for it before the
+      next event on the same system - tucking the stack next to the chord it
+      belongs to reads better than dropping it into empty space below/above.
+    - "below"/"above" (RH above, LH below): the fallback when beside doesn't
+      fit - stacked directly under/over the note, growing away from the staff.
+
+    Single notes always use below/above - there's no stack to tuck sideways,
+    and a single label rarely conflicts with anything.
+
+    Two DIFFERENT beats on the same staff landing close together (same
+    placement, overlapping label footprints) still get nudged apart
+    horizontally afterward, regardless of which placement each ended up with.
     """
     min_gap = 0.6  # pt
-    side_gap = margin_pt  # horizontal clearance from the notehead when moved beside it
+    side_gap = margin_pt  # horizontal clearance from the notehead
 
     blocks = []
     for rec in page_records:
@@ -319,54 +324,73 @@ def _layout_page_records(page_records, font_size, measure_font, margin_pt):
         line_h = fs * 1.05
         if part == 0:  # RH / treble -> stack ABOVE, highest pitch furthest up
             base_y = rec['top_y_pt'] - margin_pt
-            ys = [base_y - (n - 1 - i) * line_h for i in range(n)]
+            below_ys = [base_y - (n - 1 - i) * line_h for i in range(n)]
         else:  # LH / bass -> stack BELOW, highest pitch closest to the staff
             base_y = rec['bottom_y_pt'] + margin_pt + fs
-            ys = [base_y + i * line_h for i in range(n)]
+            below_ys = [base_y + i * line_h for i in range(n)]
         widths = [measure_font.text_length(lbl, fontsize=fs) for lbl in labels]
+        half_w = max(widths) / 2.0
         note_mid_y = (rec['top_y_pt'] + rec['bottom_y_pt']) / 2.0
+        notehead_half_w = rec.get('notehead_w_pt', 0.0) / 2.0
+        beside_x = rec['anchor_x_pt'] + notehead_half_w + side_gap + half_w
+        beside_ys = [note_mid_y - (n - 1) / 2.0 * line_h + i * line_h for i in range(n)]
         blocks.append({
-            'x': rec['anchor_x_pt'], 'labels': labels, 'widths': widths, 'ys': ys,
+            'x': rec['anchor_x_pt'], 'labels': labels, 'widths': widths, 'part': part,
+            'below_ys': below_ys, 'ys': below_ys, 'mode': 'below',
+            'beside_ys': beside_ys, 'beside_x': beside_x,
             'system': (rec['page'], rec['system']), 'note_mid_y': note_mid_y,
-            'fs': fs, 'line_h': line_h,
+            'fs': fs, 'line_h': line_h, 'half_w': half_w,
         })
 
-    def vertical_bbox(ys, widths, fs):
-        return min(ys) - fs * 0.85, max(ys) + fs * 0.3, max(widths) / 2.0
+    def vertical_bbox(ys, fs):
+        return min(ys) - fs * 0.85, max(ys) + fs * 0.3
 
-    # detect stacks whose vertical span collides with content from a DIFFERENT
+    def use_beside(b):
+        b['ys'] = b['beside_ys']
+        b['x'] = b['beside_x']
+        b['mode'] = 'beside'
+
+    # forced beside: below/above would collide with content from a DIFFERENT
     # system/line (identified by system index, not x-distance - a neighboring
     # note in the SAME system can easily be >20pt away too, so x-distance alone
-    # can't tell "next note" apart from "line above/below") and reposition just
-    # those beside their note instead of above/below it
+    # can't tell "next note" apart from "line above/below")
     for b in blocks:
         if len(b['labels']) < 2:
             continue
-        y_top, y_bottom, _ = vertical_bbox(b['ys'], b['widths'], b['fs'])
+        y_top, y_bottom = vertical_bbox(b['below_ys'], b['fs'])
         for other in blocks:
             if other is b or other['system'] == b['system']:
                 continue
-            oy_top, oy_bottom, _ = vertical_bbox(other['ys'], other['widths'], other['fs'])
+            oy_top, oy_bottom = vertical_bbox(other['ys'], other['fs'])
             if y_top < oy_bottom and y_bottom > oy_top:
-                n = len(b['labels'])
-                mid = b['note_mid_y']
-                # re-center the SAME vertical stack (same order, same line
-                # spacing) on the note's own height instead of above/below it
-                lh = b['line_h']
-                b['ys'] = [mid - (n - 1) / 2.0 * lh + i * lh for i in range(n)]
-                b['beside'] = True
+                use_beside(b)
                 break
 
-    # finalize each block's x-anchor and half-width: normal blocks stay
-    # centered on the note; repositioned blocks shift right by the note's own
-    # half-width plus clearance, keeping their vertical stack intact
+    # preferred beside: even without a collision, tuck the stack beside the
+    # note whenever there's ample horizontal room before the next event on
+    # THIS staff (same system AND same hand - a close note on the other
+    # staff/hand doesn't share this stack's vertical band, so it's irrelevant
+    # to whether beside placement would visually crowd anything)
+    by_staff = {}
     for b in blocks:
-        half_w = max(b['widths']) / 2.0
-        if b.get('beside'):
-            b['x'] = b['x'] + half_w + side_gap
-        b['half_w'] = half_w
+        by_staff.setdefault((b['system'], b['part']), []).append(b)
+    for staff_blocks in by_staff.values():
+        xs = sorted(set(b['x'] for b in staff_blocks))
+        for b in staff_blocks:
+            if b['mode'] == 'beside' or len(b['labels']) < 2:
+                continue
+            later = [x for x in xs if x > b['x'] + 0.01]
+            next_x = min(later) if later else None
+            # a comfortable margin, not just the bare minimum that avoids
+            # overlap - "plenty of room" should look plenty, and this leaves
+            # slack for whatever the next event's own label ends up needing
+            needed_right = b['beside_x'] + b['half_w'] + min_gap + b['half_w']
+            if next_x is None or next_x >= needed_right:
+                use_beside(b)
+
+    for b in blocks:
         b['label_x_offsets'] = [0.0] * len(b['labels'])
-        y_top, y_bottom, _ = vertical_bbox(b['ys'], b['widths'], b['fs'])
+        y_top, y_bottom = vertical_bbox(b['ys'], b['fs'])
         b['y_top'], b['y_bottom'] = y_top, y_bottom
 
     # greedy left-to-right sweep for same-system neighbors: each block only
