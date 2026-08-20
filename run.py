@@ -11,7 +11,7 @@ from pathlib import Path
 
 import fitz
 
-from audiveris_heads import load_sheet_heads
+from audiveris_heads import load_sheet_heads, load_system_staff_groups
 
 AUDIVERIS_EXE = Path(__file__).parent / "tools" / "Audiveris" / "Audiveris" / "Audiveris.exe"
 
@@ -21,6 +21,12 @@ RETRY_DPI = 600
 # is large enough to be a meaningful baseline.
 SPARSE_RATIO = 0.4
 SPARSE_MIN_MEDIAN = 20
+
+NOT_MUSIC_MESSAGE = (
+    "No music notation was detected in this PDF. Make sure it's actually a sheet "
+    "music score (with staff lines and notes) and not a scan of something else, "
+    "a blank page, or a non-music document."
+)
 
 
 def run_audiveris(pdf_path, out_dir, dpi=None, sheets=None):
@@ -49,11 +55,41 @@ def run_audiveris(pdf_path, out_dir, dpi=None, sheets=None):
     return mxl, omr
 
 
+def _no_system_found(work_dir, stem):
+    """Whether Audiveris's own log for this run shows it aborted with
+    'No system found' - it fails outright (not just an empty result) when a
+    page has nothing staff-like on it at all, which happens before any of our
+    own detection code even runs."""
+    logs = sorted(work_dir.glob(f"{stem}-*.log"))
+    if not logs:
+        return False
+    try:
+        text = logs[-1].read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return "No system found" in text
+
+
 def count_pages(pdf_path):
     doc = fitz.open(pdf_path)
     n = doc.page_count
     doc.close()
     return n
+
+
+def has_any_staff(omr_path, num_pages):
+    """Whether Audiveris found a musical staff (its GRID step - staff lines
+    grouped into systems) anywhere at all in the document. Staff-line detection
+    is far more resolution-tolerant than notehead detection, so "zero staves
+    anywhere, at default DPI" is a reliable signal the PDF isn't sheet music at
+    all, rather than just being under-recognized."""
+    for page in range(1, num_pages + 1):
+        try:
+            if load_system_staff_groups(str(omr_path), page):
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def find_sparse_pages(omr_path, num_pages):
@@ -110,8 +146,16 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
     work_dir = Path(work_dir)
 
     log(f"[1/3] Running Audiveris OMR on {pdf_path.name} ...")
-    mxl, omr = run_audiveris(pdf_path, work_dir, dpi=dpi)
+    try:
+        mxl, omr = run_audiveris(pdf_path, work_dir, dpi=dpi)
+    except subprocess.CalledProcessError:
+        if _no_system_found(work_dir, pdf_path.stem):
+            raise ValueError(NOT_MUSIC_MESSAGE)
+        raise
     num_pages = count_pages(pdf_path)
+
+    if not has_any_staff(omr, num_pages):
+        raise ValueError(NOT_MUSIC_MESSAGE)
 
     page_overrides = {}
     if dpi is None and auto_retry:

@@ -1,9 +1,13 @@
 """REST API for the sheet-music annotator.
 
 Wraps the same pipeline as run.py (audiveris_heads.py / annotate.py) behind a
-small job-queue API: upload a PDF, poll for completion, download the result.
-OMR takes anywhere from seconds to minutes per file, so submission is
-async - there is no synchronous "upload and get the PDF back" endpoint.
+small job-queue API: upload a PDF (or a JPG/PNG photo/scan - Audiveris reads
+raster images directly, so a non-PDF upload is just converted to a one-page
+PDF up front and the rest of the pipeline never knows the difference), poll
+for completion, download the result. The output is always a PDF, regardless
+of what was uploaded. OMR takes anywhere from seconds to minutes per file, so
+submission is async - there is no synchronous "upload and get the PDF back"
+endpoint.
 
 Run with:
     .venv\\Scripts\\python.exe server.py
@@ -11,7 +15,7 @@ Run with:
 
 Endpoints:
     GET    /api/health                     liveness check
-    POST   /api/sheets                     upload a PDF, kick off annotation
+    POST   /api/sheets                     upload a PDF or image, kick off annotation
     GET    /api/sheets/{job_id}            poll job status
     GET    /api/sheets/{job_id}/download   fetch the annotated PDF once done
 
@@ -30,13 +34,16 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
+import pymupdf
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
-from run import annotate_pdf
+from run import annotate_pdf, count_pages
 
 JOBS_DIR = Path(__file__).parent / "server_jobs"
 JOBS_DIR.mkdir(exist_ok=True)
+
+ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
 
 app = FastAPI(title="Music-Sheet Annotator API")
 
@@ -91,7 +98,7 @@ def health():
 
 @app.post("/api/sheets", status_code=202)
 async def submit_sheet(
-    file: UploadFile = File(..., description="Piano sheet-music PDF"),
+    file: UploadFile = File(..., description="Piano sheet-music PDF, or a photo/scan (JPG/PNG)"),
     style: str = Form("unicode", description="'unicode' (B♭) or 'ascii' (Bb)"),
     octave: bool = Form(False, description="Append octave number, e.g. B♭4"),
     font_size: float = Form(6.5),
@@ -100,15 +107,41 @@ async def submit_sheet(
 ):
     if style not in ("unicode", "ascii"):
         raise HTTPException(400, "style must be 'unicode' or 'ascii'")
-    if not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(400, "only PDF uploads are supported")
+    ext = Path(file.filename).suffix.lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(400, "only PDF or image (JPG/PNG) uploads are supported")
 
     job_id = uuid.uuid4().hex
     job_dir = JOBS_DIR / job_id
     job_dir.mkdir(parents=True)
-    input_path = job_dir / "input.pdf"
-    with input_path.open("wb") as f:
+    raw_path = job_dir / f"upload{ext}"
+    with raw_path.open("wb") as f:
         shutil.copyfileobj(file.file, f)
+
+    # Normalize to a PDF regardless of what was uploaded, so the rest of the
+    # pipeline (and the download, which is always a PDF) never has to care
+    # whether the original was a document or a photo. This also validates the
+    # file's actual content instead of trusting the extension - a renamed
+    # non-PDF/non-image (or a corrupt upload) fails cleanly here rather than
+    # confusingly partway through the Audiveris subprocess.
+    input_path = job_dir / "input.pdf"
+    try:
+        with pymupdf.open(raw_path) as doc:
+            is_pdf = doc.is_pdf
+            if not is_pdf:
+                pdf_bytes = doc.convert_to_pdf()
+        if is_pdf:
+            raw_path.rename(input_path)
+        else:
+            with pymupdf.open("pdf", pdf_bytes) as pdf_doc:
+                pdf_doc.save(input_path)
+            raw_path.unlink(missing_ok=True)
+        num_pages = count_pages(input_path)
+        if num_pages < 1:
+            raise ValueError("no pages")
+    except Exception:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise HTTPException(400, "the uploaded file isn't a valid PDF or image")
 
     with jobs_lock:
         jobs[job_id] = {
