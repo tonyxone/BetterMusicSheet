@@ -1,0 +1,608 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Better Music Sheet</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Spectral:wght@400;500;600;700&family=Work+Sans:wght@400;500;600&family=Caveat:wght@600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper:#FAF3E6; --paper-deep:#F0E4CE; --card:#FFFDF8; --ink:#2E2117; --ink-soft:#7A6753;
+    --accent:#A83C34; --accent-deep:#8C4A1F; --gold:#D9A441; --success:#5C7A4E; --successBg:#E7EEDD;
+    --danger:#A83C34; --dangerBg:#F5E3E1;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); min-height: 100vh; font-family: 'Work Sans', sans-serif;
+    color: var(--ink); position: relative; overflow-x: hidden;
+  }
+  .bg-glow {
+    position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    background: radial-gradient(circle at 8% 12%, rgba(193,98,45,0.07), transparent 40%),
+                radial-gradient(circle at 92% 85%, rgba(217,164,65,0.10), transparent 45%);
+  }
+  h1, h2, .serif { font-family: 'Spectral', serif; }
+  header {
+    position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between;
+    height: 88px; padding: 0 32px; background: rgba(250,243,230,0.92); backdrop-filter: blur(6px);
+    border-bottom: 1px solid var(--paper-deep);
+  }
+  header .logo { cursor: pointer; display: flex; align-items: center; }
+  header .logo svg { width: 220px; height: 70px; overflow: visible; }
+  .nav-btn {
+    display: flex; align-items: center; gap: 8px; white-space: nowrap; border: none; padding: 11px 20px;
+    border-radius: 999px; font-size: 14.5px; font-weight: 600; cursor: pointer; font-family: inherit;
+  }
+  .nav-btn.primary { background: var(--accent); color: #fff; box-shadow: 0 6px 16px rgba(140,74,31,0.25); }
+  .nav-btn.primary:hover { background: var(--accent-deep); }
+  .nav-btn.ghost { background: transparent; border: 1px solid var(--ink-soft); color: var(--ink); }
+  .nav-btn.ghost:hover { background: var(--paper-deep); }
+
+  main { position: relative; z-index: 1; }
+  .view { display: none; }
+  .view.active { display: block; }
+
+  /* ---- Upload view ---- */
+  #view-upload .wrap { max-width: 600px; margin: 0 auto; padding: 56px 32px 100px; }
+  #view-upload h1 { font-size: 32px; font-weight: 600; text-align: center; margin: 0; }
+  #view-upload .sub {
+    font-size: 15.5px; color: var(--ink-soft); text-align: center; margin-top: 10px;
+    max-width: 460px; margin-left: auto; margin-right: auto; line-height: 1.5;
+  }
+  #view-upload .hint { font-size: 13.5px; color: var(--ink-soft); text-align: center; margin-top: 12px; margin-bottom: 32px; }
+  .dropzone {
+    display: block; border: 2px dashed #E4D6B8; border-radius: 20px; padding: 48px 24px; text-align: center;
+    cursor: pointer; background: transparent; transition: border-color .15s, background .15s;
+  }
+  .dropzone.drag, .dropzone.has-file { border-color: var(--accent); background: rgba(217,164,65,0.06); }
+  .dropzone input { display: none; }
+  .dropzone .icon { font-size: 32px; margin-bottom: 10px; }
+  .dropzone .title { font-size: 16px; font-weight: 600; }
+  .dropzone .detail { font-size: 13.5px; color: var(--ink-soft); margin-top: 6px; word-break: break-all; }
+
+  details.options { margin-top: 18px; }
+  details.options summary {
+    cursor: pointer; color: var(--ink-soft); font-size: 14px; font-weight: 500; padding: 4px 0; list-style: none;
+  }
+  details.options summary::-webkit-details-marker { display: none; }
+  details.options summary::before { content: "▸ "; }
+  details.options[open] summary::before { content: "▾ "; }
+  .opt-row { display: flex; align-items: center; gap: 10px; margin: 14px 0; font-size: 14px; }
+  .opt-row label.main { flex: 0 0 110px; color: var(--ink-soft); }
+  .opt-row select, .opt-row input[type=number] {
+    border: 1px solid var(--paper-deep); border-radius: 8px; padding: 7px 10px; font-size: 14px;
+    font-family: inherit; background: var(--card); color: var(--ink);
+  }
+  .opt-row.checkbox { gap: 8px; }
+
+  .btn-block {
+    width: 100%; margin-top: 32px; padding: 16px; border: none; border-radius: 14px; font-size: 16px;
+    font-weight: 600; cursor: pointer; font-family: inherit; background: #C9BBA3; color: #fff; opacity: 0.7;
+  }
+  .btn-block.ready { background: var(--accent); opacity: 1; cursor: pointer; }
+  .btn-block.ready:hover { background: var(--accent-deep); }
+
+  /* ---- Processing view ---- */
+  #view-processing .wrap { max-width: 480px; margin: 0 auto; padding: 100px 32px; text-align: center; }
+  .note-bounce {
+    position: relative; height: 70px; margin-bottom: 32px;
+  }
+  .note-bounce .line { position: absolute; left: 20%; right: 20%; top: 50%; height: 1px; background: var(--ink-soft); opacity: 0.4; }
+  .note-bounce .note {
+    position: absolute; left: calc(50% - 14px); top: 8px; font-size: 26px;
+    animation: bms-bounce 1s ease-in-out infinite;
+  }
+  @keyframes bms-bounce { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+  @keyframes bms-spin { to { transform: rotate(360deg); } }
+  @keyframes bms-fadein { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  #view-processing h2 { font-size: 24px; font-weight: 600; margin: 0; }
+  #view-processing .sub { font-size: 14.5px; color: var(--ink-soft); margin-top: 6px; margin-bottom: 30px; }
+  .stage-card {
+    text-align: left; background: var(--card); border: 1px solid var(--paper-deep); border-radius: 16px;
+    padding: 22px 22px; display: flex; align-items: center; gap: 14px;
+  }
+  .stage-spinner {
+    width: 20px; height: 20px; border-radius: 50%; border: 2.5px solid var(--paper-deep);
+    border-top-color: var(--accent); animation: bms-spin 0.8s linear infinite; flex: none;
+  }
+  .stage-text { font-size: 15px; color: var(--ink); }
+  .cancel-link { margin-top: 22px; font-size: 14px; color: var(--ink-soft); cursor: pointer; text-decoration: underline; }
+
+  /* ---- Result view ---- */
+  #view-result .wrap { max-width: 1180px; margin: 0 auto; padding: 40px 32px 100px; }
+  .result-head { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 16px; margin-bottom: 20px; }
+  .result-head h2 { font-size: 28px; font-weight: 600; margin: 0; word-break: break-word; }
+  .result-head .sub { font-size: 13.5px; color: var(--ink-soft); margin-top: 6px; }
+  .result-actions { display: flex; gap: 10px; flex-shrink: 0; }
+  .btn-pill {
+    padding: 12px 20px; border-radius: 12px; border: none; background: var(--accent); color: #fff;
+    font-weight: 600; font-size: 14.5px; cursor: pointer; font-family: inherit; text-decoration: none;
+    display: inline-block;
+  }
+  .btn-pill:hover { background: var(--accent-deep); }
+  .btn-pill.ghost { background: transparent; border: 1px solid var(--ink-soft); color: var(--ink); }
+  .btn-pill.ghost:hover { background: var(--paper-deep); }
+  .preview-card {
+    background: var(--card); border: 1px solid var(--paper-deep); border-radius: 20px; padding: 16px;
+    box-shadow: 0 14px 40px rgba(46,33,23,0.08);
+  }
+  /* resizable: custom drag handle (not the native CSS `resize` corner - too small
+     to grab reliably and its default styling doesn't match the rest of the page) */
+  .preview-resize { position: relative; width: 100%; height: 82vh; min-height: 500px; overflow: hidden; border-radius: 10px; }
+  .preview-resize iframe { width: 100%; height: 100%; border: none; display: block; background: #fff; }
+  .resize-handle {
+    position: absolute; z-index: 3; right: 0; bottom: 0; width: 26px; height: 26px; cursor: ns-resize;
+    display: flex; align-items: flex-end; justify-content: flex-end; padding: 4px; touch-action: none;
+  }
+  .resize-handle svg { width: 14px; height: 14px; color: var(--ink-soft); opacity: 0.7; }
+  .resize-handle:hover svg { opacity: 1; }
+  .preview-resize.dragging { user-select: none; }
+
+  /* ---- History view ---- */
+  #view-history .wrap { max-width: 820px; margin: 0 auto; padding: 48px 32px 100px; }
+  #view-history h1 { font-size: 28px; font-weight: 600; margin: 0 0 6px; }
+  #view-history .sub { font-size: 15px; color: var(--ink-soft); margin-bottom: 30px; }
+  .history-row {
+    display: flex; align-items: center; gap: 18px; background: var(--card); border: 1px solid var(--paper-deep);
+    border-radius: 16px; padding: 16px 20px; margin-bottom: 12px; cursor: pointer;
+    transition: box-shadow .15s, transform .15s;
+  }
+  .history-row:hover { box-shadow: 0 10px 26px rgba(46,33,23,0.10); transform: translateY(-1px); }
+  .history-icon {
+    width: 44px; height: 56px; background: var(--paper); border: 1px solid var(--paper-deep); border-radius: 6px;
+    flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 18px;
+  }
+  .history-info { flex: 1; min-width: 0; }
+  .history-title { font-family: 'Spectral', serif; font-size: 17px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .history-meta { font-size: 13px; color: var(--ink-soft); margin-top: 3px; }
+  .history-badge { font-size: 12px; font-weight: 600; padding: 5px 12px; border-radius: 999px; flex-shrink: 0; }
+  .history-badge.done { background: var(--successBg); color: var(--success); }
+  .history-badge.processing { background: var(--paper-deep); color: var(--ink-soft); }
+  .history-badge.failed { background: var(--dangerBg); color: var(--danger); }
+  .history-empty {
+    border: 2px dashed var(--paper-deep); border-radius: 16px; padding: 40px; text-align: center;
+    color: var(--ink-soft); font-size: 14.5px;
+  }
+  .history-note { font-size: 12.5px; color: var(--ink-soft); margin-top: 20px; text-align: center; }
+
+  .toast {
+    position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--paper);
+    padding: 13px 24px; border-radius: 999px; font-size: 14px; box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+    animation: bms-fadein 0.25s ease-out; z-index: 20; display: none;
+  }
+</style>
+</head>
+<body>
+<div class="bg-glow"></div>
+
+<header>
+  <div class="logo" id="logoBtn" title="Upload another sheet">
+    <svg viewBox="-4 -30 440 130">
+      <line x1="4" y1="20" x2="426" y2="20" stroke="var(--ink)" stroke-width="2"></line>
+      <line x1="4" y1="32" x2="426" y2="32" stroke="var(--ink)" stroke-width="2"></line>
+      <line x1="4" y1="44" x2="426" y2="44" stroke="var(--ink)" stroke-width="2"></line>
+      <line x1="4" y1="56" x2="426" y2="56" stroke="var(--ink)" stroke-width="2"></line>
+      <line x1="4" y1="68" x2="426" y2="68" stroke="var(--ink)" stroke-width="2"></line>
+      <line x1="130" y1="20" x2="130" y2="68" stroke="var(--ink)" stroke-width="2.4"></line>
+      <line x1="276" y1="20" x2="276" y2="68" stroke="var(--ink)" stroke-width="2.4"></line>
+      <g>
+        <ellipse cx="18" cy="44" rx="8.5" ry="6.5" fill="var(--ink)" transform="rotate(-18 18 44)"></ellipse>
+        <line x1="26" y1="41" x2="26" y2="18" stroke="var(--ink)" stroke-width="2.2"></line>
+        <ellipse cx="42" cy="38" rx="8.5" ry="6.5" fill="var(--ink)" transform="rotate(-18 42 38)"></ellipse>
+        <line x1="50" y1="35" x2="50" y2="12" stroke="var(--ink)" stroke-width="2.2"></line>
+        <ellipse cx="66" cy="32" rx="8.5" ry="6.5" fill="var(--ink)" transform="rotate(-18 66 32)"></ellipse>
+        <line x1="74" y1="29" x2="74" y2="6" stroke="var(--ink)" stroke-width="2.2"></line>
+        <ellipse cx="90" cy="14" rx="8.5" ry="6.5" fill="var(--ink)" transform="rotate(-18 90 14)"></ellipse>
+        <line x1="98" y1="11" x2="98" y2="-12" stroke="var(--ink)" stroke-width="2.2"></line>
+        <ellipse cx="114" cy="32" rx="8.5" ry="6.5" fill="var(--ink)" transform="rotate(-18 114 32)"></ellipse>
+        <line x1="122" y1="29" x2="122" y2="6" stroke="var(--ink)" stroke-width="2.2"></line>
+      </g>
+      <g>
+        <ellipse cx="164" cy="14" rx="8.5" ry="6.5" fill="var(--ink)" transform="rotate(-18 164 14)"></ellipse>
+        <line x1="172" y1="11" x2="172" y2="-12" stroke="var(--ink)" stroke-width="2.2"></line>
+        <ellipse cx="188" cy="8" rx="8.5" ry="6.5" fill="var(--ink)" transform="rotate(-18 188 8)"></ellipse>
+        <line x1="196" y1="5" x2="196" y2="-18" stroke="var(--ink)" stroke-width="2.2"></line>
+        <ellipse cx="212" cy="2" rx="8.5" ry="6.5" fill="var(--ink)" transform="rotate(-18 212 2)"></ellipse>
+        <line x1="220" y1="-1" x2="220" y2="-24" stroke="var(--ink)" stroke-width="2.2"></line>
+        <ellipse cx="236" cy="14" rx="8.5" ry="6.5" fill="var(--ink)" transform="rotate(-18 236 14)"></ellipse>
+        <line x1="244" y1="11" x2="244" y2="-12" stroke="var(--ink)" stroke-width="2.2"></line>
+        <ellipse cx="260" cy="32" rx="8.5" ry="6.5" fill="var(--ink)" transform="rotate(-18 260 32)"></ellipse>
+        <line x1="268" y1="29" x2="268" y2="6" stroke="var(--ink)" stroke-width="2.2"></line>
+      </g>
+      <g>
+        <ellipse cx="310" cy="8" rx="8.5" ry="6.5" fill="var(--ink)" transform="rotate(-18 310 8)"></ellipse>
+        <line x1="318" y1="5" x2="318" y2="-18" stroke="var(--ink)" stroke-width="2.2"></line>
+        <ellipse cx="334" cy="14" rx="8.5" ry="6.5" fill="var(--ink)" transform="rotate(-18 334 14)"></ellipse>
+        <line x1="342" y1="11" x2="342" y2="-12" stroke="var(--ink)" stroke-width="2.2"></line>
+        <ellipse cx="358" cy="32" rx="8.5" ry="6.5" fill="var(--ink)" transform="rotate(-18 358 32)"></ellipse>
+        <line x1="366" y1="29" x2="366" y2="6" stroke="var(--ink)" stroke-width="2.2"></line>
+        <ellipse cx="382" cy="50" rx="8.5" ry="6.5" fill="var(--ink)" transform="rotate(-18 382 50)"></ellipse>
+        <line x1="390" y1="47" x2="390" y2="24" stroke="var(--ink)" stroke-width="2.2"></line>
+        <ellipse cx="406" cy="56" rx="8.5" ry="6.5" fill="var(--ink)" transform="rotate(-18 406 56)"></ellipse>
+        <line x1="414" y1="53" x2="414" y2="30" stroke="var(--ink)" stroke-width="2.2"></line>
+      </g>
+      <g stroke="var(--ink-soft)" stroke-width="1.5" stroke-dasharray="2 3" opacity="0.55">
+        <line x1="18" y1="53" x2="18" y2="82"></line>
+        <line x1="42" y1="47" x2="42" y2="82"></line>
+        <line x1="66" y1="41" x2="66" y2="82"></line>
+        <line x1="90" y1="23" x2="90" y2="82"></line>
+        <line x1="114" y1="41" x2="114" y2="82"></line>
+        <line x1="164" y1="23" x2="164" y2="82"></line>
+        <line x1="188" y1="17" x2="188" y2="82"></line>
+        <line x1="212" y1="11" x2="212" y2="82"></line>
+        <line x1="236" y1="23" x2="236" y2="82"></line>
+        <line x1="260" y1="41" x2="260" y2="82"></line>
+        <line x1="310" y1="17" x2="310" y2="82"></line>
+        <line x1="334" y1="23" x2="334" y2="82"></line>
+        <line x1="358" y1="41" x2="358" y2="82"></line>
+        <line x1="382" y1="59" x2="382" y2="82"></line>
+        <line x1="406" y1="65" x2="406" y2="82"></line>
+      </g>
+      <g font-family="'Spectral',serif" font-weight="600" font-size="35" fill="#8C4A1F" text-anchor="middle">
+        <text x="18" y="98">B</text><text x="42" y="98">e</text><text x="66" y="98">tt</text>
+        <text x="90" y="98">e</text><text x="114" y="98">r</text>
+        <text x="164" y="98">M</text><text x="188" y="98">u</text><text x="212" y="98">s</text>
+        <text x="236" y="98">i</text><text x="260" y="98">c</text>
+        <text x="310" y="98">S</text><text x="334" y="98">h</text><text x="358" y="98">e</text>
+        <text x="382" y="98">e</text><text x="406" y="98">t</text>
+      </g>
+    </svg>
+  </div>
+  <button class="nav-btn" id="navBtn"></button>
+</header>
+
+<main>
+
+  <section class="view" id="view-upload">
+    <div class="wrap">
+      <h1>Upload your sheet music</h1>
+      <div class="sub">We read every note on your piano sheet music and pencil in the letter name so you can practice without guessing.</div>
+      <div class="hint">PDF format, one piece per file.</div>
+
+      <form id="form">
+        <label class="dropzone" id="dropzone">
+          <input type="file" id="file" accept="application/pdf,.pdf">
+          <div id="dropzoneText">
+            <div class="icon">📄</div>
+            <div class="title">Drop a PDF here, or click to browse</div>
+            <div class="detail">Piano sheet music, one file at a time</div>
+          </div>
+        </label>
+
+        <details class="options">
+          <summary>Options</summary>
+          <div class="opt-row">
+            <label class="main" for="style">Label style</label>
+            <select id="style">
+              <option value="unicode" selected>Unicode (B♭, C♯)</option>
+              <option value="ascii">ASCII (Bb, C#)</option>
+            </select>
+          </div>
+          <div class="opt-row">
+            <label class="main" for="fontSize">Font size</label>
+            <input type="number" id="fontSize" value="6.5" min="3" max="12" step="0.5">
+          </div>
+          <div class="opt-row">
+            <label class="main" for="dpi">Force DPI</label>
+            <input type="number" id="dpi" placeholder="auto" min="150" max="1200" step="50">
+          </div>
+          <div class="opt-row checkbox">
+            <input type="checkbox" id="octave">
+            <label for="octave">Show octave number (B♭4)</label>
+          </div>
+          <div class="opt-row checkbox">
+            <input type="checkbox" id="autoRetry" checked>
+            <label for="autoRetry">Auto re-scan under-recognized pages at higher DPI</label>
+          </div>
+        </details>
+
+        <button type="submit" class="btn-block" id="submitBtn" disabled>Choose a file first</button>
+      </form>
+    </div>
+  </section>
+
+  <section class="view" id="view-processing">
+    <div class="wrap">
+      <div class="note-bounce"><div class="line"></div><div class="note">♪</div></div>
+      <h2>Annotating your sheet…</h2>
+      <div class="sub">Larger or denser scores can take a few minutes.</div>
+      <div class="stage-card">
+        <div class="stage-spinner"></div>
+        <div class="stage-text" id="stageText">Queued…</div>
+      </div>
+      <div class="cancel-link" id="backToUpload">Back to upload</div>
+    </div>
+  </section>
+
+  <section class="view" id="view-result">
+    <div class="wrap">
+      <div class="result-head">
+        <div>
+          <h2 id="resultTitle"></h2>
+          <div class="sub" id="resultSub"></div>
+        </div>
+        <div class="result-actions">
+          <a class="btn-pill ghost" id="annotateAnother">Annotate another</a>
+          <a class="btn-pill" id="downloadBtn">Download</a>
+        </div>
+      </div>
+      <div class="preview-card">
+        <div class="preview-resize" id="previewResize">
+          <iframe id="previewFrame" title="Annotated sheet preview"></iframe>
+          <div class="resize-handle" id="resizeHandle" title="Drag to resize">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+              <line x1="3" y1="14" x2="14" y2="3"></line>
+              <line x1="8" y1="14" x2="14" y2="8"></line>
+              <line x1="13" y1="14" x2="14" y2="13"></line>
+            </svg>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="view" id="view-history">
+    <div class="wrap">
+      <h1>History</h1>
+      <div class="sub">Sheets you've annotated in this browser, this server session.</div>
+      <div id="historyList"></div>
+      <div class="history-note">Stored only in this browser and only valid while the server keeps running - restarting it clears everything.</div>
+    </div>
+  </section>
+
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script src="config.js"></script>
+<script>
+// API_BASE comes from config.js.
+
+const HISTORY_KEY = "bms_history";
+const MAX_HISTORY = 30;
+
+const state = { view: null, jobId: null, pollTimer: null };
+
+const el = (id) => document.getElementById(id);
+const views = ["upload", "processing", "result", "history"];
+
+function showView(name) {
+  state.view = name;
+  views.forEach(v => el(`view-${v}`).classList.toggle("active", v === name));
+  const navBtn = el("navBtn");
+  if (name === "history") {
+    navBtn.className = "nav-btn primary";
+    navBtn.textContent = "+ Upload sheet";
+    navBtn.onclick = goUpload;
+    renderHistory();
+  } else {
+    navBtn.className = "nav-btn ghost";
+    navBtn.textContent = "☰ History";
+    navBtn.onclick = () => showView("history");
+  }
+}
+
+function toast(msg) {
+  const t = el("toast");
+  t.textContent = msg;
+  t.style.display = "block";
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => { t.style.display = "none"; }, 2600);
+}
+
+// ---- history (localStorage) ----
+function loadHistory() {
+  try { return JSON.parse(localStorage.getItem(HISTORY_KEY)) || []; }
+  catch { return []; }
+}
+function saveHistory(list) {
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, MAX_HISTORY)));
+}
+function upsertHistory(entry) {
+  const list = loadHistory();
+  const i = list.findIndex(e => e.jobId === entry.jobId);
+  if (i >= 0) list[i] = { ...list[i], ...entry };
+  else list.unshift(entry);
+  saveHistory(list);
+}
+function renderHistory() {
+  const list = loadHistory();
+  const box = el("historyList");
+  if (!list.length) {
+    box.innerHTML = '<div class="history-empty">No sheets annotated yet in this browser.</div>';
+    return;
+  }
+  box.innerHTML = "";
+  for (const entry of list) {
+    const row = document.createElement("div");
+    row.className = "history-row";
+    const badgeClass = entry.status === "done" ? "done" : entry.status === "failed" ? "failed" : "processing";
+    const badgeLabel = entry.status === "done" ? "Annotated" : entry.status === "failed" ? "Failed" : "Processing";
+    row.innerHTML = `
+      <div class="history-icon">📄</div>
+      <div class="history-info">
+        <div class="history-title">${escapeHtml(entry.filename)}</div>
+        <div class="history-meta">${new Date(entry.createdAt).toLocaleString()}</div>
+      </div>
+      <div class="history-badge ${badgeClass}">${badgeLabel}</div>
+    `;
+    row.addEventListener("click", () => openHistoryEntry(entry));
+    box.appendChild(row);
+  }
+}
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+async function openHistoryEntry(entry) {
+  if (entry.status !== "done") {
+    toast("That job hasn't finished (or didn't finish successfully).");
+    return;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/sheets/${entry.jobId}`);
+    if (!res.ok) throw new Error();
+    const job = await res.json();
+    if (job.status !== "done") { toast("That job is no longer available."); return; }
+    showResult(entry.jobId, entry.filename, job.labeled_groups);
+  } catch {
+    toast("That job is no longer available - the server may have restarted since then.");
+  }
+}
+
+// ---- upload view ----
+const form = el("form");
+const fileInput = el("file");
+const dropzone = el("dropzone");
+const dropzoneText = el("dropzoneText");
+const submitBtn = el("submitBtn");
+
+function showFile(file) {
+  dropzone.classList.toggle("has-file", !!file);
+  if (!file) {
+    dropzoneText.innerHTML = '<div class="icon">📄</div><div class="title">Drop a PDF here, or click to browse</div><div class="detail">Piano sheet music, one file at a time</div>';
+    submitBtn.disabled = true;
+    submitBtn.className = "btn-block";
+    submitBtn.textContent = "Choose a file first";
+    return;
+  }
+  dropzoneText.innerHTML = `<div class="icon">📄</div><div class="title">${escapeHtml(file.name)}</div><div class="detail">${(file.size / 1024).toFixed(0)} KB · ready to annotate</div>`;
+  submitBtn.disabled = false;
+  submitBtn.className = "btn-block ready";
+  submitBtn.textContent = "Upload";
+}
+
+fileInput.addEventListener("change", () => showFile(fileInput.files[0]));
+["dragenter", "dragover"].forEach(evt =>
+  dropzone.addEventListener(evt, e => { e.preventDefault(); dropzone.classList.add("drag"); }));
+["dragleave", "drop"].forEach(evt =>
+  dropzone.addEventListener(evt, e => { e.preventDefault(); dropzone.classList.remove("drag"); }));
+dropzone.addEventListener("drop", e => {
+  const f = e.dataTransfer.files[0];
+  if (f) { fileInput.files = e.dataTransfer.files; showFile(f); }
+});
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const file = fileInput.files[0];
+  if (!file) return;
+
+  submitBtn.disabled = true;
+  submitBtn.textContent = "Uploading…";
+
+  const body = new FormData();
+  body.append("file", file);
+  body.append("style", el("style").value);
+  body.append("octave", el("octave").checked);
+  body.append("font_size", el("fontSize").value);
+  body.append("auto_retry", el("autoRetry").checked);
+  const dpi = el("dpi").value;
+  if (dpi) body.append("dpi", dpi);
+
+  try {
+    const res = await fetch(`${API_BASE}/api/sheets`, { method: "POST", body });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.detail || `upload failed (${res.status})`);
+    }
+    const { job_id } = await res.json();
+    upsertHistory({ jobId: job_id, filename: file.name, createdAt: Date.now(), status: "processing" });
+    startProcessing(job_id, file.name);
+  } catch (err) {
+    toast(String(err.message || err));
+    showFile(file);
+  }
+});
+
+// ---- processing view ----
+function startProcessing(jobId, filename) {
+  state.jobId = jobId;
+  showView("processing");
+  el("stageText").textContent = "Queued…";
+  poll();
+}
+
+async function poll() {
+  clearTimeout(state.pollTimer);
+  try {
+    const res = await fetch(`${API_BASE}/api/sheets/${state.jobId}`);
+    if (!res.ok) throw new Error(`status check failed (${res.status})`);
+    const job = await res.json();
+
+    if (job.status === "queued") {
+      el("stageText").textContent = "Queued…";
+    } else if (job.status === "processing") {
+      el("stageText").textContent = job.stage || "Processing…";
+    } else if (job.status === "done") {
+      upsertHistory({ jobId: state.jobId, status: "done", labeledGroups: job.labeled_groups });
+      showResult(state.jobId, job.input_filename, job.labeled_groups);
+      return;
+    } else if (job.status === "failed") {
+      upsertHistory({ jobId: state.jobId, status: "failed" });
+      toast(job.error || "Annotation failed.");
+      showView("upload");
+      return;
+    }
+    state.pollTimer = setTimeout(poll, 2500);
+  } catch (err) {
+    toast("Lost connection to the server: " + String(err.message || err));
+    showView("upload");
+  }
+}
+
+el("backToUpload").addEventListener("click", () => {
+  clearTimeout(state.pollTimer);
+  showView("upload");
+});
+
+// ---- result view ----
+function showResult(jobId, filename, labeledGroups) {
+  state.jobId = jobId;
+  const stem = filename.replace(/\.pdf$/i, "");
+  el("resultTitle").textContent = stem;
+  el("resultSub").textContent = labeledGroups != null ? `${labeledGroups} beat-groups labeled` : "";
+  el("previewFrame").src = `${API_BASE}/api/sheets/${jobId}/download?inline=1`;
+  el("downloadBtn").href = `${API_BASE}/api/sheets/${jobId}/download`;
+  fileInput.value = "";
+  showFile(null);
+  showView("result");
+}
+
+el("annotateAnother").addEventListener("click", () => showView("upload"));
+el("logoBtn").addEventListener("click", () => showView("upload"));
+
+// ---- resizable preview ----
+const PREVIEW_H_KEY = "bms_preview_h";
+const previewResize = el("previewResize");
+const previewFrame = el("previewFrame");
+const savedH = parseInt(localStorage.getItem(PREVIEW_H_KEY), 10);
+if (savedH) previewResize.style.height = savedH + "px";
+
+let dragStartY = 0, dragStartH = 0;
+el("resizeHandle").addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  dragStartY = e.clientY;
+  dragStartH = previewResize.getBoundingClientRect().height;
+  previewResize.classList.add("dragging");
+  previewFrame.style.pointerEvents = "none"; // otherwise the iframe swallows the drag
+  window.addEventListener("pointermove", onDrag);
+  window.addEventListener("pointerup", onDragEnd);
+});
+function onDrag(e) {
+  const h = Math.max(300, Math.min(window.innerHeight * 2.2, dragStartH + (e.clientY - dragStartY)));
+  previewResize.style.height = h + "px";
+}
+function onDragEnd() {
+  previewResize.classList.remove("dragging");
+  previewFrame.style.pointerEvents = "";
+  localStorage.setItem(PREVIEW_H_KEY, Math.round(previewResize.getBoundingClientRect().height));
+  window.removeEventListener("pointermove", onDrag);
+  window.removeEventListener("pointerup", onDragEnd);
+}
+
+function goUpload() { showView("upload"); }
+
+showView("upload");
+</script>
+</body>
+</html>
