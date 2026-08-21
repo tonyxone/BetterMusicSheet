@@ -262,11 +262,11 @@
 
       <form id="form">
         <label class="dropzone" id="dropzone">
-          <input type="file" id="file" accept="application/pdf,.pdf">
+          <input type="file" id="file" accept="application/pdf,.pdf,image/jpeg,image/png,.jpg,.jpeg,.png">
           <div id="dropzoneText">
             <div class="icon">📄</div>
-            <div class="title">Drop a PDF here, or click to browse</div>
-            <div class="detail">Piano sheet music, one file at a time</div>
+            <div class="title">Drop a PDF or photo here, or click to browse</div>
+            <div class="detail">PDF, JPG, or PNG - one file at a time</div>
           </div>
         </label>
 
@@ -460,7 +460,7 @@ const submitBtn = el("submitBtn");
 function showFile(file) {
   dropzone.classList.toggle("has-file", !!file);
   if (!file) {
-    dropzoneText.innerHTML = '<div class="icon">📄</div><div class="title">Drop a PDF here, or click to browse</div><div class="detail">Piano sheet music, one file at a time</div>';
+    dropzoneText.innerHTML = '<div class="icon">📄</div><div class="title">Drop a PDF or photo here, or click to browse</div><div class="detail">PDF, JPG, or PNG - one file at a time</div>';
     submitBtn.disabled = true;
     submitBtn.className = "btn-block";
     submitBtn.textContent = "Choose a file first";
