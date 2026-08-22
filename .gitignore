@@ -19,6 +19,9 @@ output/
 server_jobs/
 server.log
 
+# One-off AWS setup files (contain the account ID) - not project code
+.aws-setup/
+
 # Editor/IDE
 .idea/
 

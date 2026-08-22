@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.git/
+.idea/
+.claude/
+sheet/
+output/
+server_jobs/
+server.log

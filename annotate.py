@@ -13,6 +13,9 @@ switching to bass clef), which would otherwise silently transpose every pitch
 it exports for that passage.  The notehead geometry itself stays exact.
 """
 import argparse
+import os
+import sys
+
 import fitz
 
 from audiveris_heads import (
@@ -285,7 +288,16 @@ def _build_records_inner(pdf_doc, omr_path, num_pages, style, octave, verbose, p
     return records, stats
 
 
-ARIAL_PATH = r"C:\Windows\Fonts\arialuni.ttf"  # arial.ttf lacks the U+266D flat glyph; Arial Unicode MS has it
+# Needs a Unicode font with the flat/sharp glyphs (plain arial.ttf lacks U+266D)
+# and the Latin letters/digits the labels also use. Windows ships Arial Unicode
+# MS with both; on Linux (e.g. the Docker image) DejaVu Sans covers the same
+# ground and is freely redistributable. Override with LABEL_FONT_PATH for any
+# other font file.
+_DEFAULT_FONT_PATH = (
+    r"C:\Windows\Fonts\arialuni.ttf" if sys.platform == "win32"
+    else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+)
+ARIAL_PATH = os.environ.get("LABEL_FONT_PATH", _DEFAULT_FONT_PATH)
 
 
 def _layout_page_records(page_records, font_size, measure_font, margin_pt):

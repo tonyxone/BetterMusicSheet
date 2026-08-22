@@ -13,7 +13,9 @@ import fitz
 
 from audiveris_heads import load_sheet_heads, load_system_staff_groups
 
-AUDIVERIS_EXE = Path(__file__).parent / "tools" / "Audiveris" / "Audiveris" / "Audiveris.exe"
+AUDIVERIS_DIR = Path(__file__).parent / "tools" / "Audiveris" / "Audiveris"
+AUDIVERIS_EXE = AUDIVERIS_DIR / "Audiveris.exe"  # Windows launcher (jpackage), bundles its own JRE
+AUDIVERIS_APP_DIR = AUDIVERIS_DIR / "app"  # same jars work with a system `java` on Linux
 
 RETRY_DPI = 600
 # a page is "sparse" (likely under-recognized, not just genuinely note-light)
@@ -31,7 +33,13 @@ NOT_MUSIC_MESSAGE = (
 
 def run_audiveris(pdf_path, out_dir, dpi=None, sheets=None):
     out_dir.mkdir(parents=True, exist_ok=True)
-    cmd = [str(AUDIVERIS_EXE), "-batch", "-export", "-output", str(out_dir)]
+    if sys.platform == "win32":
+        cmd = [str(AUDIVERIS_EXE), "-batch", "-export", "-output", str(out_dir)]
+    else:
+        # Audiveris.exe is a jpackage launcher bundling a Windows JRE; on Linux
+        # run the same app jars directly with the system `java` instead.
+        cmd = ["java", "-cp", str(AUDIVERIS_APP_DIR / "*"), "Audiveris",
+               "-batch", "-export", "-output", str(out_dir)]
     if dpi is not None:
         # Audiveris's default 300dpi PDF rasterization can be too coarse for
         # dense/small engraving (16th-note runs etc.), causing it to miss
