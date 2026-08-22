@@ -20,6 +20,7 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
+          role-skip-session-tagging: true
 
       - name: Log in to ECR
         id: ecr-login
@@ -51,6 +52,7 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
+          role-skip-session-tagging: true
 
       - name: Sync static/ to S3
         run: aws s3 sync static/ "s3://${{ vars.S3_BUCKET }}/" --delete
