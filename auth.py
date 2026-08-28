@@ -48,6 +48,13 @@ def verify_cognito_id_token(token):
         claims = jwt.decode(
             token, key, algorithms=["RS256"],
             audience=COGNITO_APP_CLIENT_ID, issuer=COGNITO_ISSUER,
+            # Cognito's authorization-code-flow ID tokens carry an at_hash
+            # claim binding them to a specific access token. We deliberately
+            # never request/use Cognito's access token (see module docstring -
+            # this backend mints its own), so there's no access_token to
+            # validate that hash against; jose requires explicitly opting out
+            # of that check rather than silently skipping it.
+            options={"verify_at_hash": False},
         )
         if claims.get("token_use") != "id":
             raise JWTError("not an ID token")
