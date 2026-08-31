@@ -13,19 +13,15 @@ Run with:
     .venv\\Scripts\\python.exe server.py
     (or: .venv\\Scripts\\python.exe -m uvicorn server:app --host 0.0.0.0 --port 8000)
 
-Auth: Cognito sign-in exists (POST /api/auth/token exchanges a Cognito ID
-token for a short-lived token minted by THIS backend, bootstrapping this
-user's `users`/`user_sub` DynamoDB rows on first login) but isn't wired up in
-the frontend right now - see better_music_sheet_web/lib/guest-id.ts. Without
-a Bearer token, a request is identified by its X-Guest-Id header instead (an
-anonymous per-browser id the frontend generates and persists in its own
-cookie), or failing that, a single shared GUEST_USER_ID. See auth.py.
+Auth: none - no real accounts. A request is identified by its X-Guest-Id
+header (an anonymous per-browser id the frontend generates and persists in
+its own cookie - see better_music_sheet_web/lib/guest-id.ts), or failing
+that, a single shared GUEST_USER_ID. See auth.py.
 
 Endpoints:
     GET    /                               web UI (static/index.html) - local dev convenience only
     GET    /api/health                     liveness check (no auth - the ALB health check can't send a token)
-    POST   /api/auth/token                 exchange a Cognito ID token for this backend's own token
-    POST   /api/sheets                     upload a PDF or image, kick off annotation (Free tier: max 3 active jobs)
+    POST   /api/sheets                     upload a PDF or image, kick off annotation (max 3 active jobs per user)
     GET    /api/sheets                     this user's job history, newest first
     GET    /api/sheets/{job_id}            poll one job's status
     GET    /api/sheets/{job_id}/download   the annotated PDF - a redirect to a presigned S3 URL in
@@ -42,12 +38,12 @@ origin from the API in that deployment, CORS is enabled below; set
 ALLOWED_ORIGINS to the UI's real origin(s) in production instead of "*".
 
 Jobs run one at a time on a single background worker thread, deliberately -
-Audiveris is CPU/memory-heavy per job. Job state and uploaded/output files
-live in DynamoDB/S3 in production, or in-memory/server_jobs/ in local dev
-(see config.py, db.py, storage.py) - not in-process either way in production,
-so multiple backend tasks can share the same job/user data; the Audiveris
-working directory itself is still local/ephemeral per job (server_jobs/,
-not cleaned up automatically - fine for now, see infra/README.md).
+Audiveris is CPU/memory-heavy per job. Job state lives in memory (db.py, not
+persisted - fine given there are no real accounts); uploaded/output files go
+to S3 in production or server_jobs/ in local dev (see config.py, storage.py).
+The Audiveris working directory itself is still local/ephemeral per job
+(server_jobs/, not cleaned up automatically - fine for now, see
+infra/README.md).
 """
 import os
 import queue
@@ -63,11 +59,10 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
 
 import db
 import storage
-from auth import get_current_user_id, mint_backend_token, verify_cognito_id_token
+from auth import get_current_user_id
 from config import IS_PRODUCTION
 from run import annotate_pdf, count_pages
 
@@ -76,7 +71,7 @@ JOBS_DIR.mkdir(exist_ok=True)
 STATIC_DIR = Path(__file__).parent / "static"
 
 ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
-FREE_TIER_JOB_LIMIT = 3
+MAX_ACTIVE_JOBS_PER_USER = 3
 
 app = FastAPI(title="Music-Sheet Annotator API")
 
@@ -133,22 +128,6 @@ def health():
     return {"status": "ok", "queued": job_queue.qsize()}
 
 
-class TokenRequest(BaseModel):
-    id_token: str
-
-
-@app.post("/api/auth/token")
-def exchange_token(body: TokenRequest):
-    user_id, email = verify_cognito_id_token(body.id_token)
-    db.create_user_if_missing(user_id, email)
-    db.create_free_sub_if_missing(user_id)
-    return {
-        "access_token": mint_backend_token(user_id),
-        "token_type": "Bearer",
-        "expires_in": 3600,
-    }
-
-
 @app.post("/api/sheets", status_code=202)
 async def submit_sheet(
     file: UploadFile = File(..., description="Piano sheet-music PDF, or a photo/scan (JPG/PNG)"),
@@ -168,9 +147,8 @@ async def submit_sheet(
     if db.get_in_progress_job(user_id):
         raise HTTPException(409, "You already have a music sheet processing. Please wait for it to finish before uploading another.")
 
-    sub = db.get_user_sub(user_id) or {"sub_type": "Free"}
-    if sub["sub_type"] == "Free" and db.count_active_jobs(user_id) >= FREE_TIER_JOB_LIMIT:
-        raise HTTPException(403, f"Free plan is limited to {FREE_TIER_JOB_LIMIT} active uploads")
+    if db.count_active_jobs(user_id) >= MAX_ACTIVE_JOBS_PER_USER:
+        raise HTTPException(403, f"limited to {MAX_ACTIVE_JOBS_PER_USER} active uploads at a time")
 
     music_sheet_id = uuid.uuid4().hex
     job_id = uuid.uuid4().hex
