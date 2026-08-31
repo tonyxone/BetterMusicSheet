@@ -40,7 +40,7 @@ ADD https://repo1.maven.org/maven2/org/bytedeco/leptonica/1.87.0-1.5.13/leptonic
     https://repo1.maven.org/maven2/org/bytedeco/tesseract/5.5.2-1.5.13/tesseract-5.5.2-1.5.13-linux-x86_64.jar \
     ./tools/Audiveris/Audiveris/app/
 
-COPY annotate.py audiveris_heads.py labels.py omr_notes.py run.py server.py auth.py db.py storage.py ./
+COPY annotate.py audiveris_heads.py labels.py omr_notes.py run.py server.py auth.py db.py storage.py config.py ./
 COPY static/ ./static/
 
 EXPOSE 8000

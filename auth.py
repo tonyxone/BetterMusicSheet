@@ -18,14 +18,24 @@ import urllib.request
 from fastapi import Header, HTTPException
 from jose import JWTError, jwt
 
+from config import IS_PRODUCTION
+
 _UUID_RE = re.compile(r"^[0-9a-fA-F-]{1,64}$")
 
 COGNITO_REGION = os.environ.get("COGNITO_REGION", "us-west-1")
-COGNITO_USER_POOL_ID = os.environ["COGNITO_USER_POOL_ID"]
-COGNITO_APP_CLIENT_ID = os.environ["COGNITO_APP_CLIENT_ID"]
+if IS_PRODUCTION:
+    COGNITO_USER_POOL_ID = os.environ["COGNITO_USER_POOL_ID"]
+    COGNITO_APP_CLIENT_ID = os.environ["COGNITO_APP_CLIENT_ID"]
+    BACKEND_JWT_SECRET = os.environ["BACKEND_JWT_SECRET"]
+else:
+    # Cognito sign-in isn't wired up in the frontend (guest-only flow), so
+    # these are never actually exercised locally - just present so the
+    # module imports without needing any Cognito/AWS setup.
+    COGNITO_USER_POOL_ID = os.environ.get("COGNITO_USER_POOL_ID", "local-dev-unused")
+    COGNITO_APP_CLIENT_ID = os.environ.get("COGNITO_APP_CLIENT_ID", "local-dev-unused")
+    BACKEND_JWT_SECRET = os.environ.get("BACKEND_JWT_SECRET", "local-dev-secret-not-for-production")
 COGNITO_ISSUER = f"https://cognito-idp.{COGNITO_REGION}.amazonaws.com/{COGNITO_USER_POOL_ID}"
 
-BACKEND_JWT_SECRET = os.environ["BACKEND_JWT_SECRET"]
 BACKEND_JWT_ALGORITHM = "HS256"
 BACKEND_JWT_LIFETIME_SECONDS = 3600
 
