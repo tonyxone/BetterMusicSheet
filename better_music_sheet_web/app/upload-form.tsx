@@ -36,7 +36,7 @@ export function UploadForm() {
         throw new Error(err.detail || `upload failed (${res.status})`);
       }
       const { job_id } = await res.json();
-      router.push(`/sheets/${job_id}`);
+      router.push(`/sheets?job=${job_id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setSubmitting(false);
