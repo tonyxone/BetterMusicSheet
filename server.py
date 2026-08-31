@@ -24,8 +24,8 @@ Endpoints:
     POST   /api/sheets                     upload a PDF or image, kick off annotation (max 3 active jobs per user)
     GET    /api/sheets                     this user's job history, newest first
     GET    /api/sheets/{job_id}            poll one job's status
-    GET    /api/sheets/{job_id}/download   the annotated PDF - a redirect to a presigned S3 URL in
-                                            production, served directly from disk in local dev
+    GET    /api/sheets/{job_id}/download   the annotated PDF, streamed through this backend either way
+                                            (from S3 in production, from disk in local dev)
                                             (?inline=1 for in-browser preview instead of a forced download)
     GET    /api/music-sheets               this user's uploaded sheets, one row per sheet regardless of reprocess count
 
@@ -53,11 +53,12 @@ import time
 import uuid
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 import pymupdf
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 import db
@@ -219,12 +220,22 @@ def job_download(job_id: str, inline: bool = False, user_id: str = Depends(get_c
         raise HTTPException(409, f"job is '{job['status']}', not done yet")
     sheet = db.get_music_sheet(job["music_sheet_id"])
     sheet_name = sheet["sheet_name"] if sheet else job["music_sheet_id"]
-    if IS_PRODUCTION:
-        url = storage.presigned_download_url(job["user_id"], sheet_name, inline=inline)
-        return RedirectResponse(url, status_code=307)
-    path = storage.local_output_path(job["user_id"], sheet_name)
     disposition = "inline" if inline else "attachment"
     filename = f"{Path(sheet_name).stem} (annotated).pdf"
+    if IS_PRODUCTION:
+        # Streamed through this backend rather than redirecting to a
+        # presigned S3 URL - see storage.download_output_pdf for why.
+        body, content_length = storage.download_output_pdf(job["user_id"], sheet_name)
+        encoded_filename = quote(filename)
+        return StreamingResponse(
+            body.iter_chunks(chunk_size=65536),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f"{disposition}; filename=\"{filename}\"; filename*=utf-8''{encoded_filename}",
+                "Content-Length": str(content_length),
+            },
+        )
+    path = storage.local_output_path(job["user_id"], sheet_name)
     return FileResponse(
         path, media_type="application/pdf", filename=filename,
         content_disposition_type=disposition,

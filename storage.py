@@ -16,8 +16,6 @@ from pathlib import Path
 
 from config import IS_PRODUCTION
 
-PRESIGNED_URL_EXPIRY_SECONDS = 300
-
 
 def _safe_stem(sheet_name):
     """The original filename's stem, sanitized for use as an S3/local path
@@ -50,19 +48,18 @@ if IS_PRODUCTION:
     def upload_output_pdf(user_id, local_path, sheet_name):
         _s3.upload_file(str(local_path), _BUCKET, _output_key(user_id, sheet_name))
 
-    def presigned_download_url(user_id, sheet_name, inline=False):
-        disposition = "inline" if inline else "attachment"
-        download_filename = f"{_safe_stem(sheet_name)} (annotated).pdf"
-        return _s3.generate_presigned_url(
-            "get_object",
-            Params={
-                "Bucket": _BUCKET,
-                "Key": _output_key(user_id, sheet_name),
-                "ResponseContentDisposition": f'{disposition}; filename="{download_filename}"',
-                "ResponseContentType": "application/pdf",
-            },
-            ExpiresIn=PRESIGNED_URL_EXPIRY_SECONDS,
-        )
+    def download_output_pdf(user_id, sheet_name):
+        """Returns (body, content_length) for the annotated PDF, to be
+        streamed back through this backend rather than redirecting the
+        browser straight to S3. A presigned-URL redirect was tried first,
+        but browsers don't reliably forward the X-Guest-Id header (needed to
+        identify the owner before this call) across a cross-origin redirect
+        in a way that survives CORS - it fails with a generic "Failed to
+        fetch" despite every individual CORS check passing when tested in
+        isolation. Streaming through the same origin as the rest of the API
+        sidesteps that entirely."""
+        obj = _s3.get_object(Bucket=_BUCKET, Key=_output_key(user_id, sheet_name))
+        return obj["Body"], obj["ContentLength"]
 
 else:
     # Same directory tree as server.py's JOBS_DIR (server_jobs/), already
