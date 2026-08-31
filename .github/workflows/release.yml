@@ -12,6 +12,8 @@ jobs:
   push-image:
     name: Build and push backend image to ECR
     runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.image.outputs.image }}
     steps:
       - uses: actions/checkout@v4
 
@@ -32,6 +34,7 @@ jobs:
           aws s3 cp "${{ vars.AUDIVERIS_S3_URI }}" - | tar xz -C tools/Audiveris/Audiveris/app
 
       - name: Build and push image
+        id: image
         env:
           REGISTRY: ${{ steps.ecr-login.outputs.registry }}
           REPOSITORY: ${{ vars.ECR_REPOSITORY }}
@@ -40,12 +43,65 @@ jobs:
           docker build -t "$REGISTRY/$REPOSITORY:$TAG" -t "$REGISTRY/$REPOSITORY:latest" .
           docker push "$REGISTRY/$REPOSITORY:$TAG"
           docker push "$REGISTRY/$REPOSITORY:latest"
+          echo "image=$REGISTRY/$REPOSITORY:$TAG" >> "$GITHUB_OUTPUT"
+
+  deploy-backend:
+    name: Deploy backend to ECS
+    runs-on: ubuntu-latest
+    needs: push-image
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-skip-session-tagging: true
+
+      - name: Fetch the running task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition "${{ vars.ECS_TASK_FAMILY }}" \
+            --query taskDefinition \
+            | jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' \
+            > task-definition.json
+
+      - name: Point it at the new image
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ vars.ECS_CONTAINER_NAME }}
+          image: ${{ needs.push-image.outputs.image }}
+
+      - name: Register the new revision and deploy it
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          service: ${{ vars.ECS_SERVICE }}
+          cluster: ${{ vars.ECS_CLUSTER }}
+          wait-for-service-stability: true
 
   deploy-ui:
-    name: Sync static UI to S3
+    name: Build and deploy the web UI
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: better_music_sheet_web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: better_music_sheet_web
+        run: npm ci
+
+      - name: Build static export
+        working-directory: better_music_sheet_web
+        env:
+          NEXT_PUBLIC_API_BASE: https://${{ vars.API_SUBDOMAIN }}
+        run: npm run build
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -54,8 +110,8 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
           role-skip-session-tagging: true
 
-      - name: Sync static/ to S3
-        run: aws s3 sync static/ "s3://${{ vars.S3_BUCKET }}/" --delete
+      - name: Sync to S3
+        run: aws s3 sync better_music_sheet_web/out/ "s3://${{ vars.S3_BUCKET }}/" --delete
 
       - name: Invalidate CloudFront cache
         if: vars.CLOUDFRONT_DISTRIBUTION_ID != ''

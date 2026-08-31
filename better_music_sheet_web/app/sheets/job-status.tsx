@@ -2,17 +2,20 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { clientApiFetch } from "@/lib/client-api";
 import type { AnnotationJob } from "@/lib/api";
 
 const POLL_INTERVAL_MS = 2500;
 
-export function JobStatus({ jobId }: { jobId: string }) {
+export function JobStatus() {
+  const jobId = useSearchParams().get("job");
   const [job, setJob] = useState<AnnotationJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    if (!jobId) return;
     let cancelled = false;
 
     async function poll() {
@@ -37,6 +40,7 @@ export function JobStatus({ jobId }: { jobId: string }) {
     };
   }, [jobId]);
 
+  if (!jobId) return <p className="wrap" style={{ color: "var(--danger)" }}>No sheet specified.</p>;
   if (error) return <p className="wrap" style={{ color: "var(--danger)" }}>{error}</p>;
   if (!job) return <p className="wrap" style={{ color: "var(--ink-soft)" }}>Loading…</p>;
 

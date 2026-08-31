@@ -34,7 +34,7 @@ export default function HistoryPage() {
       ) : (
         <div>
           {jobs.map((job) => (
-            <Link key={job.job_id} href={`/sheets/${job.job_id}`} className="history-row">
+            <Link key={job.job_id} href={`/sheets?job=${job.job_id}`} className="history-row">
               <div className="history-icon">📄</div>
               <div className="history-info">
                 <div className="history-title">{job.sheet_name}</div>
