@@ -28,7 +28,8 @@ Endpoints:
     POST   /api/sheets                     upload a PDF or image, kick off annotation (Free tier: max 3 active jobs)
     GET    /api/sheets                     this user's job history, newest first
     GET    /api/sheets/{job_id}            poll one job's status
-    GET    /api/sheets/{job_id}/download   redirect to a presigned S3 URL for the annotated PDF
+    GET    /api/sheets/{job_id}/download   the annotated PDF - a redirect to a presigned S3 URL in
+                                            production, served directly from disk in local dev
                                             (?inline=1 for in-browser preview instead of a forced download)
     GET    /api/music-sheets               this user's uploaded sheets, one row per sheet regardless of reprocess count
 
@@ -41,9 +42,10 @@ origin from the API in that deployment, CORS is enabled below; set
 ALLOWED_ORIGINS to the UI's real origin(s) in production instead of "*".
 
 Jobs run one at a time on a single background worker thread, deliberately -
-Audiveris is CPU/memory-heavy per job. Job state lives in DynamoDB and
-uploaded/output files in S3 (see db.py/storage.py), not in-process, so
-multiple backend tasks can share the same job/user data; the Audiveris
+Audiveris is CPU/memory-heavy per job. Job state and uploaded/output files
+live in DynamoDB/S3 in production, or in-memory/server_jobs/ in local dev
+(see config.py, db.py, storage.py) - not in-process either way in production,
+so multiple backend tasks can share the same job/user data; the Audiveris
 working directory itself is still local/ephemeral per job (server_jobs/,
 not cleaned up automatically - fine for now, see infra/README.md).
 """
@@ -59,13 +61,14 @@ from typing import Optional
 import pymupdf
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import db
 import storage
 from auth import get_current_user_id, mint_backend_token, verify_cognito_id_token
+from config import IS_PRODUCTION
 from run import annotate_pdf, count_pages
 
 JOBS_DIR = Path(__file__).parent / "server_jobs"
@@ -162,6 +165,9 @@ async def submit_sheet(
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(400, "only PDF or image (JPG/PNG) uploads are supported")
 
+    if db.get_in_progress_job(user_id):
+        raise HTTPException(409, "You already have a music sheet processing. Please wait for it to finish before uploading another.")
+
     sub = db.get_user_sub(user_id) or {"sub_type": "Free"}
     if sub["sub_type"] == "Free" and db.count_active_jobs(user_id) >= FREE_TIER_JOB_LIMIT:
         raise HTTPException(403, f"Free plan is limited to {FREE_TIER_JOB_LIMIT} active uploads")
@@ -215,7 +221,9 @@ def _owned_job_or_404(job_id, user_id):
 
 @app.get("/api/sheets")
 def job_history(user_id: str = Depends(get_current_user_id)):
-    return db.list_annotation_jobs(user_id)
+    jobs = db.list_annotation_jobs(user_id)
+    sheets = {s["music_sheet_id"]: s["sheet_name"] for s in db.list_music_sheets(user_id)}
+    return [{**job, "sheet_name": sheets.get(job["music_sheet_id"])} for job in jobs]
 
 
 @app.get("/api/sheets/{job_id}")
@@ -232,8 +240,16 @@ def job_download(job_id: str, inline: bool = False, user_id: str = Depends(get_c
         raise HTTPException(409, f"job is '{job['status']}', not done yet")
     sheet = db.get_music_sheet(job["music_sheet_id"])
     stem = Path(sheet["sheet_name"]).stem if sheet else job["music_sheet_id"]
-    url = storage.presigned_download_url(job["user_id"], job["music_sheet_id"], f"{stem} (annotated).pdf", inline=inline)
-    return RedirectResponse(url, status_code=307)
+    filename = f"{stem} (annotated).pdf"
+    if IS_PRODUCTION:
+        url = storage.presigned_download_url(job["user_id"], job["music_sheet_id"], filename, inline=inline)
+        return RedirectResponse(url, status_code=307)
+    path = storage.local_output_path(job["user_id"], job["music_sheet_id"])
+    disposition = "inline" if inline else "attachment"
+    return FileResponse(
+        path, media_type="application/pdf", filename=filename,
+        content_disposition_type=disposition,
+    )
 
 
 @app.get("/api/music-sheets")
