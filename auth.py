@@ -71,10 +71,19 @@ def mint_backend_token(user_id):
     )
 
 
+GUEST_USER_ID = "guest"
+
+
 def get_current_user_id(authorization: str = Header(None)):
-    """FastAPI dependency - verifies this backend's own token (not Cognito's)."""
+    """FastAPI dependency - verifies this backend's own token if one is sent,
+    otherwise treats the request as one shared guest user. The frontend
+    doesn't have Cognito wired up yet (see better_music_sheet_web/auth.ts,
+    currently removed), so there's no token to send at all right now; this
+    keeps every endpoint working end-to-end without it. A real token, if one
+    ever is sent, is still fully verified - this isn't a way to forge another
+    user's identity, just a fallback for "no identity claimed at all"."""
     if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(401, "missing Bearer token")
+        return GUEST_USER_ID
     token = authorization.removeprefix("Bearer ")
     try:
         claims = jwt.decode(token, BACKEND_JWT_SECRET, algorithms=[BACKEND_JWT_ALGORITHM])
