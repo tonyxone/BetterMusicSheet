@@ -11,11 +11,14 @@ instead of sending the Cognito token on every request.
 """
 import json
 import os
+import re
 import time
 import urllib.request
 
 from fastapi import Header, HTTPException
 from jose import JWTError, jwt
+
+_UUID_RE = re.compile(r"^[0-9a-fA-F-]{1,64}$")
 
 COGNITO_REGION = os.environ.get("COGNITO_REGION", "us-west-1")
 COGNITO_USER_POOL_ID = os.environ["COGNITO_USER_POOL_ID"]
@@ -74,19 +77,26 @@ def mint_backend_token(user_id):
 GUEST_USER_ID = "guest"
 
 
-def get_current_user_id(authorization: str = Header(None)):
-    """FastAPI dependency - verifies this backend's own token if one is sent,
-    otherwise treats the request as one shared guest user. The frontend
-    doesn't have Cognito wired up yet (see better_music_sheet_web/auth.ts,
-    currently removed), so there's no token to send at all right now; this
-    keeps every endpoint working end-to-end without it. A real token, if one
-    ever is sent, is still fully verified - this isn't a way to forge another
-    user's identity, just a fallback for "no identity claimed at all"."""
-    if not authorization or not authorization.startswith("Bearer "):
-        return GUEST_USER_ID
-    token = authorization.removeprefix("Bearer ")
-    try:
-        claims = jwt.decode(token, BACKEND_JWT_SECRET, algorithms=[BACKEND_JWT_ALGORITHM])
-    except JWTError as e:
-        raise HTTPException(401, f"invalid token: {e}")
-    return claims["sub"]
+def get_current_user_id(authorization: str = Header(None), x_guest_id: str = Header(None)):
+    """FastAPI dependency, in priority order:
+    1. This backend's own token, if sent - fully verified as before. Cognito
+       isn't wired up in the frontend yet, so nothing sends this today, but
+       it still works if something does.
+    2. X-Guest-Id, an anonymous per-browser id the frontend generates itself
+       and persists in a cookie on ITS OWN origin (see
+       better_music_sheet_web/lib/guest-id.ts) - not a cross-origin cookie
+       read by this API, just a value it's told on each request. Used as
+       user_id as-is, including as an S3 key prefix (see storage.py), so it's
+       validated as UUID-shaped rather than trusted verbatim.
+    3. A single shared GUEST_USER_ID, if neither is present (e.g. direct API
+       calls with no client-side JS involved at all)."""
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.removeprefix("Bearer ")
+        try:
+            claims = jwt.decode(token, BACKEND_JWT_SECRET, algorithms=[BACKEND_JWT_ALGORITHM])
+        except JWTError as e:
+            raise HTTPException(401, f"invalid token: {e}")
+        return claims["sub"]
+    if x_guest_id and _UUID_RE.match(x_guest_id):
+        return x_guest_id
+    return GUEST_USER_ID
