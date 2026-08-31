@@ -104,7 +104,8 @@ def _process(job_id):
             style=job["style"], octave=job["octave"], font_size=job["font_size"],
             dpi=job["dpi"], auto_retry=job["auto_retry"], log=log,
         )
-        storage.upload_output_pdf(job["user_id"], job["music_sheet_id"], job_dir / "annotated.pdf")
+        sheet = db.get_music_sheet(job["music_sheet_id"])
+        storage.upload_output_pdf(job["user_id"], job_dir / "annotated.pdf", sheet["sheet_name"] if sheet else job["music_sheet_id"])
         db.update_annotation_job(job_id, status="done", labeled_groups=n)
     except Exception as e:
         log(f"FAILED: {e}")
@@ -183,7 +184,7 @@ async def submit_sheet(
         shutil.rmtree(job_dir, ignore_errors=True)
         raise HTTPException(400, "the uploaded file isn't a valid PDF or image")
 
-    storage.upload_input_pdf(user_id, music_sheet_id, input_path)
+    storage.upload_input_pdf(user_id, input_path, file.filename)
     db.create_music_sheet(music_sheet_id, user_id, file.filename)
     db.create_annotation_job(job_id, user_id, music_sheet_id, style, octave, font_size, dpi, auto_retry)
     job_queue.put(job_id)
@@ -217,13 +218,13 @@ def job_download(job_id: str, inline: bool = False, user_id: str = Depends(get_c
     if job["status"] != "done":
         raise HTTPException(409, f"job is '{job['status']}', not done yet")
     sheet = db.get_music_sheet(job["music_sheet_id"])
-    stem = Path(sheet["sheet_name"]).stem if sheet else job["music_sheet_id"]
-    filename = f"{stem} (annotated).pdf"
+    sheet_name = sheet["sheet_name"] if sheet else job["music_sheet_id"]
     if IS_PRODUCTION:
-        url = storage.presigned_download_url(job["user_id"], job["music_sheet_id"], filename, inline=inline)
+        url = storage.presigned_download_url(job["user_id"], sheet_name, inline=inline)
         return RedirectResponse(url, status_code=307)
-    path = storage.local_output_path(job["user_id"], job["music_sheet_id"])
+    path = storage.local_output_path(job["user_id"], sheet_name)
     disposition = "inline" if inline else "attachment"
+    filename = f"{Path(sheet_name).stem} (annotated).pdf"
     return FileResponse(
         path, media_type="application/pdf", filename=filename,
         content_disposition_type=disposition,

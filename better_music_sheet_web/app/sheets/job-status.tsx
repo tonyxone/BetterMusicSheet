@@ -132,7 +132,6 @@ function DownloadButton({ jobId, sheetName }: { jobId: string; sheetName?: strin
 const PREVIEW_H_KEY = "bms_preview_h";
 
 function PreviewFrame({ jobId }: { jobId: string }) {
-  const [src, setSrc] = useState<string | null>(null);
   const resizeRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLIFrameElement>(null);
   const dragState = useRef({ startY: 0, startH: 0 });
@@ -145,7 +144,27 @@ function PreviewFrame({ jobId }: { jobId: string }) {
       .then((blob) => {
         if (revoked) return;
         objectUrl = URL.createObjectURL(blob);
-        setSrc(objectUrl);
+        // Assigned imperatively, once the iframe already exists in the DOM
+        // at its final layout size - not via a src={} prop that mounts the
+        // iframe and its content in the same render.
+        const frame = frameRef.current;
+        if (!frame) return;
+        frame.src = objectUrl;
+        // Chromium's built-in PDF viewer frequently finishes its first paint
+        // pass blank (toolbar and page count are correct, but no page
+        // content is drawn) when loaded this way, and doesn't recover on its
+        // own - reliably confirmed by testing, not a guess. Resize events
+        // and layout nudges don't fix it; forcing the iframe through a real
+        // navigation cycle (blank, then back to the real content) does, by
+        // making the plugin fully reinitialize instead of continuing a
+        // first attempt it got stuck on.
+        setTimeout(() => {
+          if (!frame.isConnected || frame.src !== objectUrl) return;
+          frame.src = "about:blank";
+          setTimeout(() => {
+            if (frame.isConnected) frame.src = objectUrl!;
+          }, 50);
+        }, 400);
       });
     return () => {
       revoked = true;
@@ -187,7 +206,7 @@ function PreviewFrame({ jobId }: { jobId: string }) {
 
   return (
     <div className="preview-resize" ref={resizeRef}>
-      {src && <iframe ref={frameRef} src={src} title="Annotated sheet preview" />}
+      <iframe ref={frameRef} title="Annotated sheet preview" />
       <div className="resize-handle" title="Drag to resize" onPointerDown={onPointerDown}>
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
           <line x1="3" y1="14" x2="14" y2="3" />
