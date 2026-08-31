@@ -3,4 +3,3 @@ uvicorn[standard]
 pymupdf
 python-multipart
 boto3
-python-jose[cryptography]

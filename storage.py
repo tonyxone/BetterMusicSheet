@@ -2,10 +2,10 @@
 folder in local dev (see config.py).
 
 Key layout is fixed and deterministic from (user_id, music_sheet_id) alone,
-so no path is ever stored in DynamoDB. Reprocessing a sheet overwrites its
-existing output (by design, not a bug). user_id is validated as UUID-shaped
-before it ever reaches here (see auth.py) - it becomes a storage key prefix,
-so it's never trusted verbatim.
+so no path is ever stored in db.py's job records. Reprocessing a sheet
+overwrites its existing output (by design, not a bug). user_id is validated
+as UUID-shaped before it ever reaches here (see auth.py) - it becomes a
+storage key prefix, so it's never trusted verbatim.
 """
 import shutil
 from pathlib import Path
@@ -28,7 +28,7 @@ if IS_PRODUCTION:
 
     import boto3
 
-    _s3 = boto3.client("s3", region_name=os.environ.get("COGNITO_REGION", "us-west-1"))
+    _s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-west-1"))
     _BUCKET = os.environ["JOB_FILES_BUCKET"]
 
     def upload_input_pdf(user_id, music_sheet_id, local_path):
