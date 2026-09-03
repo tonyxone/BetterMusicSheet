@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { clientApiFetch } from "@/lib/client-api";
+import { setAdsPaused } from "@/lib/ads";
 import type { AnnotationJob } from "@/lib/api";
 
 const POLL_INTERVAL_MS = 2500;
@@ -13,6 +14,14 @@ export function JobStatus() {
   const [job, setJob] = useState<AnnotationJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // No AdSense ads while this screen has no real content yet - just a
+  // spinner or an error string, not the annotated sheet itself.
+  useEffect(() => {
+    const hasContent = job?.status === "done" || job?.status === "failed";
+    setAdsPaused(!hasContent);
+    return () => setAdsPaused(false);
+  }, [job]);
 
   useEffect(() => {
     if (!jobId) return;
