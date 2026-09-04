@@ -77,6 +77,12 @@ main {
 .nav-btn.primary:hover { background: var(--accent-deep); }
 .nav-btn.ghost { background: transparent; border: 1px solid var(--ink-soft); color: var(--ink); }
 .nav-btn.ghost:hover { background: var(--paper-deep); }
+/* Signed-in user's name, sitting between History and Sign out. Truncated
+   rather than allowed to push the nav around on a long display name. */
+.nav-user {
+  max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 14.5px; font-weight: 600; color: var(--ink-soft); padding-left: 4px;
+}
 
 /* ---- Shared page wrap ---- */
 .wrap { max-width: 600px; margin: 0 auto; padding: 56px 32px 100px; }

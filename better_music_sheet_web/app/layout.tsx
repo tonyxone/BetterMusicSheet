@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import "./globals.css";
 import { Header } from "./header";
 import { Analytics } from "./analytics";
+import { AuthProvider } from "./auth-context";
 
 export const metadata: Metadata = {
   title: "Better Music Sheet",
@@ -36,8 +37,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <Suspense fallback={null}>
           <Analytics />
         </Suspense>
-        <Header />
-        <main>{children}</main>
+        <AuthProvider>
+          <Header />
+          <main>{children}</main>
+        </AuthProvider>
       </body>
     </html>
   );

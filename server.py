@@ -13,14 +13,22 @@ Run with:
     .venv\\Scripts\\python.exe server.py
     (or: .venv\\Scripts\\python.exe -m uvicorn server:app --host 0.0.0.0 --port 8000)
 
-Auth: none - no real accounts. A request is identified by its X-Guest-Id
-header (an anonymous per-browser id the frontend generates and persists in
-its own cookie - see better_music_sheet_web/lib/guest-id.ts), or failing
-that, a single shared GUEST_USER_ID. See auth.py.
+Auth: optional. Signing in is never required - a signed-out visitor is
+identified by their X-Guest-Id header (an anonymous per-browser id the
+frontend generates and persists in its own cookie - see
+better_music_sheet_web/lib/guest-id.ts), or failing that, a single shared
+GUEST_USER_ID. Signing in with Cognito (POST /api/auth/token exchanges a
+Cognito ID token for a short-lived token minted by THIS backend,
+bootstrapping the user's `users` row on first login) swaps that guest id for
+the user's Cognito id, which is what their files are then stored under (see
+storage.py). Sheets uploaded as a guest stay under the guest id and are not
+migrated. See auth.py.
 
 Endpoints:
     GET    /                               web UI (static/index.html) - local dev convenience only
     GET    /api/health                     liveness check (no auth - the ALB health check can't send a token)
+    POST   /api/auth/token                 exchange a Cognito ID token for this backend's own token
+    GET    /api/me                         the signed-in user's profile, or 401 for a guest
     POST   /api/sheets                     upload a PDF or image, kick off annotation (max 3 active jobs per user)
     GET    /api/sheets                     this user's job history, newest first
     GET    /api/sheets/{job_id}            poll one job's status
@@ -38,10 +46,11 @@ origin from the API in that deployment, CORS is enabled below; set
 ALLOWED_ORIGINS to the UI's real origin(s) in production instead of "*".
 
 Jobs run one at a time on a single background worker thread, deliberately -
-Audiveris is CPU/memory-heavy per job. Job state lives in memory (db.py, not
-persisted - fine given there are no real accounts); uploaded/output files go
-to S3 in production or server_jobs/ in local dev (see config.py, storage.py).
-The Audiveris working directory itself is still local/ephemeral per job
+Audiveris is CPU/memory-heavy per job. Job/user state and uploaded/output
+files live in DynamoDB/S3 in production, or in-memory/server_jobs/ in local
+dev (see config.py, db.py, storage.py) - not in-process either way in
+production, so multiple backend tasks can share the same job/user data; the
+Audiveris working directory itself is still local/ephemeral per job
 (server_jobs/, not cleaned up automatically - fine for now, see
 infra/README.md).
 """
@@ -60,10 +69,17 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 import db
 import storage
-from auth import get_current_user_id
+from auth import (
+    BACKEND_JWT_LIFETIME_SECONDS,
+    get_current_user_id,
+    get_signed_in_user_id,
+    mint_backend_token,
+    verify_cognito_id_token,
+)
 from config import IS_PRODUCTION
 from run import annotate_pdf, count_pages
 
@@ -128,6 +144,43 @@ threading.Thread(target=_worker, daemon=True).start()
 @app.get("/api/health")
 def health():
     return {"status": "ok", "queued": job_queue.qsize()}
+
+
+class TokenRequest(BaseModel):
+    id_token: str
+
+
+@app.post("/api/auth/token")
+def exchange_token(body: TokenRequest):
+    """Sign-in, step 2: trade a verified Cognito ID token for one of ours.
+
+    This is also the only place a `users` row is ever created - guests never
+    get one (see db.py)."""
+    user_id, email, display_name = verify_cognito_id_token(body.id_token)
+    db.create_user_if_missing(user_id, email, display_name)
+    user = db.get_user(user_id)
+    return {
+        "access_token": mint_backend_token(user_id),
+        "token_type": "Bearer",
+        "expires_in": BACKEND_JWT_LIFETIME_SECONDS,
+        "user": user,
+    }
+
+
+@app.get("/api/me")
+def me(user_id: str = Depends(get_signed_in_user_id)):
+    """The signed-in user's profile, for the header to render their name.
+    401 rather than a guest fallback - the frontend uses this to decide
+    whether its stored token is still good."""
+    if user_id is None:
+        raise HTTPException(401, "not signed in")
+    user = db.get_user(user_id)
+    if user is None:
+        # Valid token, but the row is gone (e.g. table wiped between
+        # deploys) - recreate lazily rather than 500ing on a live session.
+        db.create_user_if_missing(user_id, None, user_id)
+        user = db.get_user(user_id)
+    return user
 
 
 @app.post("/api/sheets", status_code=202)
