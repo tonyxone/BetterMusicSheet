@@ -59,6 +59,7 @@ import queue
 import shutil
 import threading
 import time
+import unicodedata
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -266,6 +267,30 @@ def job_status(job_id: str, user_id: str = Depends(get_current_user_id)):
     return {**job, "sheet_name": sheet["sheet_name"] if sheet else None}
 
 
+def _ascii_stem(stem):
+    """An ASCII-only version of a sheet name, for the Content-Disposition
+    fallback below. Accents are flattened (Café -> Cafe); anything with no
+    ASCII equivalent at all is dropped, which for a wholly CJK title leaves
+    nothing - hence the generic default."""
+    ascii_stem = unicodedata.normalize("NFKD", stem).encode("ascii", "ignore").decode("ascii")
+    # Quotes and backslashes would break out of the quoted-string parameter.
+    return ascii_stem.replace('"', "").replace("\\", "").strip() or "sheet"
+
+
+def _content_disposition(disposition, filename, ascii_filename):
+    """Content-Disposition that survives a non-ASCII sheet name.
+
+    HTTP header values are latin-1 at best - Starlette encodes them as
+    latin-1 and raises on anything outside it - so a sheet called
+    "夏日漱石.pdf" cannot appear in the bare filename= parameter at all, and
+    putting it there returned a 500 for both download and preview. Per RFC
+    6266 that parameter is only an ASCII fallback anyway; the real name
+    travels percent-encoded in filename*=, which every current browser
+    prefers when both are present.
+    """
+    return f"{disposition}; filename=\"{ascii_filename}\"; filename*=utf-8''{quote(filename)}"
+
+
 @app.get("/api/sheets/{job_id}/download")
 def job_download(job_id: str, inline: bool = False, user_id: str = Depends(get_current_user_id)):
     job = _owned_job_or_404(job_id, user_id)
@@ -274,17 +299,18 @@ def job_download(job_id: str, inline: bool = False, user_id: str = Depends(get_c
     sheet = db.get_music_sheet(job["music_sheet_id"])
     sheet_name = sheet["sheet_name"] if sheet else job["music_sheet_id"]
     disposition = "inline" if inline else "attachment"
-    filename = f"{Path(sheet_name).stem} (annotated).pdf"
+    stem = Path(sheet_name).stem
+    filename = f"{stem} (annotated).pdf"
+    ascii_filename = f"{_ascii_stem(stem)} (annotated).pdf"
     if IS_PRODUCTION:
         # Streamed through this backend rather than redirecting to a
         # presigned S3 URL - see storage.download_output_pdf for why.
         body, content_length = storage.download_output_pdf(job["user_id"], sheet_name)
-        encoded_filename = quote(filename)
         return StreamingResponse(
             body.iter_chunks(chunk_size=65536),
             media_type="application/pdf",
             headers={
-                "Content-Disposition": f"{disposition}; filename=\"{filename}\"; filename*=utf-8''{encoded_filename}",
+                "Content-Disposition": _content_disposition(disposition, filename, ascii_filename),
                 "Content-Length": str(content_length),
             },
         )
