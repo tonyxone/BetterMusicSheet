@@ -1,16 +1,26 @@
 # Infrastructure (Terraform)
 
 Provisions the AWS resources this app actually needs: a private S3 bucket for
-job files, an IAM task role with S3-only access, and an ALB + regional ACM
-cert for `api.bettermusicsheet.com`.
+job files, an IAM task role, an ALB + regional ACM cert for
+`api.bettermusicsheet.com`, a Cognito user pool for sign-in, three DynamoDB
+tables for job/user state, and the SSM parameter holding the backend's JWT
+signing secret.
 
-No Cognito, no DynamoDB - the app has no real accounts (every request is
-identified by an anonymous per-browser guest id, see `../auth.py`) and no
-database (job state lives in memory, see `../db.py`). Earlier revisions of
-this config provisioned both; if you're applying on top of that earlier
-state, **the next `terraform apply` will destroy the live Cognito user pool,
-its client/domain, all four DynamoDB tables, and the backend-JWT-secret SSM
-parameter** - run `terraform plan` first and read it before applying.
+Sign-in is **optional** in the app - a signed-out visitor uploads under an
+anonymous per-browser guest id (see `../auth.py`), and only someone who
+actually signs in gets a `users` row. The Cognito resources are therefore
+not on the critical path for uploading; the DynamoDB tables are, since all
+job state lives there in production (see `../db.py`).
+
+The app client is a **public** client with no secret (`generate_secret =
+false`): the frontend is a static export with no server of its own, so it
+uses authorization-code + PKCE. Don't "fix" that by generating a secret -
+the browser flow cannot complete with one.
+
+An earlier revision of this config dropped Cognito/DynamoDB entirely and a
+later one restored them. If you're applying on top of that stripped-down
+state, this apply **creates** the pool and tables fresh - any rows or users
+from before that removal are gone and are not recovered by re-applying.
 
 **Deliberately out of scope here** — existing resources created by hand
 earlier this project (ECR repo, the current ECS cluster/service, the public
@@ -48,7 +58,35 @@ running.
      creating a new resource.
 
 4. `terraform output` afterward gives everything needed: `job_files_bucket`,
-   `ecs_task_role_arn`, `alb_target_group_arn`, `api_url`.
+   `ecs_task_role_arn`, `alb_target_group_arn`, `api_url`, plus the auth
+   values below.
+
+## Wiring up sign-in after an apply
+
+`terraform output` produces the values both halves of the app need. Neither
+is picked up automatically - the backend reads env vars from the task
+definition, and the frontend inlines its at build time.
+
+**Backend** (`../taskdef-new.json`, then register a new revision): set
+`COGNITO_USER_POOL_ID` and `COGNITO_APP_CLIENT_ID` from
+`cognito_user_pool_id` / `cognito_app_client_id`. `USERS_TABLE`,
+`MUSIC_SHEET_TABLE` and `ANNOTATION_JOB_TABLE` are already filled in with
+the names this config creates. `BACKEND_JWT_SECRET` is deliberately a
+`secrets` entry rather than an `environment` one, so the plaintext never
+appears in the task definition - its `valueFrom` is
+`backend_jwt_secret_ssm_arn`.
+
+**Frontend** (GitHub repo *variables*, read by `.github/workflows/release.yml`):
+set `COGNITO_DOMAIN` to `cognito_hosted_ui_domain` and
+`COGNITO_APP_CLIENT_ID` to `cognito_app_client_id`. These are public
+identifiers that end up in the shipped JS bundle - variables, not secrets.
+Leave them unset and the app still deploys and works; the Sign in button
+just doesn't render.
+
+Callback URLs are registered in `cognito.tf` for the apex domain, `www`, and
+`http://localhost:3000` - all with a **trailing slash**, which Cognito
+matches exactly and which is what `trailingSlash` in
+`../better_music_sheet_web/next.config.ts` actually produces.
 
 ## Before your first apply
 

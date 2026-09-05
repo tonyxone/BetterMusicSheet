@@ -77,6 +77,26 @@ main {
 .nav-btn.primary:hover { background: var(--accent-deep); }
 .nav-btn.ghost { background: transparent; border: 1px solid var(--ink-soft); color: var(--ink); }
 .nav-btn.ghost:hover { background: var(--paper-deep); }
+/* Signed-in user's name as a dropdown trigger, with Sign out as its one
+   menu item. Positioning root for the menu's absolute placement. */
+.nav-menu-root { position: relative; }
+.nav-user-btn { padding-right: 14px; }
+.nav-user {
+  max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.nav-caret { transition: transform 0.15s ease; flex-shrink: 0; }
+.nav-caret.open { transform: rotate(180deg); }
+.nav-menu {
+  position: absolute; top: calc(100% + 8px); right: 0; min-width: 140px;
+  background: var(--card); border: 1px solid var(--paper-deep); border-radius: 12px;
+  box-shadow: 0 12px 28px rgba(46, 33, 23, 0.14); padding: 6px; z-index: 20;
+}
+.nav-menu-item {
+  display: block; width: 100%; text-align: left; background: transparent; border: none;
+  padding: 9px 12px; border-radius: 8px; font-size: 14.5px; font-weight: 600;
+  font-family: inherit; color: var(--ink); cursor: pointer;
+}
+.nav-menu-item:hover { background: var(--paper-deep); }
 
 /* ---- Shared page wrap ---- */
 .wrap { max-width: 600px; margin: 0 auto; padding: 56px 32px 100px; }
@@ -200,3 +220,52 @@ details.options[open] summary::before { content: "▾ "; }
   padding: 13px 24px; border-radius: 999px; font-size: 14px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
   animation: bms-fadein 0.25s ease-out; z-index: 20;
 }
+
+/* ---- Sign-in modal ---- */
+.modal-backdrop {
+  position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center;
+  padding: 24px; background: rgba(46, 33, 23, 0.45); backdrop-filter: blur(3px);
+  animation: modal-fade 0.15s ease-out;
+}
+@keyframes modal-fade { from { opacity: 0; } to { opacity: 1; } }
+.modal-card {
+  position: relative; width: 100%; max-width: 420px; max-height: 100%; overflow-y: auto;
+  background: var(--card); border: 1px solid var(--paper-deep); border-radius: 18px;
+  padding: 32px; box-shadow: 0 24px 60px rgba(46, 33, 23, 0.28);
+  animation: modal-rise 0.18s ease-out;
+}
+@keyframes modal-rise { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
+.modal-close {
+  position: absolute; top: 14px; right: 14px; display: flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; border: none; border-radius: 999px; background: transparent;
+  color: var(--ink-soft); cursor: pointer;
+}
+.modal-close:hover { background: var(--paper-deep); color: var(--ink); }
+.modal-title { font-size: 24px; font-weight: 600; margin: 0 0 6px; }
+.modal-sub { margin: 0 0 18px; font-size: 14px; color: var(--ink-soft); }
+.modal-notice {
+  margin: 0 0 16px; padding: 10px 12px; border-radius: 10px; font-size: 13.5px;
+  background: var(--success-bg); color: var(--success);
+}
+.modal-error {
+  margin: 0 0 16px; padding: 10px 12px; border-radius: 10px; font-size: 13.5px;
+  background: var(--danger-bg); color: var(--danger);
+}
+.modal-field { display: block; margin-bottom: 16px; }
+.modal-field > span { display: block; margin-bottom: 6px; font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.modal-field > span em { font-weight: 400; font-style: normal; color: var(--ink-soft); }
+.modal-field input {
+  width: 100%; height: 44px; padding: 0 14px; border-radius: 10px;
+  border: 1px solid var(--paper-deep); background: var(--paper); color: var(--ink);
+  font-size: 15px; font-family: inherit;
+}
+.modal-field input:focus { outline: none; border-color: var(--accent); }
+.modal-hint { display: block; margin-top: 6px; font-size: 12px; font-style: normal; color: var(--ink-soft); }
+.modal-links {
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 16px; margin-top: 18px;
+}
+.modal-links button {
+  background: none; border: none; padding: 0; font-family: inherit; font-size: 13.5px;
+  color: var(--accent); text-decoration: underline; cursor: pointer;
+}
+.modal-links button:hover { color: var(--accent-deep); }

@@ -6,9 +6,14 @@ Key layout is /{user_id}/input/{name}.pdf and /{user_id}/output/{name}
 a key is recognizable on its own (e.g. in the S3 console), not just via
 db.py's job records. Deliberately NOT keyed by music_sheet_id/job_id:
 uploading (or reprocessing) a same-named sheet again overwrites its previous
-input/output, by design, not a bug. user_id is validated as UUID-shaped
-before it ever reaches here (see auth.py) - it becomes a storage key prefix,
-so it's never trusted verbatim.
+input/output, by design, not a bug.
+
+{user_id} is the signed-in user's Cognito id when there is one, and their
+anonymous per-browser guest id otherwise - auth.py decides which, and
+validates either as UUID-shaped before it ever reaches here, since it
+becomes a storage key prefix and so is never trusted verbatim. A visitor who
+signs in mid-session therefore starts writing under a different prefix;
+sheets they uploaded as a guest stay where they are.
 """
 import re
 import shutil

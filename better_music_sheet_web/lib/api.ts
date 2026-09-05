@@ -1,3 +1,7 @@
+// Base URL of the backend API. Lives here rather than in client-api.ts so
+// auth.ts can reach it too without importing the module that imports auth.
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE!;
+
 export type AnnotationJob = {
   job_id: string;
   music_sheet_id: string;
@@ -17,5 +21,12 @@ export type AnnotationJob = {
 export type MusicSheet = {
   music_sheet_id: string;
   sheet_name: string;
+  created_at: number;
+};
+
+export type User = {
+  user_id: string;
+  email: string | null;
+  display_name: string;
   created_at: number;
 };
