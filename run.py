@@ -150,9 +150,13 @@ def retry_sparse_pages(pdf_path, work_dir, counts, sparse_pages):
 
 
 def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font_size=6.5,
-                  dpi=None, auto_retry=True, log=print):
+                  dpi=None, auto_retry=True, log=print, timeline_path=None):
     """Run the full PDF -> Audiveris OMR -> annotated PDF pipeline. Shared by the
     CLI (main(), below) and the web API (server.py) so the two stay in sync.
+
+    ``timeline_path``: optional path to also write the playback timeline JSON
+    (see timeline.py). Best-effort - a failure there is logged and ignored, so
+    a bug in the playback data can never cost someone their annotated PDF.
 
     Returns the number of labeled beat-groups written to ``output``.
     """
@@ -183,6 +187,19 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
     records = build_records(str(pdf_path), str(omr), num_pages, style=style, octave=octave,
                              page_omr_overrides=page_overrides)
 
+    if timeline_path is not None:
+        try:
+            import json
+
+            from timeline import build_timeline
+            tl = build_timeline(str(pdf_path), str(mxl), str(omr), num_pages,
+                                page_omr_overrides=page_overrides)
+            Path(timeline_path).write_text(json.dumps(tl), encoding="utf-8")
+            log(f"[2b/3] Playback timeline: {len(tl['measures'])} measures, "
+                f"{len(tl['notes'])} notes")
+        except Exception as e:
+            log(f"[2b/3] Timeline build failed, Play mode unavailable for this sheet: {e}")
+
     log(f"[3/3] Rendering {output} ...")
     render(str(pdf_path), str(output), records, font_size=font_size)
     log(f"Done: {output} ({len(records)} labeled beat-groups)")
@@ -197,6 +214,8 @@ def main():
     ap.add_argument("--octave", action="store_true")
     ap.add_argument("--font-size", type=float, default=6.5)
     ap.add_argument("--work-dir", default="output")
+    ap.add_argument("--timeline", default=None,
+                     help="Also write the playback timeline JSON here (see timeline.py).")
     ap.add_argument("--dpi", type=int, default=None,
                      help="Override Audiveris's PDF rasterization DPI (default: Audiveris's own, "
                           "normally 300). Try 450-600 for pages where dense passages go unrecognized.")
@@ -209,7 +228,8 @@ def main():
     output = args.output or str(pdf_path.with_name(pdf_path.stem + " (annotated).pdf"))
 
     annotate_pdf(pdf_path, output, args.work_dir, style=args.style, octave=args.octave,
-                 font_size=args.font_size, dpi=args.dpi, auto_retry=not args.no_auto_retry)
+                 font_size=args.font_size, dpi=args.dpi, auto_retry=not args.no_auto_retry,
+                 timeline_path=args.timeline)
 
 
 if __name__ == "__main__":

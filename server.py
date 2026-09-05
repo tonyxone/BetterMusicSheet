@@ -35,6 +35,7 @@ Endpoints:
     GET    /api/sheets/{job_id}/download   the annotated PDF, streamed through this backend either way
                                             (from S3 in production, from disk in local dev)
                                             (?inline=1 for in-browser preview instead of a forced download)
+    GET    /api/sheets/{job_id}/timeline   playback timeline JSON for the Play page (404 if none)
     GET    /api/music-sheets               this user's uploaded sheets, one row per sheet regardless of reprocess count
 
 The UI (static/index.html + static/config.js) is deployment-independent from
@@ -117,13 +118,20 @@ def _process(job_id):
         db.update_annotation_job(_jid, stage=msg)
 
     try:
+        timeline_file = job_dir / "timeline.json"
         n = annotate_pdf(
             job_dir / "input.pdf", job_dir / "annotated.pdf", job_dir / "work",
             style=job["style"], octave=job["octave"], font_size=job["font_size"],
             dpi=job["dpi"], auto_retry=job["auto_retry"], log=log,
+            timeline_path=timeline_file,
         )
         sheet = db.get_music_sheet(job["music_sheet_id"])
-        storage.upload_output_pdf(job["user_id"], job_dir / "annotated.pdf", sheet["sheet_name"] if sheet else job["music_sheet_id"])
+        sheet_name = sheet["sheet_name"] if sheet else job["music_sheet_id"]
+        storage.upload_output_pdf(job["user_id"], job_dir / "annotated.pdf", sheet_name)
+        # Best-effort, like its build: no timeline just means no Play mode for
+        # this sheet (GET /timeline 404s), never a failed job.
+        if timeline_file.exists():
+            storage.upload_output_timeline(job["user_id"], timeline_file, sheet_name)
         db.update_annotation_job(job_id, status="done", labeled_groups=n)
     except Exception as e:
         log(f"FAILED: {e}")
@@ -319,6 +327,35 @@ def job_download(job_id: str, inline: bool = False, user_id: str = Depends(get_c
         path, media_type="application/pdf", filename=filename,
         content_disposition_type=disposition,
     )
+
+
+@app.get("/api/sheets/{job_id}/timeline")
+def job_timeline(job_id: str, user_id: str = Depends(get_current_user_id)):
+    """Playback data for the Play page (see ../timeline.py): notes with beat
+    positions and MIDI numbers, plus per-measure page regions.
+
+    404 rather than 500 when a finished job has no timeline - building it is
+    best-effort (see run.py), so its absence is an expected state meaning
+    "Play mode isn't available for this sheet", not a server fault."""
+    job = _owned_job_or_404(job_id, user_id)
+    if job["status"] != "done":
+        raise HTTPException(409, f"job is '{job['status']}', not done yet")
+    sheet = db.get_music_sheet(job["music_sheet_id"])
+    sheet_name = sheet["sheet_name"] if sheet else job["music_sheet_id"]
+    if IS_PRODUCTION:
+        try:
+            body, content_length = storage.download_output_timeline(job["user_id"], sheet_name)
+        except Exception:
+            raise HTTPException(404, "no playback timeline for this sheet")
+        return StreamingResponse(
+            body.iter_chunks(chunk_size=65536),
+            media_type="application/json",
+            headers={"Content-Length": str(content_length)},
+        )
+    path = storage.local_output_timeline_path(job["user_id"], sheet_name)
+    if not path.exists():
+        raise HTTPException(404, "no playback timeline for this sheet")
+    return FileResponse(path, media_type="application/json")
 
 
 @app.get("/api/music-sheets")
