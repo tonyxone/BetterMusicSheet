@@ -15,6 +15,9 @@ export function Header() {
         <Logo />
       </Link>
       <nav className="flex items-center gap-3">
+        <Link href="/play" className="nav-btn ghost">
+          Play
+        </Link>
         <Link href="/history" className="nav-btn ghost">
           History
         </Link>

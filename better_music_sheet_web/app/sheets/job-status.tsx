@@ -99,6 +99,9 @@ export function JobStatus() {
           <Link href="/" className="btn-pill ghost">
             Annotate another
           </Link>
+          <Link href={`/play?job=${jobId}`} className="btn-pill ghost">
+            Play
+          </Link>
           <DownloadButton jobId={jobId} sheetName={job.sheet_name} />
         </div>
       </div>
