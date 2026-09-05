@@ -114,11 +114,17 @@ export function JobStatus() {
 // so fetch the bytes ourselves and hand the browser a blob URL to save.
 function DownloadButton({ jobId, sheetName }: { jobId: string; sheetName?: string }) {
   const [downloading, setDownloading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function handleDownload() {
     setDownloading(true);
+    setError(null);
     try {
       const res = await clientApiFetch(`/api/sheets/${jobId}/download`);
+      // Without this check a failed request still "downloads" - the error
+      // body gets saved as a .pdf that won't open, which is how a server-side
+      // 500 previously reached the user as a silently broken file.
+      if (!res.ok) throw new Error(`download failed (${res.status})`);
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -126,9 +132,19 @@ function DownloadButton({ jobId, sheetName }: { jobId: string; sheetName?: strin
       a.download = `${(sheetName || jobId).replace(/\.pdf$/i, "")} (annotated).pdf`;
       a.click();
       URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setDownloading(false);
     }
+  }
+
+  if (error) {
+    return (
+      <button onClick={handleDownload} className="btn-pill" title={error} style={{ background: "var(--danger)" }}>
+        Retry download
+      </button>
+    );
   }
 
   return (
@@ -144,12 +160,20 @@ function PreviewFrame({ jobId }: { jobId: string }) {
   const resizeRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLIFrameElement>(null);
   const dragState = useRef({ startY: 0, startH: 0 });
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let revoked = false;
     let objectUrl: string | null = null;
     clientApiFetch(`/api/sheets/${jobId}/download?inline=1`)
-      .then((res) => res.blob())
+      .then((res) => {
+        // A failed request otherwise gets turned into a blob and handed to
+        // the PDF viewer, which renders it as an empty frame - indis-
+        // tinguishable from a genuinely blank PDF, and how a server-side
+        // 500 previously surfaced as "the preview is blank".
+        if (!res.ok) throw new Error(`preview failed (${res.status})`);
+        return res.blob();
+      })
       .then((blob) => {
         if (revoked) return;
         objectUrl = URL.createObjectURL(blob);
@@ -174,6 +198,9 @@ function PreviewFrame({ jobId }: { jobId: string }) {
             if (frame.isConnected) frame.src = objectUrl!;
           }, 50);
         }, 400);
+      })
+      .catch((err) => {
+        if (!revoked) setError(err instanceof Error ? err.message : String(err));
       });
     return () => {
       revoked = true;
@@ -211,6 +238,16 @@ function PreviewFrame({ jobId }: { jobId: string }) {
     if (frameRef.current) frameRef.current.style.pointerEvents = "";
     window.removeEventListener("pointermove", onDrag);
     window.removeEventListener("pointerup", onDragEnd);
+  }
+
+  if (error) {
+    return (
+      <div className="preview-resize" style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <p style={{ color: "var(--danger)", textAlign: "center", padding: 24 }}>
+          Couldn&apos;t load the preview ({error}). The Download button still gives you the file.
+        </p>
+      </div>
+    );
   }
 
   return (
