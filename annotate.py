@@ -137,10 +137,12 @@ def build_records(pdf_path, omr_path, num_pages, style='unicode', octave=False, 
     for every notehead Audiveris detected.  Pitches are Audiveris's per-head
     diatonic pitches corrected for the clef the PDF actually shows.
 
-    ``page_omr_overrides``: optional {page_number: alternate_omr_path}, for pages
-    that were re-recognized separately (e.g. re-run at a higher DPI because the
-    default pass badly under-detected that page) - such a page is read entirely
-    from its own omr file instead of the main one.
+    ``page_omr_overrides``: optional {page_number: {"omr": path, "mxl": path}},
+    for pages that were re-recognized separately (e.g. re-run at a higher DPI
+    because the default pass badly under-detected that page) - such a page is
+    read entirely from its own omr file instead of the main one. Only the
+    "omr" half is used here; timeline.py uses the "mxl" half of the same
+    entry so both read the same recognition pass.
     """
     if pdf_path is None:
         raise ValueError("build_records needs the original PDF path (for clef glyphs)")
@@ -159,7 +161,9 @@ def _build_records_inner(pdf_doc, omr_path, num_pages, style, octave, verbose, p
     seen_in_measure = {}
 
     for page in range(1, num_pages + 1):
-        src_omr = page_omr_overrides.get(page, omr_path)
+        # page_omr_overrides is {page: {'omr': ..., 'mxl': ...}} (see
+        # run.py's retry_sparse_pages); only the omr half matters here.
+        src_omr = page_omr_overrides.get(page, {}).get('omr', omr_path)
         heads = load_sheet_heads(src_omr, page)
         if not heads:
             continue

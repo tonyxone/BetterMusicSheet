@@ -122,21 +122,27 @@ def find_sparse_pages(omr_path, num_pages):
 
 def retry_sparse_pages(pdf_path, work_dir, counts, sparse_pages):
     """Re-run Audiveris at a higher DPI for just the flagged pages. Returns
-    {page: alternate_omr_path} for pages where the retry actually found more
-    notes than the original pass; pages where it didn't help are left alone."""
+    {page: {"omr": path, "mxl": path}} for pages where the retry actually found
+    more notes than the original pass; pages where it didn't help are left
+    alone.
+
+    Both halves of Audiveris's output are kept, not just the .omr: anything
+    reading rhythm from the MusicXML (see timeline.py) has to read the SAME
+    recognition pass this page's pixel data came from, or the two sources
+    disagree on note counts for exactly the pages that needed a retry."""
     overrides = {}
     for page in sparse_pages:
         print(f"  page {page}: only {counts[page]} noteheads detected (piece median "
               f"is much higher) - retrying at {RETRY_DPI} DPI ...")
         retry_dir = work_dir / f"_retry_p{page}"
         try:
-            _mxl, omr = run_audiveris(pdf_path, retry_dir, dpi=RETRY_DPI, sheets=[page])
+            mxl, omr = run_audiveris(pdf_path, retry_dir, dpi=RETRY_DPI, sheets=[page])
         except subprocess.CalledProcessError:
             print(f"    retry failed for page {page}; keeping the original recognition")
             continue
         new_count = len(load_sheet_heads(str(omr), page))
         if new_count > counts[page]:
-            overrides[page] = str(omr)
+            overrides[page] = {"omr": str(omr), "mxl": str(mxl)}
             print(f"    {counts[page]} -> {new_count} noteheads - using the retry for this page")
         else:
             print(f"    {new_count} noteheads, no better than the original - keeping the original")
