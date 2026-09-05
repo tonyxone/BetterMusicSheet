@@ -2,7 +2,8 @@
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { clientApiFetch } from "@/lib/client-api";
-import { getAccessToken, readSession, signIn, signOut } from "@/lib/auth";
+import { getAccessToken, readSession, signOut } from "@/lib/auth";
+import { SignInModal } from "./sign-in-modal";
 import type { User } from "@/lib/api";
 
 type AuthState = {
@@ -10,10 +11,10 @@ type AuthState = {
   /** True only until the first session check settles - the header uses it to
    * avoid flashing "Sign in" at someone who is already signed in. */
   loading: boolean;
-  signIn: typeof signIn;
+  /** Open the sign-in modal. */
+  openSignIn: () => void;
   signOut: typeof signOut;
-  /** Re-read the session from scratch; the sign-in callback calls this so the
-   * header updates without a full page reload. */
+  /** Re-read the session from scratch. */
   refresh: () => Promise<void>;
 };
 
@@ -22,6 +23,7 @@ const AuthContext = createContext<AuthState | null>(null);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [modalOpen, setModalOpen] = useState(false);
 
   // Written as a promise chain rather than a plain `async` body so every
   // setState below is lexically inside a callback: the mount effect calls
@@ -57,9 +59,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     refresh();
   }, [refresh]);
 
+  const openSignIn = useCallback(() => setModalOpen(true), []);
+  const closeSignIn = useCallback(() => setModalOpen(false), []);
+
+  const handleSignedIn = useCallback(() => {
+    setModalOpen(false);
+    refresh();
+  }, [refresh]);
+
   return (
-    <AuthContext.Provider value={{ user, loading, signIn, signOut, refresh }}>
+    <AuthContext.Provider value={{ user, loading, openSignIn, signOut, refresh }}>
       {children}
+      {modalOpen && <SignInModal onClose={closeSignIn} onSignedIn={handleSignedIn} />}
     </AuthContext.Provider>
   );
 }
