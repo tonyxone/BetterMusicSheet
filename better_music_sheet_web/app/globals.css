@@ -359,3 +359,17 @@ button.history-row { width: 100%; font-family: inherit; cursor: pointer; text-al
   display: inline-flex; align-items: center; justify-content: center;
   width: 48px; height: 48px; padding: 0; border-radius: 999px;
 }
+/* Notes sounding right now, coloured by hand to match the keyboard. */
+.note-marker {
+  position: absolute; border-radius: 4px; pointer-events: none;
+  box-shadow: 0 0 0 2px currentColor inset; opacity: 0.85;
+}
+.note-marker.right { color: #2F6FB5; background: rgba(47, 111, 181, 0.22); }
+.note-marker.left  { color: #3E8E5A; background: rgba(62, 142, 90, 0.22); }
+/* Scrub bar: drag to move the playhead; the sheet and keyboard follow. */
+.play-scrub { display: flex; align-items: center; gap: 12px; padding: 10px 4px 0; }
+.play-scrub input { flex: 1; accent-color: var(--accent); cursor: pointer; }
+.play-time {
+  font-size: 13px; color: var(--ink-soft); font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

@@ -34,7 +34,11 @@ export type PlayOptions = {
 };
 
 export type PlaybackCallbacks = {
-  onHighlight: (midis: number[]) => void;
+  /** The notes sounding right now, so callers can colour by hand and mark
+   * them on the sheet - not just their pitches. */
+  onHighlight: (notes: TimelineNote[]) => void;
+  /** Beat position, every frame, for the scrubber. */
+  onProgress?: (beat: number) => void;
   /** Index of the measure currently sounding, or null between/after notes. */
   onMeasure?: (index: number | null) => void;
   onEnded?: () => void;
@@ -62,6 +66,8 @@ export class Playback {
   private pausedBeat = 0;
   private playing = false;
   private lastHighlight = "";
+  private lastOptions: PlayOptions = {};
+  private lastSpeed = 1;
   private lastMeasure: number | null = null;
 
   constructor(timeline: Timeline, synth: SynthEngine, ctx: AudioContext, cb: PlaybackCallbacks) {
@@ -85,6 +91,9 @@ export class Playback {
 
   play(speed: number, opts: PlayOptions = {}) {
     this.stopInternal();
+    // Remembered so seek() can resume the same window at the same speed.
+    this.lastSpeed = speed;
+    this.lastOptions = opts;
 
     const bpm = this.timeline.tempo_bpm_default || 96;
     this.secondsPerBeat = 60 / bpm / (speed || 1);
@@ -176,13 +185,47 @@ export class Playback {
     }
   }
 
-  private emitHighlight(midis: number[]) {
-    const key = midis.join(",");
+  private emitHighlight(notes: TimelineNote[]) {
+    const key = notes.map((n) => `${n.midi}:${n.role}:${n.start_beat}`).join(",");
     // Only push when the set actually changes - otherwise this would set React
     // state 60x a second for no visible difference.
     if (key !== this.lastHighlight) {
       this.lastHighlight = key;
-      this.cb.onHighlight(midis);
+      this.cb.onHighlight(notes);
+    }
+  }
+
+  /** What is sounding at a given beat, without playing anything - used while
+   * scrubbing a paused player so the sheet and keyboard still follow. */
+  notesAt(beat: number): TimelineNote[] {
+    return this.timeline.notes.filter((n) => {
+      const len = n.is_grace || n.duration_beats <= 0 ? 0.25 : n.duration_beats;
+      return beat >= n.start_beat - 1e-9 && beat < n.start_beat + len;
+    });
+  }
+
+  measureAt(beat: number): number | null {
+    const m = this.timeline.measures.find(
+      (mm) => beat >= mm.start_beat && beat < mm.start_beat + mm.length_beats,
+    );
+    return m ? m.index : null;
+  }
+
+  /** Move the playhead. Keeps playing if it was playing, so dragging the
+   * scrubber mid-piece continues from the new spot. */
+  seek(beat: number) {
+    const wasPlaying = this.playing;
+    this.pausedBeat = beat;
+    if (wasPlaying) {
+      this.play(this.lastSpeed, { ...this.lastOptions, fromBeat: beat });
+    } else {
+      this.emitHighlight(this.notesAt(beat));
+      const m = this.measureAt(beat);
+      if (m !== this.lastMeasure) {
+        this.lastMeasure = m;
+        this.cb.onMeasure?.(m);
+      }
+      this.cb.onProgress?.(beat);
     }
   }
 
@@ -191,7 +234,7 @@ export class Playback {
       if (!this.playing) return;
       const pos = Math.max(0, this.ctx.currentTime - this.originTime);
 
-      const active: number[] = [];
+      const active: TimelineNote[] = [];
       let measure: number | null = null;
       // The schedule is start-sorted, so anything still sounding lies in a
       // prefix - but a long note can outlast later ones, so scan rather than
@@ -199,12 +242,13 @@ export class Playback {
       for (const s of this.schedule) {
         if (s.start > pos) break;
         if (s.end > pos) {
-          active.push(s.note.midi);
+          active.push(s.note);
           if (measure === null) measure = s.note.measure_index;
         }
       }
-      active.sort((a, b) => a - b);
+      active.sort((a, b) => a.midi - b.midi);
       this.emitHighlight(active);
+      this.cb.onProgress?.(this.windowStart + pos / this.secondsPerBeat);
 
       // Between notes (a rest, say) keep showing the measure the playhead is
       // in rather than flickering to nothing.

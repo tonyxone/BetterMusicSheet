@@ -11,8 +11,8 @@
 // detached canvases and handing them to React afterwards fights React over
 // the DOM and leaves pdf.js working on an unattached element.
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { TimelineMeasure } from "@/lib/timeline";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { TimelineMeasure, TimelineNote } from "@/lib/timeline";
 
 const RENDER_SCALE = 2; // rasterize above CSS size so the sheet stays sharp
 
@@ -42,6 +42,7 @@ export function SheetCanvas({
   measures,
   playingIndex,
   lockedFromIndex,
+  activeNotes,
   onMeasureClick,
 }: {
   pdfData: ArrayBuffer;
@@ -51,6 +52,8 @@ export function SheetCanvas({
   /** First measure a signed-out visitor can't play, or null when unrestricted.
    * Shown dimmed so the limit is visible before it's hit. */
   lockedFromIndex: number | null;
+  /** Notes sounding right now, marked on the sheet. */
+  activeNotes: TimelineNote[];
   onMeasureClick: (index: number) => void;
 }) {
   const [pages, setPages] = useState<PageInfo[]>([]);
@@ -159,6 +162,39 @@ export function SheetCanvas({
     }
   }, [playingIndex]);
 
+  /** Where to draw a note's marker. Uses the notehead box the backend
+   * matched when it could; otherwise falls back to a position interpolated
+   * across the measure, on the half of the staff that hand plays. The
+   * fallback is approximate on purpose - engraving isn't linear in time -
+   * but it keeps the marker moving instead of blinking out for the notes the
+   * two OMR sources disagreed about. */
+  const noteMarkers = useMemo(() => {
+    const byMeasure = new Map(measures.map((m) => [m.index, m]));
+    const out: { key: string; page: number; x0: number; y0: number; x1: number; y1: number; role: number }[] = [];
+    for (const n of activeNotes) {
+      if (n.bbox_pt) {
+        const m = byMeasure.get(n.measure_index);
+        if (!m?.page) continue;
+        const [x0, y0, x1, y1] = n.bbox_pt;
+        out.push({ key: `${n.midi}-${n.start_beat}-${n.role}`, page: m.page, x0, y0, x1, y1, role: n.role });
+        continue;
+      }
+      const m = byMeasure.get(n.measure_index);
+      if (!m?.bbox_pt || !m.page || m.length_beats <= 0) continue;
+      const [mx0, my0, mx1, my1] = m.bbox_pt;
+      const frac = Math.min(0.96, Math.max(0, (n.start_beat - m.start_beat) / m.length_beats));
+      const cx = mx0 + frac * (mx1 - mx0);
+      const half = (my1 - my0) / 2;
+      const top = n.role === 1 ? my0 + half : my0;
+      out.push({
+        key: `${n.midi}-${n.start_beat}-${n.role}`,
+        page: m.page, x0: cx - 5, y0: top + half * 0.15, x1: cx + 5, y1: top + half * 0.85,
+        role: n.role,
+      });
+    }
+    return out;
+  }, [activeNotes, measures]);
+
   const handleClick = useCallback(
     (page: PageInfo, e: React.MouseEvent<HTMLDivElement>) => {
       const rect = e.currentTarget.getBoundingClientRect();
@@ -227,6 +263,20 @@ export function SheetCanvas({
                 />
               );
             })}
+          {noteMarkers
+            .filter((n) => n.page === page.pageNumber)
+            .map((n) => (
+              <span
+                key={n.key}
+                className={`note-marker${n.role === 1 ? " left" : " right"}`}
+                style={{
+                  left: `${(n.x0 / page.widthPt) * 100}%`,
+                  top: `${(n.y0 / page.heightPt) * 100}%`,
+                  width: `${((n.x1 - n.x0) / page.widthPt) * 100}%`,
+                  height: `${((n.y1 - n.y0) / page.heightPt) * 100}%`,
+                }}
+              />
+            ))}
         </div>
       ))}
     </div>

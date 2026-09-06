@@ -38,7 +38,9 @@ const GAP = 0.055; // hairline between white keys
 
 const COLOR_WHITE = 0xfbf9f4;
 const COLOR_BLACK = 0x1c1613;
-const COLOR_ON = 0xa83c34; // --accent
+// One colour per hand, so you can see at a glance which hand plays what.
+const COLOR_RIGHT = 0x2f6fb5; // right hand (top staff)
+const COLOR_LEFT = 0x3e8e5a;  // left hand
 const COLOR_FELT = 0x8c2f2a;
 
 export function isBlackKey(midi: number) {
@@ -138,11 +140,13 @@ function blackKeyGeometry() {
   return geo;
 }
 
+export type ActiveKey = { midi: number; role: number };
+
 export function Keyboard3D({
-  activeMidis,
+  activeKeys,
   showKeyNames = false,
 }: {
-  activeMidis: number[];
+  activeKeys: ActiveKey[];
   showKeyNames?: boolean;
 }) {
   const mountRef = useRef<HTMLDivElement>(null);
@@ -284,13 +288,20 @@ export function Keyboard3D({
   useEffect(() => {
     const keys = keysRef.current;
     if (!keys.size) return;
-    const on = new Set(activeMidis);
+    // A pitch played by both hands at once takes the right hand's colour;
+    // picking one beats blending into a third colour that means neither.
+    const roleOf = new Map<number, number>();
+    for (const k of activeKeys) {
+      if (!roleOf.has(k.midi) || k.role === 0) roleOf.set(k.midi, k.role);
+    }
     keys.forEach((mesh, midi) => {
       const mat = mesh.material as THREE.MeshStandardMaterial;
-      const lit = on.has(midi);
+      const role = roleOf.get(midi);
+      const lit = role !== undefined;
+      const litColor = role === 1 ? COLOR_LEFT : COLOR_RIGHT;
       const black = mesh.userData.black as boolean;
-      mat.color.setHex(lit ? COLOR_ON : black ? COLOR_BLACK : COLOR_WHITE);
-      mat.emissive.setHex(lit ? COLOR_ON : 0x000000);
+      mat.color.setHex(lit ? litColor : black ? COLOR_BLACK : COLOR_WHITE);
+      mat.emissive.setHex(lit ? litColor : 0x000000);
       mat.emissiveIntensity = lit ? 0.42 : 0;
       // Press the key down while it sounds - the motion reads as "this one" far
       // faster than colour alone.
@@ -299,7 +310,7 @@ export function Keyboard3D({
       mesh.rotation.x = lit ? 0.022 : 0;
     });
     renderRef.current();
-  }, [activeMidis]);
+  }, [activeKeys]);
 
   useEffect(() => {
     if (showKeyNames) layoutLabelsRef.current();
@@ -314,7 +325,7 @@ export function Keyboard3D({
     return out;
   }, []);
 
-  const on = useMemo(() => new Set(activeMidis), [activeMidis]);
+  const on = useMemo(() => new Set(activeKeys.map((k) => k.midi)), [activeKeys]);
 
   return (
     <div className="keyboard-3d" ref={mountRef}>

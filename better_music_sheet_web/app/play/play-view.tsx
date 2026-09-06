@@ -16,7 +16,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { clientApiFetch } from "@/lib/client-api";
 import { useAuth } from "../auth-context";
 import type { AnnotationJob } from "@/lib/api";
-import type { Timeline } from "@/lib/timeline";
+import type { Timeline, TimelineNote } from "@/lib/timeline";
 import { SynthEngine } from "./synth";
 import { Playback } from "./playback";
 
@@ -48,9 +48,10 @@ function PauseIcon() {
   );
 }
 
-/** How many measures a signed-out visitor can play before being asked to
- * sign in. They get the real page and a real preview, not a wall. */
-const FREE_MEASURES = 3;
+/** How many printed lines (systems) a signed-out visitor can play before
+ * being asked to sign in. Lines rather than measures because that is the unit
+ * someone reading the sheet actually sees. */
+const FREE_LINES = 2;
 
 export function PlayView() {
   const router = useRouter();
@@ -98,6 +99,13 @@ function SheetPicker({ onPick }: { onPick: (jobId: string) => void }) {
   );
 }
 
+function measureIndexAt(timeline: Timeline, beat: number) {
+  const m = timeline.measures.find(
+    (mm) => beat >= mm.start_beat && beat < mm.start_beat + mm.length_beats,
+  );
+  return m ? m.index : null;
+}
+
 function Player({ jobId }: { jobId: string }) {
   const [timeline, setTimeline] = useState<Timeline | null>(null);
   const [pdfData, setPdfData] = useState<ArrayBuffer | null>(null);
@@ -108,7 +116,11 @@ function Player({ jobId }: { jobId: string }) {
   // down to 0.1x for picking a passage apart.
   const [speed, setSpeed] = useState(1);
   const [showKeyNames, setShowKeyNames] = useState(true);
-  const [activeMidis, setActiveMidis] = useState<number[]>([]);
+  const [activeNotes, setActiveNotes] = useState<TimelineNote[]>([]);
+  const [beat, setBeat] = useState(0);
+  // A ref, not state: the progress callback is created once and must see the
+  // current value without being rebuilt on every drag.
+  const scrubbingRef = useRef(false);
   /** The measure sounding right now, from the playback clock. */
   const [playingMeasure, setPlayingMeasure] = useState<number | null>(null);
 
@@ -121,18 +133,42 @@ function Player({ jobId }: { jobId: string }) {
    * asks for a sign-in rather than just stopping. */
   const previewRef = useRef(false);
 
+  /** Index of the first measure past the free lines, or null when a visitor
+   * can play everything.
+   *
+   * A "line" is a printed system. Measures on one carry the same page and the
+   * same vertical extent, so grouping on that recovers the lines without the
+   * backend having to label them. */
+  const lockedFrom = useMemo(() => {
+    if (user || !timeline) return null;
+    const seen: string[] = [];
+    for (const m of timeline.measures) {
+      if (!m.bbox_pt || m.page === null) continue;
+      const line = `${m.page}:${Math.round(m.bbox_pt[1])}`;
+      if (!seen.includes(line)) {
+        seen.push(line);
+        if (seen.length > FREE_LINES) return m.index;
+      }
+    }
+    return null;
+  }, [user, timeline]);
+
   /** A signed-out visitor can play up to here and no further. */
   const freeEndBeat = useMemo(() => {
     if (!timeline) return 0;
-    const free = timeline.measures.filter((m) => m.index < FREE_MEASURES);
-    if (!free.length) return 0;
-    const last = free[free.length - 1];
-    return last.start_beat + last.length_beats;
-  }, [timeline]);
+    if (lockedFrom === null) return timeline.total_beats;
+    const m = timeline.measures.find((x) => x.index === lockedFrom);
+    return m ? m.start_beat : timeline.total_beats;
+  }, [timeline, lockedFrom]);
+
+  const playableMeasureCount = useMemo(
+    () => (timeline ? timeline.measures.filter((m) => m.length_beats > 0).length : 0),
+    [timeline],
+  );
 
   const isLocked = useCallback(
-    (index: number) => !user && index >= FREE_MEASURES,
-    [user],
+    (index: number) => lockedFrom !== null && index >= lockedFrom,
+    [lockedFrom],
   );
 
   useEffect(() => {
@@ -186,7 +222,11 @@ function Player({ jobId }: { jobId: string }) {
       ctxRef.current.resume().catch(() => {});
       if (!playbackRef.current) {
         playbackRef.current = new Playback(tl, synthRef.current!, ctxRef.current, {
-          onHighlight: setActiveMidis,
+          onHighlight: setActiveNotes,
+          onProgress: (b) => {
+            // Ignore the clock while the thumb is held, or it fights the drag.
+            if (!scrubbingRef.current) setBeat(b);
+          },
           onMeasure: setPlayingMeasure,
           onEnded: () => {
             setPlaying(false);
@@ -246,6 +286,27 @@ function Player({ jobId }: { jobId: string }) {
     playWholePiece();
   }, [timeline, playWholePiece]);
 
+  /** Drag the playhead. Locked regions clamp back to the free part and ask
+   * for a sign-in, so scrubbing can't be used to walk past the preview. */
+  const handleScrub = useCallback(
+    (value: number) => {
+      if (!timeline) return;
+      let target = value;
+      if (lockedFrom !== null && target >= freeEndBeat) {
+        target = Math.max(0, freeEndBeat - 0.001);
+        setBeat(target);
+        playbackRef.current?.seek(target);
+        openSignIn();
+        return;
+      }
+      setBeat(target);
+      const pb = playbackRef.current;
+      if (pb) pb.seek(target);
+      else setPlayingMeasure(measureIndexAt(timeline, target));
+    },
+    [timeline, lockedFrom, freeEndBeat, openSignIn],
+  );
+
   const handleMeasureClick = useCallback(
     (index: number) => playFromMeasure(index),
     [playFromMeasure],
@@ -272,9 +333,32 @@ function Player({ jobId }: { jobId: string }) {
           pdfData={pdfData}
           measures={timeline.measures}
           playingIndex={playingMeasure}
-          lockedFromIndex={user ? null : FREE_MEASURES}
+          lockedFromIndex={lockedFrom}
+          activeNotes={activeNotes}
           onMeasureClick={handleMeasureClick}
         />
+      </div>
+
+      <div className="play-scrub">
+        <input
+          type="range"
+          min={0}
+          max={Math.max(1, timeline.total_beats)}
+          step={0.05}
+          value={Math.min(beat, timeline.total_beats)}
+          aria-label="Position in the piece"
+          // While the pointer is down the input owns the value; letting the
+          // playback clock write back mid-drag would fight the thumb.
+          onPointerDown={() => { scrubbingRef.current = true; }}
+          onPointerUp={() => { scrubbingRef.current = false; }}
+          onPointerCancel={() => { scrubbingRef.current = false; }}
+          onChange={(e) => handleScrub(Number(e.target.value))}
+        />
+        <span className="play-time">
+          {/* Measures, not a clock: beats are not seconds, and the piece has
+              no real tempo to convert with (see timeline.py). */}
+          Measure {(measureIndexAt(timeline, beat) ?? 0) + 1} / {playableMeasureCount}
+        </span>
       </div>
 
       <div className="play-transport">
@@ -311,18 +395,14 @@ function Player({ jobId }: { jobId: string }) {
           Key names
         </label>
 
-        {user ? (
-          <span className="play-status subtle">Click a measure to play from there</span>
-        ) : (
-          <span className="play-status subtle">
-            First {FREE_MEASURES} measures free
-            <button className="play-clear" onClick={openSignIn}>sign in for the rest</button>
-          </span>
-        )}
+
       </div>
 
       <div className="play-keyboard">
-        <Keyboard3D activeMidis={activeMidis} showKeyNames={showKeyNames} />
+        <Keyboard3D
+          activeKeys={activeNotes.map((n) => ({ midi: n.midi, role: n.role }))}
+          showKeyNames={showKeyNames}
+        />
       </div>
     </div>
   );

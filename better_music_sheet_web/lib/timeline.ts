@@ -13,6 +13,10 @@ export type TimelineNote = {
   /** 0 for grace notes; the player gives those a fixed short length. */
   duration_beats: number;
   is_grace: boolean;
+  /** The notehead's own box in PDF points, when the two OMR sources agreed
+   * on this measure. Null otherwise - the player falls back to a position
+   * interpolated across the measure. */
+  bbox_pt: [number, number, number, number] | null;
 };
 
 export type TimelineMeasure = {
