@@ -104,13 +104,11 @@ function Player({ jobId }: { jobId: string }) {
   const [error, setError] = useState<string | null>(null);
 
   const [playing, setPlaying] = useState(false);
-  // Defaults aimed at someone learning the piece rather than auditioning it:
-  // very slow, with every key labelled.
-  const [speed, setSpeed] = useState(0.1);
+  // Full speed by default, with every key labelled; the slider still goes
+  // down to 0.1x for picking a passage apart.
+  const [speed, setSpeed] = useState(1);
   const [showKeyNames, setShowKeyNames] = useState(true);
   const [activeMidis, setActiveMidis] = useState<number[]>([]);
-  /** The measure being repeated, if any. */
-  const [loopMeasure, setLoopMeasure] = useState<number | null>(null);
   /** The measure sounding right now, from the playback clock. */
   const [playingMeasure, setPlayingMeasure] = useState<number | null>(null);
 
@@ -209,7 +207,6 @@ function Player({ jobId }: { jobId: string }) {
     (fromBeat?: number) => {
       if (!timeline) return;
       const pb = ensurePlayback(timeline);
-      setLoopMeasure(null);
       // Bound the window rather than stopping once it overruns: notes past
       // the limit are then never scheduled, so nothing audible leaks out.
       previewRef.current = !user;
@@ -222,7 +219,8 @@ function Player({ jobId }: { jobId: string }) {
     [timeline, ensurePlayback, speed, user, freeEndBeat],
   );
 
-  const loopOneMeasure = useCallback(
+  /** Jump to a measure and carry on from there. */
+  const playFromMeasure = useCallback(
     (index: number) => {
       if (!timeline) return;
       const m = timeline.measures[index];
@@ -231,15 +229,9 @@ function Player({ jobId }: { jobId: string }) {
         openSignIn();
         return;
       }
-      const pb = ensurePlayback(timeline);
-      previewRef.current = false;
-      setLoopMeasure(index);
-      pb.play(speed, {
-        loop: { startBeat: m.start_beat, endBeat: m.start_beat + m.length_beats },
-      });
-      setPlaying(true);
+      playWholePiece(m.start_beat);
     },
-    [timeline, ensurePlayback, speed, isLocked, openSignIn],
+    [timeline, isLocked, openSignIn, playWholePiece],
   );
 
   const handlePlayPause = useCallback(() => {
@@ -249,34 +241,15 @@ function Player({ jobId }: { jobId: string }) {
       setPlaying(false);
       return;
     }
-    // Resume whatever mode we were in - repeating a measure stays repeating.
-    if (loopMeasure !== null) loopOneMeasure(loopMeasure);
-    else playWholePiece();
-  }, [timeline, loopMeasure, loopOneMeasure, playWholePiece]);
+    // No argument: playback picks up from the beat it was paused at, rather
+    // than restarting the measure that was underway.
+    playWholePiece();
+  }, [timeline, playWholePiece]);
 
   const handleMeasureClick = useCallback(
-    (index: number) => {
-      if (isLocked(index)) {
-        openSignIn();
-        return;
-      }
-      // Clicking the measure that is already repeating stops it, so the same
-      // click both starts and clears the loop.
-      if (loopMeasure === index && playbackRef.current?.isPlaying) {
-        playbackRef.current.pause();
-        setPlaying(false);
-        return;
-      }
-      loopOneMeasure(index);
-    },
-    [loopMeasure, loopOneMeasure, isLocked, openSignIn],
+    (index: number) => playFromMeasure(index),
+    [playFromMeasure],
   );
-
-  const stopLoop = useCallback(() => {
-    playbackRef.current?.stop();
-    setLoopMeasure(null);
-    setPlaying(false);
-  }, []);
 
   if (error) {
     return (
@@ -292,11 +265,6 @@ function Player({ jobId }: { jobId: string }) {
     return <p className="wrap" style={{ color: "var(--ink-soft)" }}>Loading…</p>;
   }
 
-  const loopLabel =
-    loopMeasure !== null
-      ? timeline.measures[loopMeasure]?.label || String(loopMeasure + 1)
-      : null;
-
   return (
     <div className="play-view">
       <div className="play-sheet">
@@ -304,7 +272,6 @@ function Player({ jobId }: { jobId: string }) {
           pdfData={pdfData}
           measures={timeline.measures}
           playingIndex={playingMeasure}
-          loopIndex={loopMeasure}
           lockedFromIndex={user ? null : FREE_MEASURES}
           onMeasureClick={handleMeasureClick}
         />
@@ -344,13 +311,8 @@ function Player({ jobId }: { jobId: string }) {
           Key names
         </label>
 
-        {loopLabel ? (
-          <span className="play-status">
-            Repeating measure {loopLabel}
-            <button className="play-clear" onClick={stopLoop}>stop</button>
-          </span>
-        ) : user ? (
-          <span className="play-status subtle">Click a measure to repeat it</span>
+        {user ? (
+          <span className="play-status subtle">Click a measure to play from there</span>
         ) : (
           <span className="play-status subtle">
             First {FREE_MEASURES} measures free

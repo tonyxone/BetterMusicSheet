@@ -290,9 +290,7 @@ details.options[open] summary::before { content: "▾ "; }
   border: 1px solid transparent; transition: background 0.12s, border-color 0.12s;
 }
 .measure-box:hover { background: rgba(217, 164, 65, 0.16); border-color: var(--gold); }
-/* Two different things: the measure set to repeat (steady outline, survives a
-   pause) and the one sounding right now (filled, follows the playback clock). */
-.measure-box.looping { border-color: var(--accent); border-style: dashed; }
+/* The measure sounding right now, following the playback clock. */
 .measure-box.playing {
   background: rgba(168, 60, 52, 0.20); border-color: var(--accent); border-style: solid;
 }

@@ -7,20 +7,19 @@
 //   - The keyboard highlight is derived each animation frame from that same
 //     audio clock, so it can never drift away from what you're hearing.
 //
-// Playback always runs over a beat window. The whole piece is just the widest
-// window; looping one measure is a narrow one with loop turned on.
+// Playback runs over a beat window: from somewhere in the piece to somewhere
+// later. The whole piece is the widest window; the signed-out preview is a
+// narrow one.
 
 import { GRACE_SECONDS, SynthEngine } from "./synth";
 import type { Timeline, TimelineNote } from "@/lib/timeline";
 
 const LOOKAHEAD_SECONDS = 0.1;
 const SCHEDULER_INTERVAL_MS = 25;
-/** Silence between repeats, so a looped measure doesn't run into itself. */
-const LOOP_GAP_BEATS = 0.25;
 
 type ScheduledNote = {
   note: TimelineNote;
-  /** Seconds from the start of a cycle. */
+  /** Seconds from the start of the window. */
   start: number;
   end: number;
 };
@@ -28,8 +27,6 @@ type ScheduledNote = {
 export type PlayOptions = {
   /** Where to start; defaults to wherever playback was paused. */
   fromBeat?: number;
-  /** Beat window to repeat. Omit to play through to the end once. */
-  loop?: { startBeat: number; endBeat: number };
   /** Stop here instead of at the end of the piece. Used for the signed-out
    * preview: bounding the window means notes past the limit are never
    * scheduled, rather than being cut off once they are already sounding. */
@@ -53,16 +50,13 @@ export class Playback {
   private timer: ReturnType<typeof setInterval> | null = null;
   private raf: number | null = null;
 
-  /** AudioContext time at which the current window's first cycle begins. */
+  /** AudioContext time at which the current window begins. */
   private originTime = 0;
   private windowStart = 0;
   private windowEnd = 0;
-  private cycleSeconds = 0;
-  private looping = false;
   private secondsPerBeat = 0.5;
 
-  /** Scheduling cursor: which cycle, and how far into `schedule`. */
-  private cursorCycle = 0;
+  /** How far into `schedule` the scheduler has got. */
   private cursorIndex = 0;
 
   private pausedBeat = 0;
@@ -81,18 +75,11 @@ export class Playback {
     return this.playing;
   }
 
-  get isLooping() {
-    return this.looping;
-  }
-
   /** Beat position right now, or where playback was paused. */
   get currentBeat() {
     if (!this.playing) return this.pausedBeat;
     const elapsed = this.ctx.currentTime - this.originTime;
     if (elapsed < 0) return this.windowStart;
-    if (this.looping && this.cycleSeconds > 0) {
-      return this.windowStart + (elapsed % this.cycleSeconds) / this.secondsPerBeat;
-    }
     return this.windowStart + elapsed / this.secondsPerBeat;
   }
 
@@ -101,22 +88,17 @@ export class Playback {
 
     const bpm = this.timeline.tempo_bpm_default || 96;
     this.secondsPerBeat = 60 / bpm / (speed || 1);
-    this.looping = !!opts.loop;
 
-    if (opts.loop) {
-      this.windowStart = opts.loop.startBeat;
-      this.windowEnd = opts.loop.endBeat;
-    } else {
-      const end = opts.untilBeat ?? this.timeline.total_beats;
-      const from = opts.fromBeat ?? this.pausedBeat;
-      // Resuming from at or past the end restarts, so a paused preview that
-      // already ran to its limit plays again rather than doing nothing.
-      this.windowStart = from >= end ? 0 : from;
-      this.windowEnd = end;
-    }
+    const end = opts.untilBeat ?? this.timeline.total_beats;
+    // No explicit start means "carry on from the pause", which is what makes
+    // resume continue mid-measure instead of restarting one.
+    const from = opts.fromBeat ?? this.pausedBeat;
+    // Resuming from at or past the end restarts, so a finished piece (or a
+    // preview that ran to its limit) plays again rather than doing nothing.
+    this.windowStart = from >= end ? 0 : from;
+    this.windowEnd = end;
 
     const spanBeats = Math.max(0.001, this.windowEnd - this.windowStart);
-    this.cycleSeconds = (spanBeats + (this.looping ? LOOP_GAP_BEATS : 0)) * this.secondsPerBeat;
 
     this.schedule = this.timeline.notes
       .filter((n) => n.start_beat >= this.windowStart - 1e-9 && n.start_beat < this.windowEnd - 1e-9)
@@ -132,7 +114,6 @@ export class Playback {
 
     // A small offset so the first notes aren't scheduled in the past.
     this.originTime = this.ctx.currentTime + 0.06;
-    this.cursorCycle = 0;
     this.cursorIndex = 0;
     this.playing = true;
 
@@ -143,6 +124,7 @@ export class Playback {
 
   pause() {
     if (!this.playing) return;
+    // Freeze the position before tearing down, so the next play resumes here.
     this.pausedBeat = this.currentBeat;
     this.stopInternal();
     this.emitHighlight([]);
@@ -179,22 +161,13 @@ export class Playback {
     if (!this.playing) return;
     const horizon = this.ctx.currentTime - this.originTime + LOOKAHEAD_SECONDS;
 
-    // Walk forward through cycles; without looping there is only cycle 0.
-    for (;;) {
-      if (this.cursorIndex >= this.schedule.length) {
-        if (!this.looping) break;
-        this.cursorCycle++;
-        this.cursorIndex = 0;
-        continue;
-      }
+    while (this.cursorIndex < this.schedule.length && this.schedule[this.cursorIndex].start <= horizon) {
       const s = this.schedule[this.cursorIndex];
-      const at = this.cursorCycle * this.cycleSeconds + s.start;
-      if (at > horizon) break;
-      this.synth.noteOn(s.note.midi, this.originTime + at, this.originTime + this.cursorCycle * this.cycleSeconds + s.end);
+      this.synth.noteOn(s.note.midi, this.originTime + s.start, this.originTime + s.end);
       this.cursorIndex++;
     }
 
-    if (!this.looping && this.cursorIndex >= this.schedule.length) {
+    if (this.cursorIndex >= this.schedule.length) {
       const last = this.schedule.length ? this.schedule[this.schedule.length - 1].end : 0;
       if (this.ctx.currentTime - this.originTime > last + 0.2) {
         this.stop();
@@ -216,8 +189,7 @@ export class Playback {
   private startHighlightLoop() {
     const frame = () => {
       if (!this.playing) return;
-      const elapsed = Math.max(0, this.ctx.currentTime - this.originTime);
-      const pos = this.looping && this.cycleSeconds > 0 ? elapsed % this.cycleSeconds : elapsed;
+      const pos = Math.max(0, this.ctx.currentTime - this.originTime);
 
       const active: number[] = [];
       let measure: number | null = null;
@@ -234,8 +206,8 @@ export class Playback {
       active.sort((a, b) => a - b);
       this.emitHighlight(active);
 
-      // Between notes (a rest, or the gap between loop repeats) keep showing
-      // the measure the playhead is in rather than flickering to nothing.
+      // Between notes (a rest, say) keep showing the measure the playhead is
+      // in rather than flickering to nothing.
       if (measure === null) {
         const beat = this.windowStart + pos / this.secondsPerBeat;
         const m = this.timeline.measures.find(

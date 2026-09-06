@@ -41,7 +41,6 @@ export function SheetCanvas({
   pdfData,
   measures,
   playingIndex,
-  loopIndex,
   lockedFromIndex,
   onMeasureClick,
 }: {
@@ -49,8 +48,6 @@ export function SheetCanvas({
   measures: TimelineMeasure[];
   /** Measure sounding right now - follows the playback clock. */
   playingIndex: number | null;
-  /** Measure set to repeat, if any. Outlined even while paused. */
-  loopIndex: number | null;
   /** First measure a signed-out visitor can't play, or null when unrestricted.
    * Shown dimmed so the limit is visible before it's hit. */
   lockedFromIndex: number | null;
@@ -218,7 +215,6 @@ export function SheetCanvas({
                   className={
                     "measure-box" +
                     (lockedFromIndex !== null && m.index >= lockedFromIndex ? " locked" : "") +
-                    (m.index === loopIndex ? " looping" : "") +
                     (m.index === playingIndex ? " playing" : "")
                   }
                   data-measure={m.index}
