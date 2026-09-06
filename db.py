@@ -118,17 +118,6 @@ if IS_PRODUCTION:
         items = _clean(resp["Items"])
         return items[0] if items else None
 
-    def count_active_jobs(user_id):
-        """Jobs that count toward the per-user quota: everything except failed."""
-        resp = _annotation_job_table.query(
-            IndexName="user_id-index",
-            KeyConditionExpression=Key("user_id").eq(user_id),
-            FilterExpression="#s <> :failed",
-            ExpressionAttributeNames={"#s": "status"},
-            ExpressionAttributeValues={":failed": "failed"},
-        )
-        return len(resp["Items"])
-
     def list_annotation_jobs(user_id):
         resp = _annotation_job_table.query(
             IndexName="user_id-index",
@@ -208,14 +197,6 @@ else:
                 if job["user_id"] == user_id and job["status"] in ("queued", "processing"):
                     return dict(job)
         return None
-
-    def count_active_jobs(user_id):
-        """Jobs that count toward the per-user quota: everything except failed."""
-        with _lock:
-            return sum(
-                1 for j in _annotation_jobs.values()
-                if j["user_id"] == user_id and j["status"] != "failed"
-            )
 
     def list_annotation_jobs(user_id):
         with _lock:

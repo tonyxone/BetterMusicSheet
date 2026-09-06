@@ -29,7 +29,7 @@ Endpoints:
     GET    /api/health                     liveness check (no auth - the ALB health check can't send a token)
     POST   /api/auth/token                 exchange a Cognito ID token for this backend's own token
     GET    /api/me                         the signed-in user's profile, or 401 for a guest
-    POST   /api/sheets                     upload a PDF or image, kick off annotation (max 3 active jobs per user)
+    POST   /api/sheets                     upload a PDF or image, kick off annotation (one at a time per user)
     GET    /api/sheets                     this user's job history, newest first
     GET    /api/sheets/{job_id}            poll one job's status
     GET    /api/sheets/{job_id}/download   the annotated PDF, streamed through this backend either way
@@ -91,7 +91,6 @@ JOBS_DIR.mkdir(exist_ok=True)
 STATIC_DIR = Path(__file__).parent / "static"
 
 ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
-MAX_ACTIVE_JOBS_PER_USER = 3
 
 app = FastAPI(title="Music-Sheet Annotator API")
 
@@ -236,9 +235,6 @@ async def submit_sheet(
 
     if db.get_in_progress_job(user_id):
         raise HTTPException(409, "You already have a music sheet processing. Please wait for it to finish before uploading another.")
-
-    if db.count_active_jobs(user_id) >= MAX_ACTIVE_JOBS_PER_USER:
-        raise HTTPException(403, f"limited to {MAX_ACTIVE_JOBS_PER_USER} active uploads at a time")
 
     music_sheet_id = uuid.uuid4().hex
     job_id = uuid.uuid4().hex
