@@ -162,37 +162,38 @@ export function SheetCanvas({
     }
   }, [playingIndex]);
 
-  /** Where to draw a note's marker. Uses the notehead box the backend
-   * matched when it could; otherwise falls back to a position interpolated
-   * across the measure, on the half of the staff that hand plays. The
-   * fallback is approximate on purpose - engraving isn't linear in time -
-   * but it keeps the marker moving instead of blinking out for the notes the
-   * two OMR sources disagreed about. */
-  const noteMarkers = useMemo(() => {
+  /** A single vertical line at whatever is sounding, spanning the staves of
+   * that measure. It steps from onset to onset rather than sweeping: the x
+   * comes from the noteheads themselves, so it lands on the notes instead of
+   * drifting between them at a constant rate.
+   *
+   * For notes the backend couldn't match to a notehead, the position is
+   * interpolated across the measure - approximate, but it keeps the line
+   * moving instead of dropping out. */
+  const playhead = useMemo(() => {
+    if (!activeNotes.length) return null;
     const byMeasure = new Map(measures.map((m) => [m.index, m]));
-    const out: { key: string; page: number; x0: number; y0: number; x1: number; y1: number; role: number }[] = [];
+
+    const xs: number[] = [];
+    let measure: TimelineMeasure | undefined;
     for (const n of activeNotes) {
-      if (n.bbox_pt) {
-        const m = byMeasure.get(n.measure_index);
-        if (!m?.page) continue;
-        const [x0, y0, x1, y1] = n.bbox_pt;
-        out.push({ key: `${n.midi}-${n.start_beat}-${n.role}`, page: m.page, x0, y0, x1, y1, role: n.role });
-        continue;
-      }
       const m = byMeasure.get(n.measure_index);
-      if (!m?.bbox_pt || !m.page || m.length_beats <= 0) continue;
-      const [mx0, my0, mx1, my1] = m.bbox_pt;
-      const frac = Math.min(0.96, Math.max(0, (n.start_beat - m.start_beat) / m.length_beats));
-      const cx = mx0 + frac * (mx1 - mx0);
-      const half = (my1 - my0) / 2;
-      const top = n.role === 1 ? my0 + half : my0;
-      out.push({
-        key: `${n.midi}-${n.start_beat}-${n.role}`,
-        page: m.page, x0: cx - 5, y0: top + half * 0.15, x1: cx + 5, y1: top + half * 0.85,
-        role: n.role,
-      });
+      if (!m?.bbox_pt || m.page === null) continue;
+      measure = measure ?? m;
+      if (n.bbox_pt) {
+        xs.push((n.bbox_pt[0] + n.bbox_pt[2]) / 2);
+      } else if (m.length_beats > 0) {
+        const frac = Math.min(0.96, Math.max(0, (n.start_beat - m.start_beat) / m.length_beats));
+        xs.push(m.bbox_pt[0] + frac * (m.bbox_pt[2] - m.bbox_pt[0]));
+      }
     }
-    return out;
+    if (!measure?.bbox_pt || measure.page === null || !xs.length) return null;
+
+    // Notes of one chord sit at slightly different x when engraved offset to
+    // avoid collisions; the mean keeps the line centred on the group.
+    const x = xs.reduce((a, b) => a + b, 0) / xs.length;
+    const [, y0, , y1] = measure.bbox_pt;
+    return { page: measure.page, x, y0, y1 };
   }, [activeNotes, measures]);
 
   const handleClick = useCallback(
@@ -263,20 +264,16 @@ export function SheetCanvas({
                 />
               );
             })}
-          {noteMarkers
-            .filter((n) => n.page === page.pageNumber)
-            .map((n) => (
-              <span
-                key={n.key}
-                className={`note-marker${n.role === 1 ? " left" : " right"}`}
-                style={{
-                  left: `${(n.x0 / page.widthPt) * 100}%`,
-                  top: `${(n.y0 / page.heightPt) * 100}%`,
-                  width: `${((n.x1 - n.x0) / page.widthPt) * 100}%`,
-                  height: `${((n.y1 - n.y0) / page.heightPt) * 100}%`,
-                }}
-              />
-            ))}
+          {playhead && playhead.page === page.pageNumber && (
+            <span
+              className="playhead"
+              style={{
+                left: `${(playhead.x / page.widthPt) * 100}%`,
+                top: `${(playhead.y0 / page.heightPt) * 100}%`,
+                height: `${((playhead.y1 - playhead.y0) / page.heightPt) * 100}%`,
+              }}
+            />
+          )}
         </div>
       ))}
     </div>

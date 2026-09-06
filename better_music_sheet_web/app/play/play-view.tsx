@@ -99,6 +99,16 @@ function SheetPicker({ onPick }: { onPick: (jobId: string) => void }) {
   );
 }
 
+/** What is sounding at a beat, straight from the timeline. Mirrors
+ * Playback.notesAt for the case where nothing has been played yet and so no
+ * audio graph exists to ask - scrubbing has to work before the first play. */
+function notesAtBeat(timeline: Timeline, beat: number) {
+  return timeline.notes.filter((n) => {
+    const len = n.is_grace || n.duration_beats <= 0 ? 0.25 : n.duration_beats;
+    return beat >= n.start_beat - 1e-9 && beat < n.start_beat + len;
+  });
+}
+
 function measureIndexAt(timeline: Timeline, beat: number) {
   const m = timeline.measures.find(
     (mm) => beat >= mm.start_beat && beat < mm.start_beat + mm.length_beats,
@@ -295,14 +305,22 @@ function Player({ jobId }: { jobId: string }) {
       if (lockedFrom !== null && target >= freeEndBeat) {
         target = Math.max(0, freeEndBeat - 0.001);
         setBeat(target);
-        playbackRef.current?.seek(target);
+        if (playbackRef.current) playbackRef.current.seek(target);
+        else {
+          setActiveNotes(notesAtBeat(timeline, target));
+          setPlayingMeasure(measureIndexAt(timeline, target));
+        }
         openSignIn();
         return;
       }
       setBeat(target);
       const pb = playbackRef.current;
-      if (pb) pb.seek(target);
-      else setPlayingMeasure(measureIndexAt(timeline, target));
+      if (pb) {
+        pb.seek(target);
+      } else {
+        setActiveNotes(notesAtBeat(timeline, target));
+        setPlayingMeasure(measureIndexAt(timeline, target));
+      }
     },
     [timeline, lockedFrom, freeEndBeat, openSignIn],
   );
