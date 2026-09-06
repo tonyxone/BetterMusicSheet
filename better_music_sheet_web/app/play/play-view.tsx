@@ -87,8 +87,10 @@ function Player({ jobId }: { jobId: string }) {
   const [error, setError] = useState<string | null>(null);
 
   const [playing, setPlaying] = useState(false);
-  const [speed, setSpeed] = useState(1);
-  const [showKeyNames, setShowKeyNames] = useState(false);
+  // Defaults aimed at someone learning the piece rather than auditioning it:
+  // very slow, with every key labelled.
+  const [speed, setSpeed] = useState(0.1);
+  const [showKeyNames, setShowKeyNames] = useState(true);
   const [activeMidis, setActiveMidis] = useState<number[]>([]);
   /** The measure being repeated, if any. */
   const [loopMeasure, setLoopMeasure] = useState<number | null>(null);
@@ -330,7 +332,7 @@ function Player({ jobId }: { jobId: string }) {
           Speed
           <input
             type="range"
-            min={0.5}
+            min={0.1}
             max={2}
             step={0.1}
             value={speed}
