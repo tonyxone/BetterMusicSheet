@@ -39,6 +39,49 @@ function PlayIcon() {
   );
 }
 
+/** A keyboard key with a letter on it - the thing the toggle turns on. */
+function KeyNamesIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+      <rect
+        x="4.5" y="4.5" width="15" height="15" rx="3.5"
+        fill="none" stroke="currentColor" strokeWidth="1.6"
+      />
+      <text
+        x="12" y="16.2" textAnchor="middle"
+        fontSize="10.5" fontWeight="700" fill="currentColor"
+        fontFamily="inherit"
+      >
+        A
+      </text>
+    </svg>
+  );
+}
+
+function SpeakerOnIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+      <path d="M4 9.5h3.1L12 5.6v12.8L7.1 14.5H4z" fill="currentColor" />
+      <path
+        d="M15.4 9.4a3.7 3.7 0 0 1 0 5.2M17.9 6.9a7.2 7.2 0 0 1 0 10.2"
+        fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function SpeakerOffIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+      <path d="M4 9.5h3.1L12 5.6v12.8L7.1 14.5H4z" fill="currentColor" />
+      <path
+        d="M15.6 9.8l4.6 4.6M20.2 9.8l-4.6 4.6"
+        fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 function PauseIcon() {
   return (
     <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true">
@@ -411,23 +454,29 @@ function Player({ jobId }: { jobId: string }) {
           <span>{speed.toFixed(1)}x</span>
         </label>
 
-        <label className="play-toggle">
-          <input
-            type="checkbox"
-            checked={showKeyNames}
-            onChange={(e) => setShowKeyNames(e.target.checked)}
-          />
-          Key names
-        </label>
+        <button
+          type="button"
+          className={`icon-toggle${showKeyNames ? " on" : ""}`}
+          aria-pressed={showKeyNames}
+          title={showKeyNames ? "Hide key names" : "Show key names"}
+          aria-label={showKeyNames ? "Hide key names" : "Show key names"}
+          onClick={() => setShowKeyNames((v) => !v)}
+        >
+          <KeyNamesIcon />
+        </button>
 
-        <label className="play-toggle">
-          <input
-            type="checkbox"
-            checked={soundOn}
-            onChange={(e) => setSoundOn(e.target.checked)}
-          />
-          Sound
-        </label>
+        <button
+          type="button"
+          className={`icon-toggle${soundOn ? " on" : ""}`}
+          aria-pressed={soundOn}
+          title={soundOn ? "Mute" : "Unmute"}
+          aria-label={soundOn ? "Mute" : "Unmute"}
+          onClick={() => setSoundOn((v) => !v)}
+        >
+          {/* The glyph itself carries the state, so it stays readable even
+              where the pressed styling is subtle. */}
+          {soundOn ? <SpeakerOnIcon /> : <SpeakerOffIcon />}
+        </button>
 
 
       </div>
