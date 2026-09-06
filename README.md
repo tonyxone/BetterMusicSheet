@@ -10,6 +10,11 @@ left untouched; only the labels are overlaid.
 input.pdf  ──►  input (annotated).pdf
 ```
 
+The web UI adds a **Play** page on top of that: the annotated sheet above an
+88-key keyboard, playing the piece back with the keys lit up as it goes -
+blue for the right hand, green for the left - and a dashed playhead stepping
+through the notes on the sheet.
+
 ![Example: annotated excerpt of J.S. Bach / Christian Petzold's "Menuet in G", BWV Anh. 114](docs/example-annotated.png)
 
 *Excerpt from "Menuet in G" (BWV Anh. 114), public-domain edition from the
@@ -44,7 +49,8 @@ PDF input
    │
    │  (1) Audiveris OMR  —  Audiveris.exe -batch -export
    ▼
-book.mxl   MusicXML  (kept for reference; not used for the labels)
+book.mxl   MusicXML  (not used for the labels; it is the only source of
+           note DURATIONS, which the .omr never decodes - see the Play page)
 book.omr   Audiveris's own recognition data — a zip of per-page XML containing,
            for every recognized notehead: the EXACT pixel bounding box, the staff
            it belongs to, and Audiveris's own diatonic pitch
@@ -59,6 +65,13 @@ per-note (x, y) positions in the PDF's own pixel space, plus the label text
    ▼
 output.pdf
 ```
+
+A fourth, optional stage runs alongside it for the Play page: `timeline.py`
+joins the rhythm read out of `book.mxl` (`musicxml.py`) with the notehead and
+barline geometry already read out of `book.omr`, producing a JSON file of
+what sounds when and where it sits on the page. It is best-effort — if it
+fails, the annotated PDF is still produced and only playback is unavailable.
+
 
 ---
 
@@ -162,6 +175,27 @@ This starts the server on `http://localhost:8000` (equivalent to
 which also lets you change the host/port). Open `http://localhost:8000` in a
 browser — the server serves the UI itself at `/` for local use.
 
+The React frontend under `better_music_sheet_web/` is the deployed UI; run it
+with `npm run dev` alongside the API and open `http://localhost:3000`.
+
+### The Play page
+
+`/play` shows a finished sheet above an 88-key keyboard and plays it back.
+
+- Keys light while they sound, coloured by hand — right blue, left green — and
+  a dashed playhead steps from note to note on the sheet, which scrolls to
+  follow along.
+- Click any measure to play from there; drag the scrub bar to move anywhere.
+  Both work while paused, so you can read a passage without hearing it.
+- Speed runs from 0.1x to 2x. Key names and sound each toggle off.
+- Signing in is optional for annotating, but playback past the first two lines
+  needs an account. Set `COGNITO_USER_POOL_ID` and `COGNITO_APP_CLIENT_ID` (see
+  `.env.example`) to sign in locally; without them everything else still works.
+
+There is no tempo in OMR output — Audiveris does not emit one — so playback
+uses a fixed default BPM and the speed control scales it. It will not match a
+printed `♩ = 72`.
+
 ---
 
 ## Running it with Docker
@@ -201,9 +235,17 @@ annotate.py        Per-notehead labeling (omr pitch x actual clef x key sig)
 audiveris_heads.py Parse <head> positions, pitches, chord relations, key
                    signature, accidentals and staff lines out of the .omr zip
 labels.py          Diatonic pitch + accidental -> label text (unicode/ascii, octave)
+musicxml.py        Note durations/onsets out of the .mxl (stdlib only, no music21)
+timeline.py        Joins that rhythm with the .omr's geometry -> playback JSON
 omr_notes.py       (obsolete) old music21/.mxl parsing — kept for reference only
-server.py          REST API (upload a PDF, poll job status, download the result)
+auth.py            Optional Cognito sign-in; anonymous guest ids otherwise
+db.py / storage.py Job state and files (DynamoDB/S3 in prod, local otherwise)
+server.py          REST API (upload a PDF, poll job status, download the result,
+                   fetch the playback timeline)
 static/            Web UI (index.html + config.js) served by server.py, or deployable standalone
+better_music_sheet_web/
+                   The deployed React UI. app/play/ is the Play page: the
+                   three.js keyboard, the pdf.js sheet, and the audio scheduler
 tools/Audiveris/   Bundled Audiveris 5.11 OMR engine (not committed — see Setup)
 output/            Intermediate .mxl / .omr files and logs
 server_jobs/       Web UI's uploaded/output files and job state (not committed, not auto-cleaned)
@@ -224,6 +266,17 @@ server_jobs/       Web UI's uploaded/output files and job state (not committed, 
   de-duplication); single notes and two-note dyads are always labeled.
 - The pipeline assumes a standard two-part piano layout (two staves per system:
   right hand above, left hand below), regardless of which clefs the parts use.
+- Playback timing is only as good as the recognition behind it. Audiveris also
+  misreads time signatures on occasion; measure length is taken as the larger of
+  the written signature and what the measure actually holds, which recovers the
+  common cases but not all of them.
+- On the sheet, the playhead lands exactly on the notehead for roughly two
+  thirds of notes. For the rest, Audiveris's own MusicXML and .omr outputs
+  disagree about the measure — usually by a single chord — and rather than
+  guess an alignment (which would drift for every note after it), the position
+  is interpolated across the measure instead.
+- The timeline is written when a sheet is annotated, so anything processed
+  before the Play page existed has none; re-upload it to get playback.
 
 ---
 
