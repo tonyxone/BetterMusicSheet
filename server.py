@@ -60,6 +60,7 @@ import queue
 import shutil
 import threading
 import time
+import traceback
 import unicodedata
 import uuid
 from pathlib import Path
@@ -69,7 +70,7 @@ from urllib.parse import quote
 import pymupdf
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -94,8 +95,31 @@ MAX_ACTIVE_JOBS_PER_USER = 3
 
 app = FastAPI(title="Music-Sheet Annotator API")
 
+@app.middleware("http")
+async def json_errors(request, call_next):
+    """Turn an unhandled exception into a JSON 500 the browser can actually read.
+
+    Starlette's own handler for an uncaught error returns a plain-text 500 from
+    *outside* the CORS middleware, so it carries no Access-Control-Allow-Origin
+    header. The browser then refuses to expose the response and reports a bare
+    "Failed to fetch" - which says nothing about what broke and looks like the
+    server is unreachable when it isn't. Registered before CORS below so it
+    sits inside it, and its response picks the headers up on the way out.
+    """
+    try:
+        return await call_next(request)
+    except Exception:
+        traceback.print_exc()
+        return JSONResponse(
+            {"detail": "Internal server error - see the server log for the traceback."},
+            status_code=500,
+        )
+
+
 # comma-separated list of allowed UI origins, e.g. "https://bettermusicsheet.com";
-# defaults to "*" (any origin) which is fine for local dev, not for production
+# defaults to "*" (any origin) which is fine for local dev, not for production.
+# Added last, so it is the outermost middleware and can attach headers to
+# whatever the handler above produces.
 _allowed = os.environ.get("ALLOWED_ORIGINS", "*")
 app.add_middleware(
     CORSMiddleware,

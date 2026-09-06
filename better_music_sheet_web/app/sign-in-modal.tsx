@@ -83,6 +83,14 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
           return "That code has expired - request a new one.";
         case "LimitExceededException":
           return "Too many attempts. Wait a few minutes and try again.";
+        case "InvalidPasswordException":
+          return "That password doesn't meet the requirements below.";
+        case "UserNotConfirmedException":
+          return "This account still needs the emailed confirmation code.";
+        case "NetworkError":
+        case "NotConfigured":
+          // Already written for a human by cognito.ts.
+          return err.message;
         default:
           return err.message;
       }

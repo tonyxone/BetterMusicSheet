@@ -37,14 +37,32 @@ export class CognitoError extends Error {
 }
 
 async function call(target: string, body: Record<string, unknown>) {
-  const res = await fetch(`https://cognito-idp.${REGION}.amazonaws.com/`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-amz-json-1.1",
-      "X-Amz-Target": `AWSCognitoIdentityProviderService.${target}`,
-    },
-    body: JSON.stringify({ ClientId: CLIENT_ID, ...body }),
-  });
+  if (!isCognitoConfigured) {
+    throw new CognitoError(
+      "NotConfigured",
+      "Sign-in isn't configured for this build (NEXT_PUBLIC_COGNITO_REGION / _CLIENT_ID).",
+    );
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(`https://cognito-idp.${REGION}.amazonaws.com/`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-amz-json-1.1",
+        "X-Amz-Target": `AWSCognitoIdentityProviderService.${target}`,
+      },
+      body: JSON.stringify({ ClientId: CLIENT_ID, ...body }),
+    });
+  } catch {
+    // fetch only rejects for transport-level failures, and the browser hides
+    // the reason - all we get is "Failed to fetch", which tells the user
+    // nothing. Name what we were trying to reach instead.
+    throw new CognitoError(
+      "NetworkError",
+      "Couldn't reach the sign-in service. Check your internet connection and try again.",
+    );
+  }
 
   const text = await res.text();
   const data = text ? JSON.parse(text) : {};

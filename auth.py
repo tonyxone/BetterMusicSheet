@@ -21,6 +21,7 @@ import json
 import os
 import re
 import time
+import urllib.error
 import urllib.request
 
 from fastapi import Header, HTTPException
@@ -33,6 +34,11 @@ from config import IS_PRODUCTION
 # request, it's shape-checked here rather than trusted verbatim.
 _UUID_RE = re.compile(r"^[0-9a-fA-F-]{1,64}$")
 
+# Stand-in for "no user pool configured". Kept explicit so the token exchange
+# can say so, instead of building a nonsense issuer URL and failing later with
+# an HTTP error nobody can act on.
+UNCONFIGURED = "local-dev-unused"
+
 COGNITO_REGION = os.environ.get("COGNITO_REGION", os.environ.get("AWS_REGION", "us-west-1"))
 if IS_PRODUCTION:
     COGNITO_USER_POOL_ID = os.environ["COGNITO_USER_POOL_ID"]
@@ -44,8 +50,8 @@ else:
     # called without a real user pool configured. Set the same env vars
     # locally (see better_music_sheet_web/.env.local.example) to exercise
     # the real sign-in flow against a dev user pool.
-    COGNITO_USER_POOL_ID = os.environ.get("COGNITO_USER_POOL_ID", "local-dev-unused")
-    COGNITO_APP_CLIENT_ID = os.environ.get("COGNITO_APP_CLIENT_ID", "local-dev-unused")
+    COGNITO_USER_POOL_ID = os.environ.get("COGNITO_USER_POOL_ID", UNCONFIGURED)
+    COGNITO_APP_CLIENT_ID = os.environ.get("COGNITO_APP_CLIENT_ID", UNCONFIGURED)
     BACKEND_JWT_SECRET = os.environ.get("BACKEND_JWT_SECRET", "local-dev-secret-not-for-production")
 COGNITO_ISSUER = f"https://cognito-idp.{COGNITO_REGION}.amazonaws.com/{COGNITO_USER_POOL_ID}"
 
@@ -65,6 +71,11 @@ def _get_jwks():
     return _jwks_cache
 
 
+def is_cognito_configured():
+    """Whether this server can verify Cognito tokens at all."""
+    return COGNITO_USER_POOL_ID != UNCONFIGURED and COGNITO_APP_CLIENT_ID != UNCONFIGURED
+
+
 def verify_cognito_id_token(token):
     """Verify a Cognito ID token's signature/claims and return
     (sub, email, display_name). Raises HTTPException(401) on anything
@@ -75,9 +86,26 @@ def verify_cognito_id_token(token):
     the user and the `profile` scope requested, neither of which is
     guaranteed, so it falls back to the email's local part and finally to
     the sub."""
+    if not is_cognito_configured():
+        # Without this the issuer URL is built from a placeholder, the JWKS
+        # fetch 400s, and an unhandled HTTPError becomes an opaque 500 - which
+        # reaches the browser as a bare "Failed to fetch" with no CORS headers.
+        raise HTTPException(
+            503,
+            "Sign-in isn't configured on this server: set COGNITO_USER_POOL_ID "
+            "and COGNITO_APP_CLIENT_ID (see .env.example).",
+        )
     try:
         header = jwt.get_unverified_header(token)
-        key = next((k for k in _get_jwks() if k["kid"] == header["kid"]), None)
+        try:
+            keys = _get_jwks()
+        except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
+            # Network trouble, or a pool id that doesn't resolve. Not the
+            # caller's fault, and not a bad token - say so.
+            raise HTTPException(
+                502, f"Couldn't reach Cognito to verify the sign-in ({e}).",
+            )
+        key = next((k for k in keys if k["kid"] == header["kid"]), None)
         if key is None:
             raise JWTError("no matching JWKS key")
         claims = jwt.decode(
