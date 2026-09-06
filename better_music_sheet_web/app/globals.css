@@ -341,9 +341,11 @@ button.history-row { width: 100%; font-family: inherit; cursor: pointer; text-al
    the glyph. */
 .icon-link {
   display: inline-flex; align-items: center; justify-content: center;
-  min-width: 44px; min-height: 44px; padding: 6px;
+  /* 45px matches the pill buttons beside it, so the row lines up even though
+     nothing is drawn around this one. */
+  min-width: 52px; min-height: 45px; padding: 4px 6px;
   background: none; border: none; border-radius: 12px;
-  color: var(--ink-soft); cursor: pointer;
+  color: var(--ink); cursor: pointer;
   transition: color 0.15s ease, background 0.15s ease;
 }
 .icon-link:hover { color: var(--accent); background: var(--paper-deep); }

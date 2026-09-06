@@ -24,7 +24,7 @@ export function Header() {
           title="Play with the keyboard"
           aria-label="Play with the keyboard"
         >
-          <KeyboardIcon size={32} />
+          <KeyboardIcon size={44} />
         </Link>
         <Link href="/history" className="nav-btn ghost">
           History

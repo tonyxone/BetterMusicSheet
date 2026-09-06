@@ -106,7 +106,7 @@ export function JobStatus() {
             title="Play with the keyboard"
             aria-label="Play with the keyboard"
           >
-            <KeyboardIcon size={30} />
+            <KeyboardIcon size={44} />
           </Link>
           <DownloadButton jobId={jobId} sheetName={job.sheet_name} />
         </div>
