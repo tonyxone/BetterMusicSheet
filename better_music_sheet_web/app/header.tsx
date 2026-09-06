@@ -16,20 +16,13 @@ export function Header() {
         <Logo />
       </Link>
       <nav className="flex items-center gap-3">
-        {/* Playback is for signed-in accounts. Open the modal in place rather
-            than sending a signed-out visitor to a page that would only ask
-            them to sign in anyway (/play gates itself too, for direct hits). */}
+        {/* Open to everyone: signed-out visitors get the first few measures,
+            and are asked to sign in only when they reach past them. */}
         <Link
           href="/play"
           className="icon-link"
           title="Play with the keyboard"
           aria-label="Play with the keyboard"
-          onClick={(e) => {
-            if (!loading && !user) {
-              e.preventDefault();
-              openSignIn();
-            }
-          }}
         >
           <KeyboardIcon size={32} />
         </Link>

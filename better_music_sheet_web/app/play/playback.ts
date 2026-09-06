@@ -30,6 +30,10 @@ export type PlayOptions = {
   fromBeat?: number;
   /** Beat window to repeat. Omit to play through to the end once. */
   loop?: { startBeat: number; endBeat: number };
+  /** Stop here instead of at the end of the piece. Used for the signed-out
+   * preview: bounding the window means notes past the limit are never
+   * scheduled, rather than being cut off once they are already sounding. */
+  untilBeat?: number;
 };
 
 export type PlaybackCallbacks = {
@@ -103,9 +107,12 @@ export class Playback {
       this.windowStart = opts.loop.startBeat;
       this.windowEnd = opts.loop.endBeat;
     } else {
+      const end = opts.untilBeat ?? this.timeline.total_beats;
       const from = opts.fromBeat ?? this.pausedBeat;
-      this.windowStart = from >= this.timeline.total_beats ? 0 : from;
-      this.windowEnd = this.timeline.total_beats;
+      // Resuming from at or past the end restarts, so a paused preview that
+      // already ran to its limit plays again rather than doing nothing.
+      this.windowStart = from >= end ? 0 : from;
+      this.windowEnd = end;
     }
 
     const spanBeats = Math.max(0.001, this.windowEnd - this.windowStart);

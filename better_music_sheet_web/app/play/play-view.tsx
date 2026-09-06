@@ -11,10 +11,9 @@
 
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { clientApiFetch } from "@/lib/client-api";
-import { isAuthConfigured } from "@/lib/auth";
 import { useAuth } from "../auth-context";
 import type { AnnotationJob } from "@/lib/api";
 import type { Timeline } from "@/lib/timeline";
@@ -32,46 +31,14 @@ const SheetCanvas = dynamic(() => import("./sheet-canvas"), {
   loading: () => <p className="play-hint">Loading the sheet…</p>,
 });
 
+/** How many measures a signed-out visitor can play before being asked to
+ * sign in. They get the real page and a real preview, not a wall. */
+const FREE_MEASURES = 3;
+
 export function PlayView() {
   const router = useRouter();
   const jobId = useSearchParams().get("job");
-  const { user, loading } = useAuth();
-
-  // Gate the whole route, not just the links into it - otherwise a bookmark,
-  // a shared URL or the back button walks straight past the check.
-  if (loading) return <p className="wrap" style={{ color: "var(--ink-soft)" }}>Loading…</p>;
-  if (!user) return <SignInGate />;
-
   return jobId ? <Player jobId={jobId} /> : <SheetPicker onPick={(id) => router.push(`/play?job=${id}`)} />;
-}
-
-/** Shown instead of the player to a signed-out visitor. */
-function SignInGate() {
-  const { openSignIn } = useAuth();
-  return (
-    <div className="wrap" style={{ textAlign: "center" }}>
-      <div className="play-gate-icon">🎹</div>
-      <h1 className="serif" style={{ fontSize: 26, fontWeight: 600, margin: "0 0 8px" }}>
-        Sign in to use the keyboard
-      </h1>
-      <p style={{ color: "var(--ink-soft)", margin: "0 auto 26px", maxWidth: 420, lineHeight: 1.5 }}>
-        Playback and the piano keyboard are for signed-in accounts. Annotating and
-        downloading sheets still work without one.
-      </p>
-      {isAuthConfigured ? (
-        <button type="button" className="btn-pill" onClick={openSignIn}>
-          Sign in
-        </button>
-      ) : (
-        <p style={{ color: "var(--ink-soft)", fontSize: 14 }}>
-          Sign-in isn&apos;t configured on this deployment.
-        </p>
-      )}
-      <div style={{ marginTop: 22 }}>
-        <Link href="/" style={{ color: "var(--accent)" }}>Back to uploading</Link>
-      </div>
-    </div>
-  );
 }
 
 /** Landing state: which of your annotated sheets do you want to play? */
@@ -128,9 +95,28 @@ function Player({ jobId }: { jobId: string }) {
   /** The measure sounding right now, from the playback clock. */
   const [playingMeasure, setPlayingMeasure] = useState<number | null>(null);
 
+  const { user, openSignIn } = useAuth();
+
   const ctxRef = useRef<AudioContext | null>(null);
   const synthRef = useRef<SynthEngine | null>(null);
   const playbackRef = useRef<Playback | null>(null);
+  /** Set when the current run is the signed-out preview, so reaching the end
+   * asks for a sign-in rather than just stopping. */
+  const previewRef = useRef(false);
+
+  /** A signed-out visitor can play up to here and no further. */
+  const freeEndBeat = useMemo(() => {
+    if (!timeline) return 0;
+    const free = timeline.measures.filter((m) => m.index < FREE_MEASURES);
+    if (!free.length) return 0;
+    const last = free[free.length - 1];
+    return last.start_beat + last.length_beats;
+  }, [timeline]);
+
+  const isLocked = useCallback(
+    (index: number) => !user && index >= FREE_MEASURES,
+    [user],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -185,12 +171,19 @@ function Player({ jobId }: { jobId: string }) {
         playbackRef.current = new Playback(tl, synthRef.current!, ctxRef.current, {
           onHighlight: setActiveMidis,
           onMeasure: setPlayingMeasure,
-          onEnded: () => setPlaying(false),
+          onEnded: () => {
+            setPlaying(false);
+            // Reaching the end of the preview is the natural moment to ask.
+            if (previewRef.current) {
+              previewRef.current = false;
+              openSignIn();
+            }
+          },
         });
       }
       return playbackRef.current;
     },
-    [],
+    [openSignIn],
   );
 
   const playWholePiece = useCallback(
@@ -198,10 +191,16 @@ function Player({ jobId }: { jobId: string }) {
       if (!timeline) return;
       const pb = ensurePlayback(timeline);
       setLoopMeasure(null);
-      pb.play(speed, fromBeat === undefined ? {} : { fromBeat });
+      // Bound the window rather than stopping once it overruns: notes past
+      // the limit are then never scheduled, so nothing audible leaks out.
+      previewRef.current = !user;
+      pb.play(speed, {
+        ...(fromBeat === undefined ? {} : { fromBeat }),
+        ...(user ? {} : { untilBeat: freeEndBeat }),
+      });
       setPlaying(true);
     },
-    [timeline, ensurePlayback, speed],
+    [timeline, ensurePlayback, speed, user, freeEndBeat],
   );
 
   const loopOneMeasure = useCallback(
@@ -209,14 +208,19 @@ function Player({ jobId }: { jobId: string }) {
       if (!timeline) return;
       const m = timeline.measures[index];
       if (!m || m.length_beats <= 0) return;
+      if (isLocked(index)) {
+        openSignIn();
+        return;
+      }
       const pb = ensurePlayback(timeline);
+      previewRef.current = false;
       setLoopMeasure(index);
       pb.play(speed, {
         loop: { startBeat: m.start_beat, endBeat: m.start_beat + m.length_beats },
       });
       setPlaying(true);
     },
-    [timeline, ensurePlayback, speed],
+    [timeline, ensurePlayback, speed, isLocked, openSignIn],
   );
 
   const handlePlayPause = useCallback(() => {
@@ -246,15 +250,24 @@ function Player({ jobId }: { jobId: string }) {
       next = after ? after.index : playable[0].index; // wrap around
     }
 
+    if (isLocked(next)) {
+      openSignIn();
+      return;
+    }
+
     if (loopMeasure !== null || !playbackRef.current?.isPlaying) {
       loopOneMeasure(next);
     } else {
       playWholePiece(timeline.measures[next].start_beat);
     }
-  }, [timeline, loopMeasure, playingMeasure, loopOneMeasure, playWholePiece]);
+  }, [timeline, loopMeasure, playingMeasure, loopOneMeasure, playWholePiece, isLocked, openSignIn]);
 
   const handleMeasureClick = useCallback(
     (index: number) => {
+      if (isLocked(index)) {
+        openSignIn();
+        return;
+      }
       // Clicking the measure that is already repeating stops it, so the same
       // click both starts and clears the loop.
       if (loopMeasure === index && playbackRef.current?.isPlaying) {
@@ -264,7 +277,7 @@ function Player({ jobId }: { jobId: string }) {
       }
       loopOneMeasure(index);
     },
-    [loopMeasure, loopOneMeasure],
+    [loopMeasure, loopOneMeasure, isLocked, openSignIn],
   );
 
   const stopLoop = useCallback(() => {
@@ -300,6 +313,7 @@ function Player({ jobId }: { jobId: string }) {
           measures={timeline.measures}
           playingIndex={playingMeasure}
           loopIndex={loopMeasure}
+          lockedFromIndex={user ? null : FREE_MEASURES}
           onMeasureClick={handleMeasureClick}
         />
       </div>
@@ -342,8 +356,13 @@ function Player({ jobId }: { jobId: string }) {
             Repeating measure {loopLabel}
             <button className="play-clear" onClick={stopLoop}>stop</button>
           </span>
-        ) : (
+        ) : user ? (
           <span className="play-status subtle">Click a measure to repeat it</span>
+        ) : (
+          <span className="play-status subtle">
+            First {FREE_MEASURES} measures free
+            <button className="play-clear" onClick={openSignIn}>sign in for the rest</button>
+          </span>
         )}
       </div>
 

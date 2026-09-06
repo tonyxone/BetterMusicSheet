@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { clientApiFetch } from "@/lib/client-api";
 import { setAdsPaused } from "@/lib/ads";
-import { useAuth } from "../auth-context";
 import { KeyboardIcon } from "../keyboard-icon";
 import type { AnnotationJob } from "@/lib/api";
 
@@ -101,7 +100,14 @@ export function JobStatus() {
           <Link href="/" className="btn-pill ghost">
             Annotate another
           </Link>
-          <PlayLink jobId={jobId} />
+          <Link
+            href={`/play?job=${jobId}`}
+            className="icon-link"
+            title="Play with the keyboard"
+            aria-label="Play with the keyboard"
+          >
+            <KeyboardIcon size={30} />
+          </Link>
           <DownloadButton jobId={jobId} sheetName={job.sheet_name} />
         </div>
       </div>
@@ -109,28 +115,6 @@ export function JobStatus() {
         <PreviewFrame jobId={jobId} />
       </div>
     </div>
-  );
-}
-
-// Playback is for signed-in accounts; a signed-out click opens the sign-in
-// modal instead of navigating to /play, which would only gate them anyway.
-function PlayLink({ jobId }: { jobId: string }) {
-  const { user, loading, openSignIn } = useAuth();
-  return (
-    <Link
-      href={`/play?job=${jobId}`}
-      className="icon-link"
-      title="Play with the keyboard"
-      aria-label="Play with the keyboard"
-      onClick={(e) => {
-        if (!loading && !user) {
-          e.preventDefault();
-          openSignIn();
-        }
-      }}
-    >
-      <KeyboardIcon size={30} />
-    </Link>
   );
 }
 

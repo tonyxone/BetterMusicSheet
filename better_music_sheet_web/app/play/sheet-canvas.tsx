@@ -42,6 +42,7 @@ export function SheetCanvas({
   measures,
   playingIndex,
   loopIndex,
+  lockedFromIndex,
   onMeasureClick,
 }: {
   pdfData: ArrayBuffer;
@@ -50,6 +51,9 @@ export function SheetCanvas({
   playingIndex: number | null;
   /** Measure set to repeat, if any. Outlined even while paused. */
   loopIndex: number | null;
+  /** First measure a signed-out visitor can't play, or null when unrestricted.
+   * Shown dimmed so the limit is visible before it's hit. */
+  lockedFromIndex: number | null;
   onMeasureClick: (index: number) => void;
 }) {
   const [pages, setPages] = useState<PageInfo[]>([]);
@@ -213,6 +217,7 @@ export function SheetCanvas({
                   key={m.index}
                   className={
                     "measure-box" +
+                    (lockedFromIndex !== null && m.index >= lockedFromIndex ? " locked" : "") +
                     (m.index === loopIndex ? " looping" : "") +
                     (m.index === playingIndex ? " playing" : "")
                   }

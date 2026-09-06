@@ -349,3 +349,7 @@ button.history-row { width: 100%; font-family: inherit; cursor: pointer; text-al
 .icon-link:hover { color: var(--accent); background: var(--paper-deep); }
 .icon-link:active { color: var(--accent-deep); }
 .icon-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Measures a signed-out visitor can't play yet: dimmed rather than hidden, so
+   the limit is visible before it's reached. */
+.measure-box.locked { background: rgba(46, 33, 23, 0.06); }
+.measure-box.locked:hover { background: rgba(46, 33, 23, 0.12); border-color: var(--ink-soft); }
