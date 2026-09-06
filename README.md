@@ -182,6 +182,12 @@ with `npm run dev` alongside the API and open `http://localhost:3000`.
 
 `/play` shows a finished sheet above an 88-key keyboard and plays it back.
 
+![The Play page: the annotated sheet above an 88-key keyboard, with the playhead on the sounding measure and its notes lit on the keys](docs/example-play-page.png)
+
+*Same public-domain "Menuet in G" (BWV Anh. 114) from the
+[Mutopia Project](https://www.mutopiaproject.org/) as above — the dashed line
+marks what is sounding, and the lit keys are coloured by hand.*
+
 - Keys light while they sound, coloured by hand — right blue, left green — and
   a dashed playhead steps from note to note on the sheet, which scrolls to
   follow along.

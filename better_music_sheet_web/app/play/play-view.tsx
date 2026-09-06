@@ -33,7 +33,7 @@ const SheetCanvas = dynamic(() => import("./sheet-canvas"), {
 
 function PlayIcon() {
   return (
-    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true">
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true">
       <path d="M8 5.5a1 1 0 0 1 1.53-.85l9 6.5a1 1 0 0 1 0 1.7l-9 6.5A1 1 0 0 1 8 18.5z" />
     </svg>
   );
@@ -42,7 +42,7 @@ function PlayIcon() {
 /** A keyboard key with a letter on it - the thing the toggle turns on. */
 function KeyNamesIcon() {
   return (
-    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+    <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
       <rect
         x="4.5" y="4.5" width="15" height="15" rx="3.5"
         fill="none" stroke="currentColor" strokeWidth="1.6"
@@ -60,7 +60,7 @@ function KeyNamesIcon() {
 
 function SpeakerOnIcon() {
   return (
-    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+    <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
       <path d="M4 9.5h3.1L12 5.6v12.8L7.1 14.5H4z" fill="currentColor" />
       <path
         d="M15.4 9.4a3.7 3.7 0 0 1 0 5.2M17.9 6.9a7.2 7.2 0 0 1 0 10.2"
@@ -72,7 +72,7 @@ function SpeakerOnIcon() {
 
 function SpeakerOffIcon() {
   return (
-    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+    <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
       <path d="M4 9.5h3.1L12 5.6v12.8L7.1 14.5H4z" fill="currentColor" />
       <path
         d="M15.6 9.8l4.6 4.6M20.2 9.8l-4.6 4.6"
@@ -84,7 +84,7 @@ function SpeakerOffIcon() {
 
 function PauseIcon() {
   return (
-    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true">
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true">
       <rect x="7" y="5" width="3.6" height="14" rx="1.2" />
       <rect x="13.4" y="5" width="3.6" height="14" rx="1.2" />
     </svg>

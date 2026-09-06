@@ -6,8 +6,13 @@ import { Analytics } from "./analytics";
 import { AuthProvider } from "./auth-context";
 
 export const metadata: Metadata = {
-  title: "Better Music Sheet",
-  description: "Upload piano sheet music and get every note labeled with its letter name.",
+  // The tab shows the domain first, so a bookmarked tab is recognisable by
+  // name, with what the site does after it. The tagline covers both halves of
+  // the product: the labelled sheet and the playback.
+  title: "BetterMusicSheet.com | Every note named, then played",
+  description:
+    "Upload piano sheet music and get every note labeled with its letter name, " +
+    "then play it back with the notes lit up on a keyboard.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

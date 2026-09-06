@@ -306,8 +306,8 @@ details.options[open] summary::before { content: "▾ "; }
    the state is visible without a text label beside it. */
 .icon-toggle {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 40px; height: 40px; padding: 0;
-  border: 1px solid var(--paper-deep); border-radius: 12px;
+  width: 32px; height: 32px; padding: 0;
+  border: 1px solid var(--paper-deep); border-radius: 10px;
   background: transparent; color: var(--ink-soft); cursor: pointer;
   transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
 }
@@ -365,7 +365,7 @@ button.history-row { width: 100%; font-family: inherit; cursor: pointer; text-al
    text label, so it stays square instead of stretching to a word's width. */
 .btn-pill.icon {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 48px; height: 48px; padding: 0; border-radius: 999px;
+  width: 38px; height: 38px; padding: 0; border-radius: 999px;
 }
 /* Playhead: a dashed line standing on whatever is sounding, stepping from
    one onset to the next. The short transition softens the jump without
