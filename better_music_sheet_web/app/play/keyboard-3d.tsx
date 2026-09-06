@@ -41,10 +41,9 @@ const COLOR_BLACK = 0x1c1613;
 // One colour per hand, so you can see at a glance which hand plays what.
 const COLOR_RIGHT = 0x2f6fb5; // right hand (top staff)
 const COLOR_LEFT = 0x3e8e5a;  // left hand
-/** How much of the hand colour to mix into the key. A light tint reads as
- * "this one" without repainting the keyboard; the key underneath stays
- * legible, which matters most on the black keys. */
-const HIGHLIGHT_MIX = 0.3;
+/** How much of the hand colour to mix into the key. Enough to read clearly at
+ * a glance while still leaving the key itself visible underneath. */
+const HIGHLIGHT_MIX = 0.7;
 const COLOR_FELT = 0x8c2f2a;
 
 export function isBlackKey(midi: number) {
@@ -307,13 +306,15 @@ export function Keyboard3D({
       const base = black ? COLOR_BLACK : COLOR_WHITE;
       mat.color.setHex(base);
       if (lit) {
-        // Blended rather than replaced - a solid fill was far too heavy.
-        // Black keys get a stronger mix, since 30% of a colour over near-black
-        // is barely visible.
-        mat.color.lerp(new THREE.Color(litColor), black ? HIGHLIGHT_MIX * 2.2 : HIGHLIGHT_MIX);
+        // Blended rather than replaced, so the key stays visible underneath.
+        // Black keys take a stronger mix - the same fraction of a colour over
+        // near-black reads far darker than it does over ivory - and the boost
+        // is clamped so it can never overshoot into a different hue.
+        const mix = black ? Math.min(1, HIGHLIGHT_MIX * 1.25) : HIGHLIGHT_MIX;
+        mat.color.lerp(new THREE.Color(litColor), mix);
       }
       mat.emissive.setHex(lit ? litColor : 0x000000);
-      mat.emissiveIntensity = lit ? 0.16 : 0;
+      mat.emissiveIntensity = lit ? 0.3 : 0;
       // Press the key down while it sounds - the motion reads as "this one" far
       // faster than colour alone.
       const baseY = mesh.userData.baseY as number;
