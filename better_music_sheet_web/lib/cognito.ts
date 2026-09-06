@@ -104,8 +104,13 @@ export async function refreshTokens(refreshToken: string): Promise<CognitoTokens
 /** Returns true when Cognito still needs the emailed code before this
  * account can sign in (the normal case for self sign-up). */
 export async function signUp(email: string, password: string, name: string): Promise<boolean> {
-  const attributes = [{ Name: "email", Value: email }];
-  if (name.trim()) attributes.push({ Name: "name", Value: name.trim() });
+  // The pool's `name` attribute can't be made required after creation
+  // (Cognito schema attributes are immutable), so sign-up enforces it here
+  // and always sends one.
+  const attributes = [
+    { Name: "email", Value: email },
+    { Name: "name", Value: name.trim() },
+  ];
   const data = await call("SignUp", {
     Username: email,
     Password: password,

@@ -211,7 +211,9 @@ def me(user_id: str = Depends(get_signed_in_user_id)):
     if user is None:
         # Valid token, but the row is gone (e.g. table wiped between
         # deploys) - recreate lazily rather than 500ing on a live session.
-        db.create_user_if_missing(user_id, None, user_id)
+        # No name is passed: the token carries only the subject, and putting
+        # the id there would show the user a UUID where their name goes.
+        db.create_user_if_missing(user_id, None, None)
         user = db.get_user(user_id)
     return user
 

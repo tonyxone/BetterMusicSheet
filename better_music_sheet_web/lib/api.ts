@@ -27,6 +27,7 @@ export type MusicSheet = {
 export type User = {
   user_id: string;
   email: string | null;
-  display_name: string;
+  /** Null for accounts created before names were required. */
+  display_name: string | null;
   created_at: number;
 };

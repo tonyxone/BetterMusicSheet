@@ -134,6 +134,10 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
     }
 
     if (view === "signup") {
+      if (!name.trim()) {
+        setError("Please enter your name.");
+        return;
+      }
       return run(async () => {
         const needsCode = await signUp(email, password, name);
         if (needsCode) {
@@ -224,8 +228,14 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
 
           {view === "signup" && (
             <label className="modal-field">
-              <span>Name <em>(optional)</em></span>
-              <input type="text" autoComplete="name" value={name} onChange={(e) => setName(e.target.value)} />
+              <span>Name</span>
+              <input
+                type="text"
+                autoComplete="name"
+                required
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
             </label>
           )}
 

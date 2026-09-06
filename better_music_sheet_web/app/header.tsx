@@ -33,7 +33,14 @@ export function Header() {
             signed in never sees "Sign in" flash first. Sign-in is optional -
             uploading works signed out - so this is the only auth UI. */}
         {loading ? null : user ? (
-          <UserMenu name={user.display_name} email={user.email} onSignOut={signOut} />
+          <UserMenu
+            // An account made before names were required may not have one.
+            // Fall back to the email rather than the id - a raw UUID where a
+            // name belongs just looks broken.
+            name={user.display_name || user.email || "Account"}
+            email={user.email}
+            onSignOut={signOut}
+          />
         ) : isAuthConfigured ? (
           <button type="button" className="nav-btn primary" onClick={openSignIn}>
             Sign in

@@ -82,10 +82,13 @@ def verify_cognito_id_token(token):
     invalid.
 
     display_name is whatever the pool actually gave us, in descending order
-    of how human it reads - a `name` claim needs both the attribute set on
-    the user and the `profile` scope requested, neither of which is
-    guaranteed, so it falls back to the email's local part and finally to
-    the sub."""
+    of how human it reads. Sign-up asks for a name, so new accounts have the
+    `name` claim; the rest of the chain covers accounts made before that and
+    identity providers that spell it differently.
+
+    It deliberately does NOT fall back to the sub: showing someone a raw UUID
+    where their name belongs looks broken. None means "no name known", and
+    the caller decides what to render."""
     if not is_cognito_configured():
         # Without this the issuer URL is built from a placeholder, the JWKS
         # fetch 400s, and an unhandled HTTPError becomes an opaque 500 - which
@@ -131,7 +134,6 @@ def verify_cognito_id_token(token):
         or claims.get("given_name")
         or claims.get("preferred_username")
         or (email.split("@")[0] if email else None)
-        or sub
     )
     return sub, email, display_name
 
