@@ -31,6 +31,23 @@ const SheetCanvas = dynamic(() => import("./sheet-canvas"), {
   loading: () => <p className="play-hint">Loading the sheet…</p>,
 });
 
+function PlayIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true">
+      <path d="M8 5.5a1 1 0 0 1 1.53-.85l9 6.5a1 1 0 0 1 0 1.7l-9 6.5A1 1 0 0 1 8 18.5z" />
+    </svg>
+  );
+}
+
+function PauseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true">
+      <rect x="7" y="5" width="3.6" height="14" rx="1.2" />
+      <rect x="13.4" y="5" width="3.6" height="14" rx="1.2" />
+    </svg>
+  );
+}
+
 /** How many measures a signed-out visitor can play before being asked to
  * sign in. They get the real page and a real preview, not a wall. */
 const FREE_MEASURES = 3;
@@ -237,33 +254,6 @@ function Player({ jobId }: { jobId: string }) {
     else playWholePiece();
   }, [timeline, loopMeasure, loopOneMeasure, playWholePiece]);
 
-  /** Step to the next measure, keeping the current mode. */
-  const handleForward = useCallback(() => {
-    if (!timeline) return;
-    const playable = timeline.measures.filter((m) => m.length_beats > 0);
-    if (!playable.length) return;
-
-    const from = loopMeasure ?? playingMeasure;
-    let next: number;
-    if (from === null) {
-      next = playable[0].index;
-    } else {
-      const after = playable.find((m) => m.index > from);
-      next = after ? after.index : playable[0].index; // wrap around
-    }
-
-    if (isLocked(next)) {
-      openSignIn();
-      return;
-    }
-
-    if (loopMeasure !== null || !playbackRef.current?.isPlaying) {
-      loopOneMeasure(next);
-    } else {
-      playWholePiece(timeline.measures[next].start_beat);
-    }
-  }, [timeline, loopMeasure, playingMeasure, loopOneMeasure, playWholePiece, isLocked, openSignIn]);
-
   const handleMeasureClick = useCallback(
     (index: number) => {
       if (isLocked(index)) {
@@ -321,13 +311,14 @@ function Player({ jobId }: { jobId: string }) {
       </div>
 
       <div className="play-transport">
-        <button className="btn-pill" onClick={handlePlayPause}>
-          {playing ? "Pause" : "Play"}
+        <button
+          className="btn-pill icon"
+          onClick={handlePlayPause}
+          title={playing ? "Pause" : "Play"}
+          aria-label={playing ? "Pause" : "Play"}
+        >
+          {playing ? <PauseIcon /> : <PlayIcon />}
         </button>
-        <button className="btn-pill ghost" onClick={handleForward} title="Next measure">
-          Next measure ▸
-        </button>
-
         <label className="play-speed">
           Speed
           <input

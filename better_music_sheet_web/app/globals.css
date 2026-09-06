@@ -355,3 +355,9 @@ button.history-row { width: 100%; font-family: inherit; cursor: pointer; text-al
    the limit is visible before it's reached. */
 .measure-box.locked { background: rgba(46, 33, 23, 0.06); }
 .measure-box.locked:hover { background: rgba(46, 33, 23, 0.12); border-color: var(--ink-soft); }
+/* Transport play/pause: a filled pill sized around the glyph rather than a
+   text label, so it stays square instead of stretching to a word's width. */
+.btn-pill.icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 48px; height: 48px; padding: 0; border-radius: 999px;
+}
