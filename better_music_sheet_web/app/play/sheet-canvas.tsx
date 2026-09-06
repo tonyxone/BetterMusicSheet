@@ -40,12 +40,16 @@ type PdfDoc = {
 export function SheetCanvas({
   pdfData,
   measures,
-  selectedIndex,
+  playingIndex,
+  loopIndex,
   onMeasureClick,
 }: {
   pdfData: ArrayBuffer;
   measures: TimelineMeasure[];
-  selectedIndex: number | null;
+  /** Measure sounding right now - follows the playback clock. */
+  playingIndex: number | null;
+  /** Measure set to repeat, if any. Outlined even while paused. */
+  loopIndex: number | null;
   onMeasureClick: (index: number) => void;
 }) {
   const [pages, setPages] = useState<PageInfo[]>([]);
@@ -140,6 +144,20 @@ export function SheetCanvas({
     };
   }, [pages]);
 
+  // Keep the sounding measure on screen. Only reacts when the measure
+  // changes, so it never fights the user mid-scroll within one measure.
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (playingIndex === null) return;
+    const el = scrollerRef.current?.querySelector<HTMLElement>(`[data-measure="${playingIndex}"]`);
+    if (!el) return;
+    const box = el.getBoundingClientRect();
+    const view = scrollerRef.current!.getBoundingClientRect();
+    if (box.top < view.top + 8 || box.bottom > view.bottom - 8) {
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, [playingIndex]);
+
   const handleClick = useCallback(
     (page: PageInfo, e: React.MouseEvent<HTMLDivElement>) => {
       const rect = e.currentTarget.getBoundingClientRect();
@@ -173,7 +191,7 @@ export function SheetCanvas({
   }
 
   return (
-    <div className="sheet-pages">
+    <div className="sheet-pages" ref={scrollerRef}>
       {pages.map((page) => (
         <div key={page.pageNumber} className="sheet-page" onClick={(e) => handleClick(page, e)}>
           <canvas
@@ -193,7 +211,12 @@ export function SheetCanvas({
               return (
                 <span
                   key={m.index}
-                  className={`measure-box${m.index === selectedIndex ? " selected" : ""}`}
+                  className={
+                    "measure-box" +
+                    (m.index === loopIndex ? " looping" : "") +
+                    (m.index === playingIndex ? " playing" : "")
+                  }
+                  data-measure={m.index}
                   style={{
                     left: `${(x0 / page.widthPt) * 100}%`,
                     top: `${(y0 / page.heightPt) * 100}%`,

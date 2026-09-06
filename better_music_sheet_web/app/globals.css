@@ -290,7 +290,12 @@ details.options[open] summary::before { content: "▾ "; }
   border: 1px solid transparent; transition: background 0.12s, border-color 0.12s;
 }
 .measure-box:hover { background: rgba(217, 164, 65, 0.16); border-color: var(--gold); }
-.measure-box.selected { background: rgba(168, 60, 52, 0.18); border-color: var(--accent); }
+/* Two different things: the measure set to repeat (steady outline, survives a
+   pause) and the one sounding right now (filled, follows the playback clock). */
+.measure-box.looping { border-color: var(--accent); border-style: dashed; }
+.measure-box.playing {
+  background: rgba(168, 60, 52, 0.20); border-color: var(--accent); border-style: solid;
+}
 
 .play-transport {
   flex: none; display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
@@ -299,6 +304,11 @@ details.options[open] summary::before { content: "▾ "; }
 .play-speed { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink-soft); }
 .play-speed input { accent-color: var(--accent); }
 .play-speed input:disabled { opacity: 0.5; }
+.play-toggle {
+  display: flex; align-items: center; gap: 7px; font-size: 14px; color: var(--ink-soft);
+  cursor: pointer; user-select: none;
+}
+.play-toggle input { accent-color: var(--accent); cursor: pointer; }
 .play-status { font-size: 14px; color: var(--ink); display: flex; align-items: center; gap: 8px; }
 .play-status.subtle { color: var(--ink-soft); }
 .play-clear {
@@ -306,10 +316,21 @@ details.options[open] summary::before { content: "▾ "; }
   color: var(--accent); text-decoration: underline; cursor: pointer;
 }
 .play-keyboard {
-  flex: none; height: 190px; background: var(--paper-deep);
-  border-radius: 16px 16px 0 0; padding: 10px 12px 0;
+  flex: none; height: 200px; min-height: 200px; background: var(--paper-deep);
+  border-radius: 16px 16px 0 0; padding: 8px 12px 4px;
 }
-.keyboard-3d { width: 100%; height: 100%; }
+.keyboard-3d { width: 100%; height: 100%; position: relative; }
+/* Key names are HTML over the WebGL canvas, positioned by projecting each key
+   through the (fixed) camera - crisp at any size, and no per-key texture. */
+.key-labels { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.15s; }
+.key-labels.visible { opacity: 1; }
+.key-label {
+  position: absolute; transform: translate(-50%, -50%);
+  font-size: 8px; font-weight: 600; line-height: 1; letter-spacing: -0.02em;
+  color: #6b5847; white-space: nowrap;
+}
+.key-label.black { color: #cbb8a4; font-size: 7px; }
+.key-label.lit { color: #fff; }
 .play-hint { color: var(--ink-soft); padding: 24px; text-align: center; }
 .play-error { color: var(--danger); padding: 24px; text-align: center; }
 /* The picker reuses .history-row, which is an <a> there and a <button> here. */

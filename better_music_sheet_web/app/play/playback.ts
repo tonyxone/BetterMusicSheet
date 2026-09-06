@@ -6,22 +6,36 @@
 //     notes directly; they only decide *what* to hand the audio clock next.
 //   - The keyboard highlight is derived each animation frame from that same
 //     audio clock, so it can never drift away from what you're hearing.
+//
+// Playback always runs over a beat window. The whole piece is just the widest
+// window; looping one measure is a narrow one with loop turned on.
 
 import { GRACE_SECONDS, SynthEngine } from "./synth";
 import type { Timeline, TimelineNote } from "@/lib/timeline";
 
 const LOOKAHEAD_SECONDS = 0.1;
 const SCHEDULER_INTERVAL_MS = 25;
+/** Silence between repeats, so a looped measure doesn't run into itself. */
+const LOOP_GAP_BEATS = 0.25;
 
 type ScheduledNote = {
   note: TimelineNote;
-  start: number; // seconds from the piece's start
+  /** Seconds from the start of a cycle. */
+  start: number;
   end: number;
+};
+
+export type PlayOptions = {
+  /** Where to start; defaults to wherever playback was paused. */
+  fromBeat?: number;
+  /** Beat window to repeat. Omit to play through to the end once. */
+  loop?: { startBeat: number; endBeat: number };
 };
 
 export type PlaybackCallbacks = {
   onHighlight: (midis: number[]) => void;
-  onBeat?: (beat: number) => void;
+  /** Index of the measure currently sounding, or null between/after notes. */
+  onMeasure?: (index: number | null) => void;
   onEnded?: () => void;
 };
 
@@ -32,15 +46,25 @@ export class Playback {
   private cb: PlaybackCallbacks;
 
   private schedule: ScheduledNote[] = [];
-  private nextIndex = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
   private raf: number | null = null;
-  /** AudioContext time that corresponds to `startedAtBeat`. */
+
+  /** AudioContext time at which the current window's first cycle begins. */
   private originTime = 0;
-  private startedAtBeat = 0;
+  private windowStart = 0;
+  private windowEnd = 0;
+  private cycleSeconds = 0;
+  private looping = false;
   private secondsPerBeat = 0.5;
-  private lastHighlight = "";
+
+  /** Scheduling cursor: which cycle, and how far into `schedule`. */
+  private cursorCycle = 0;
+  private cursorIndex = 0;
+
+  private pausedBeat = 0;
   private playing = false;
+  private lastHighlight = "";
+  private lastMeasure: number | null = null;
 
   constructor(timeline: Timeline, synth: SynthEngine, ctx: AudioContext, cb: PlaybackCallbacks) {
     this.timeline = timeline;
@@ -53,35 +77,58 @@ export class Playback {
     return this.playing;
   }
 
-  /** Beat position right now (or where we paused). */
-  get currentBeat() {
-    if (!this.playing) return this.startedAtBeat;
-    return this.startedAtBeat + (this.ctx.currentTime - this.originTime) / this.secondsPerBeat;
+  get isLooping() {
+    return this.looping;
   }
 
-  play(speed: number, fromBeat?: number) {
-    if (this.playing) return;
+  /** Beat position right now, or where playback was paused. */
+  get currentBeat() {
+    if (!this.playing) return this.pausedBeat;
+    const elapsed = this.ctx.currentTime - this.originTime;
+    if (elapsed < 0) return this.windowStart;
+    if (this.looping && this.cycleSeconds > 0) {
+      return this.windowStart + (elapsed % this.cycleSeconds) / this.secondsPerBeat;
+    }
+    return this.windowStart + elapsed / this.secondsPerBeat;
+  }
+
+  play(speed: number, opts: PlayOptions = {}) {
+    this.stopInternal();
+
     const bpm = this.timeline.tempo_bpm_default || 96;
     this.secondsPerBeat = 60 / bpm / (speed || 1);
-    this.startedAtBeat = fromBeat ?? this.startedAtBeat;
-    if (this.startedAtBeat >= this.timeline.total_beats) this.startedAtBeat = 0;
+    this.looping = !!opts.loop;
 
-    // Small offset so the very first notes aren't scheduled in the past.
-    this.originTime = this.ctx.currentTime + 0.06;
+    if (opts.loop) {
+      this.windowStart = opts.loop.startBeat;
+      this.windowEnd = opts.loop.endBeat;
+    } else {
+      const from = opts.fromBeat ?? this.pausedBeat;
+      this.windowStart = from >= this.timeline.total_beats ? 0 : from;
+      this.windowEnd = this.timeline.total_beats;
+    }
+
+    const spanBeats = Math.max(0.001, this.windowEnd - this.windowStart);
+    this.cycleSeconds = (spanBeats + (this.looping ? LOOP_GAP_BEATS : 0)) * this.secondsPerBeat;
 
     this.schedule = this.timeline.notes
-      .filter((n) => n.start_beat >= this.startedAtBeat - 1e-9)
+      .filter((n) => n.start_beat >= this.windowStart - 1e-9 && n.start_beat < this.windowEnd - 1e-9)
       .map((n) => {
-        const start = (n.start_beat - this.startedAtBeat) * this.secondsPerBeat;
-        const dur = n.is_grace || n.duration_beats <= 0
-          ? GRACE_SECONDS
-          : n.duration_beats * this.secondsPerBeat;
-        return { note: n, start, end: start + dur };
+        const start = (n.start_beat - this.windowStart) * this.secondsPerBeat;
+        const beats = n.is_grace || n.duration_beats <= 0 ? 0 : n.duration_beats;
+        const dur = beats > 0
+          ? Math.min(beats, spanBeats - (n.start_beat - this.windowStart)) * this.secondsPerBeat
+          : GRACE_SECONDS;
+        return { note: n, start, end: start + Math.max(GRACE_SECONDS, dur) };
       })
       .sort((a, b) => a.start - b.start);
 
-    this.nextIndex = 0;
+    // A small offset so the first notes aren't scheduled in the past.
+    this.originTime = this.ctx.currentTime + 0.06;
+    this.cursorCycle = 0;
+    this.cursorIndex = 0;
     this.playing = true;
+
     this.timer = setInterval(() => this.tick(), SCHEDULER_INTERVAL_MS);
     this.tick();
     this.startHighlightLoop();
@@ -89,17 +136,17 @@ export class Playback {
 
   pause() {
     if (!this.playing) return;
-    // Freeze the beat position before clearing state, so resume continues
-    // from here rather than restarting.
-    this.startedAtBeat = this.currentBeat;
+    this.pausedBeat = this.currentBeat;
     this.stopInternal();
-    this.cb.onHighlight([]);
+    this.emitHighlight([]);
+    this.cb.onMeasure?.(null);
   }
 
   stop() {
-    this.startedAtBeat = 0;
+    this.pausedBeat = 0;
     this.stopInternal();
-    this.cb.onHighlight([]);
+    this.emitHighlight([]);
+    this.cb.onMeasure?.(null);
   }
 
   dispose() {
@@ -118,17 +165,29 @@ export class Playback {
     }
     this.synth.allOff();
     this.lastHighlight = "";
+    this.lastMeasure = null;
   }
 
   private tick() {
     if (!this.playing) return;
     const horizon = this.ctx.currentTime - this.originTime + LOOKAHEAD_SECONDS;
-    while (this.nextIndex < this.schedule.length && this.schedule[this.nextIndex].start <= horizon) {
-      const s = this.schedule[this.nextIndex];
-      this.synth.noteOn(s.note.midi, this.originTime + s.start, this.originTime + s.end);
-      this.nextIndex++;
+
+    // Walk forward through cycles; without looping there is only cycle 0.
+    for (;;) {
+      if (this.cursorIndex >= this.schedule.length) {
+        if (!this.looping) break;
+        this.cursorCycle++;
+        this.cursorIndex = 0;
+        continue;
+      }
+      const s = this.schedule[this.cursorIndex];
+      const at = this.cursorCycle * this.cycleSeconds + s.start;
+      if (at > horizon) break;
+      this.synth.noteOn(s.note.midi, this.originTime + at, this.originTime + this.cursorCycle * this.cycleSeconds + s.end);
+      this.cursorIndex++;
     }
-    if (this.nextIndex >= this.schedule.length) {
+
+    if (!this.looping && this.cursorIndex >= this.schedule.length) {
       const last = this.schedule.length ? this.schedule[this.schedule.length - 1].end : 0;
       if (this.ctx.currentTime - this.originTime > last + 0.2) {
         this.stop();
@@ -137,26 +196,51 @@ export class Playback {
     }
   }
 
+  private emitHighlight(midis: number[]) {
+    const key = midis.join(",");
+    // Only push when the set actually changes - otherwise this would set React
+    // state 60x a second for no visible difference.
+    if (key !== this.lastHighlight) {
+      this.lastHighlight = key;
+      this.cb.onHighlight(midis);
+    }
+  }
+
   private startHighlightLoop() {
     const frame = () => {
       if (!this.playing) return;
-      const now = this.ctx.currentTime - this.originTime;
+      const elapsed = Math.max(0, this.ctx.currentTime - this.originTime);
+      const pos = this.looping && this.cycleSeconds > 0 ? elapsed % this.cycleSeconds : elapsed;
+
       const active: number[] = [];
-      // The schedule is start-sorted, so everything still sounding lies in a
-      // prefix; a note's end can exceed later notes' starts, hence the scan
-      // rather than an early break on start > now.
+      let measure: number | null = null;
+      // The schedule is start-sorted, so anything still sounding lies in a
+      // prefix - but a long note can outlast later ones, so scan rather than
+      // breaking at the first note that has ended.
       for (const s of this.schedule) {
-        if (s.start > now) break;
-        if (s.end > now) active.push(s.note.midi);
+        if (s.start > pos) break;
+        if (s.end > pos) {
+          active.push(s.note.midi);
+          if (measure === null) measure = s.note.measure_index;
+        }
       }
-      const key = active.join(",");
-      // Only push when the set actually changes - otherwise this would set
-      // React state 60x a second for no visible difference.
-      if (key !== this.lastHighlight) {
-        this.lastHighlight = key;
-        this.cb.onHighlight(active);
+      active.sort((a, b) => a - b);
+      this.emitHighlight(active);
+
+      // Between notes (a rest, or the gap between loop repeats) keep showing
+      // the measure the playhead is in rather than flickering to nothing.
+      if (measure === null) {
+        const beat = this.windowStart + pos / this.secondsPerBeat;
+        const m = this.timeline.measures.find(
+          (mm) => beat >= mm.start_beat && beat < mm.start_beat + mm.length_beats,
+        );
+        measure = m ? m.index : null;
       }
-      this.cb.onBeat?.(this.startedAtBeat + now / this.secondsPerBeat);
+      if (measure !== this.lastMeasure) {
+        this.lastMeasure = measure;
+        this.cb.onMeasure?.(measure);
+      }
+
       this.raf = requestAnimationFrame(frame);
     };
     this.raf = requestAnimationFrame(frame);

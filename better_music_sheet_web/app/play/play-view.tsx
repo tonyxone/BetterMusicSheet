@@ -2,10 +2,9 @@
 
 // The Play page: annotated sheet on top, 88-key keyboard below.
 //
-// Press play and the piece sounds while its keys light up; click a measure
-// and the keyboard holds every distinct pitch in it. The two are mutually
-// exclusive - clicking a measure pauses playback, since a held snapshot and a
-// moving highlight would be reading the same keyboard two different ways.
+// Play runs the whole piece; clicking a measure repeats just that measure
+// until you stop it. Either way the keyboard shows only what is sounding at
+// this instant, and the measure being played is outlined on the sheet.
 //
 // three.js and pdf.js are only imported from here, dynamically, so neither
 // reaches any other route's bundle.
@@ -81,10 +80,15 @@ function Player({ jobId }: { jobId: string }) {
   const [timeline, setTimeline] = useState<Timeline | null>(null);
   const [pdfData, setPdfData] = useState<ArrayBuffer | null>(null);
   const [error, setError] = useState<string | null>(null);
+
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
+  const [showKeyNames, setShowKeyNames] = useState(false);
   const [activeMidis, setActiveMidis] = useState<number[]>([]);
-  const [selected, setSelected] = useState<number | null>(null);
+  /** The measure being repeated, if any. */
+  const [loopMeasure, setLoopMeasure] = useState<number | null>(null);
+  /** The measure sounding right now, from the playback clock. */
+  const [playingMeasure, setPlayingMeasure] = useState<number | null>(null);
 
   const ctxRef = useRef<AudioContext | null>(null);
   const synthRef = useRef<SynthEngine | null>(null);
@@ -98,9 +102,7 @@ function Player({ jobId }: { jobId: string }) {
     ])
       .then(async ([tlRes, pdfRes]) => {
         if (cancelled) return;
-        if (tlRes.status === 404) {
-          throw new Error("Playback isn't available for this sheet.");
-        }
+        if (tlRes.status === 404) throw new Error("Playback isn't available for this sheet.");
         if (!tlRes.ok) throw new Error(`couldn't load playback data (${tlRes.status})`);
         if (!pdfRes.ok) throw new Error(`couldn't load the sheet (${pdfRes.status})`);
         const [tl, pdf] = await Promise.all([tlRes.json(), pdfRes.arrayBuffer()]);
@@ -116,8 +118,8 @@ function Player({ jobId }: { jobId: string }) {
     };
   }, [jobId]);
 
-  // Tear down audio and timers on unmount - leaving them running would keep an
-  // AudioContext and a rAF loop alive after navigating away.
+  // Tear down audio and timers on unmount - otherwise an AudioContext and a
+  // rAF loop keep running after navigating away.
   useEffect(() => {
     return () => {
       playbackRef.current?.dispose();
@@ -129,6 +131,56 @@ function Player({ jobId }: { jobId: string }) {
     };
   }, []);
 
+  /** Lazily build the audio graph. Must happen inside a click: browsers only
+   * let an AudioContext start from a user gesture. */
+  const ensurePlayback = useCallback(
+    (tl: Timeline) => {
+      if (!ctxRef.current) {
+        const Ctor =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        ctxRef.current = new Ctor();
+        synthRef.current = new SynthEngine(ctxRef.current);
+      }
+      ctxRef.current.resume().catch(() => {});
+      if (!playbackRef.current) {
+        playbackRef.current = new Playback(tl, synthRef.current!, ctxRef.current, {
+          onHighlight: setActiveMidis,
+          onMeasure: setPlayingMeasure,
+          onEnded: () => setPlaying(false),
+        });
+      }
+      return playbackRef.current;
+    },
+    [],
+  );
+
+  const playWholePiece = useCallback(
+    (fromBeat?: number) => {
+      if (!timeline) return;
+      const pb = ensurePlayback(timeline);
+      setLoopMeasure(null);
+      pb.play(speed, fromBeat === undefined ? {} : { fromBeat });
+      setPlaying(true);
+    },
+    [timeline, ensurePlayback, speed],
+  );
+
+  const loopOneMeasure = useCallback(
+    (index: number) => {
+      if (!timeline) return;
+      const m = timeline.measures[index];
+      if (!m || m.length_beats <= 0) return;
+      const pb = ensurePlayback(timeline);
+      setLoopMeasure(index);
+      pb.play(speed, {
+        loop: { startBeat: m.start_beat, endBeat: m.start_beat + m.length_beats },
+      });
+      setPlaying(true);
+    },
+    [timeline, ensurePlayback, speed],
+  );
+
   const handlePlayPause = useCallback(() => {
     if (!timeline) return;
     if (playbackRef.current?.isPlaying) {
@@ -136,40 +188,51 @@ function Player({ jobId }: { jobId: string }) {
       setPlaying(false);
       return;
     }
-    // Created on this click, not earlier: browsers only allow an AudioContext
-    // to start from a user gesture.
-    if (!ctxRef.current) {
-      const Ctor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      ctxRef.current = new Ctor();
-      synthRef.current = new SynthEngine(ctxRef.current);
-    }
-    ctxRef.current.resume().catch(() => {});
-    if (!playbackRef.current) {
-      playbackRef.current = new Playback(timeline, synthRef.current!, ctxRef.current, {
-        onHighlight: setActiveMidis,
-        onEnded: () => setPlaying(false),
-      });
-    }
-    setSelected(null);
-    playbackRef.current.play(speed);
-    setPlaying(true);
-  }, [timeline, speed]);
+    // Resume whatever mode we were in - repeating a measure stays repeating.
+    if (loopMeasure !== null) loopOneMeasure(loopMeasure);
+    else playWholePiece();
+  }, [timeline, loopMeasure, loopOneMeasure, playWholePiece]);
 
-  const handleMeasureClick = useCallback((index: number) => {
-    if (playbackRef.current?.isPlaying) {
-      playbackRef.current.pause();
-      setPlaying(false);
-    }
-    setSelected(index);
-    setTimeline((tl) => {
-      if (tl) setActiveMidis(tl.measures[index]?.distinct_midis ?? []);
-      return tl;
-    });
-  }, []);
+  /** Step to the next measure, keeping the current mode. */
+  const handleForward = useCallback(() => {
+    if (!timeline) return;
+    const playable = timeline.measures.filter((m) => m.length_beats > 0);
+    if (!playable.length) return;
 
-  const clearSelection = useCallback(() => {
-    setSelected(null);
-    setActiveMidis([]);
+    const from = loopMeasure ?? playingMeasure;
+    let next: number;
+    if (from === null) {
+      next = playable[0].index;
+    } else {
+      const after = playable.find((m) => m.index > from);
+      next = after ? after.index : playable[0].index; // wrap around
+    }
+
+    if (loopMeasure !== null || !playbackRef.current?.isPlaying) {
+      loopOneMeasure(next);
+    } else {
+      playWholePiece(timeline.measures[next].start_beat);
+    }
+  }, [timeline, loopMeasure, playingMeasure, loopOneMeasure, playWholePiece]);
+
+  const handleMeasureClick = useCallback(
+    (index: number) => {
+      // Clicking the measure that is already repeating stops it, so the same
+      // click both starts and clears the loop.
+      if (loopMeasure === index && playbackRef.current?.isPlaying) {
+        playbackRef.current.pause();
+        setPlaying(false);
+        return;
+      }
+      loopOneMeasure(index);
+    },
+    [loopMeasure, loopOneMeasure],
+  );
+
+  const stopLoop = useCallback(() => {
+    playbackRef.current?.stop();
+    setLoopMeasure(null);
+    setPlaying(false);
   }, []);
 
   if (error) {
@@ -186,7 +249,10 @@ function Player({ jobId }: { jobId: string }) {
     return <p className="wrap" style={{ color: "var(--ink-soft)" }}>Loading…</p>;
   }
 
-  const selectedMeasure = selected !== null ? timeline.measures[selected] : null;
+  const loopLabel =
+    loopMeasure !== null
+      ? timeline.measures[loopMeasure]?.label || String(loopMeasure + 1)
+      : null;
 
   return (
     <div className="play-view">
@@ -194,7 +260,8 @@ function Player({ jobId }: { jobId: string }) {
         <SheetCanvas
           pdfData={pdfData}
           measures={timeline.measures}
-          selectedIndex={selected}
+          playingIndex={playingMeasure}
+          loopIndex={loopMeasure}
           onMeasureClick={handleMeasureClick}
         />
       </div>
@@ -203,6 +270,10 @@ function Player({ jobId }: { jobId: string }) {
         <button className="btn-pill" onClick={handlePlayPause}>
           {playing ? "Pause" : "Play"}
         </button>
+        <button className="btn-pill ghost" onClick={handleForward} title="Next measure">
+          Next measure ▸
+        </button>
+
         <label className="play-speed">
           Speed
           <input
@@ -218,21 +289,28 @@ function Player({ jobId }: { jobId: string }) {
           />
           <span>{speed.toFixed(1)}x</span>
         </label>
-        {selectedMeasure ? (
+
+        <label className="play-toggle">
+          <input
+            type="checkbox"
+            checked={showKeyNames}
+            onChange={(e) => setShowKeyNames(e.target.checked)}
+          />
+          Key names
+        </label>
+
+        {loopLabel ? (
           <span className="play-status">
-            Measure {selectedMeasure.label || selectedMeasure.index + 1}
-            {" · "}
-            {selectedMeasure.distinct_midis.length} note
-            {selectedMeasure.distinct_midis.length === 1 ? "" : "s"}
-            <button className="play-clear" onClick={clearSelection}>clear</button>
+            Repeating measure {loopLabel}
+            <button className="play-clear" onClick={stopLoop}>stop</button>
           </span>
         ) : (
-          <span className="play-status subtle">Click a measure to see its notes</span>
+          <span className="play-status subtle">Click a measure to repeat it</span>
         )}
       </div>
 
       <div className="play-keyboard">
-        <Keyboard3D activeMidis={activeMidis} />
+        <Keyboard3D activeMidis={activeMidis} showKeyNames={showKeyNames} />
       </div>
     </div>
   );
