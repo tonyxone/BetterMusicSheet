@@ -14,6 +14,8 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { clientApiFetch } from "@/lib/client-api";
+import { isAuthConfigured } from "@/lib/auth";
+import { useAuth } from "../auth-context";
 import type { AnnotationJob } from "@/lib/api";
 import type { Timeline } from "@/lib/timeline";
 import { SynthEngine } from "./synth";
@@ -33,7 +35,43 @@ const SheetCanvas = dynamic(() => import("./sheet-canvas"), {
 export function PlayView() {
   const router = useRouter();
   const jobId = useSearchParams().get("job");
+  const { user, loading } = useAuth();
+
+  // Gate the whole route, not just the links into it - otherwise a bookmark,
+  // a shared URL or the back button walks straight past the check.
+  if (loading) return <p className="wrap" style={{ color: "var(--ink-soft)" }}>Loading…</p>;
+  if (!user) return <SignInGate />;
+
   return jobId ? <Player jobId={jobId} /> : <SheetPicker onPick={(id) => router.push(`/play?job=${id}`)} />;
+}
+
+/** Shown instead of the player to a signed-out visitor. */
+function SignInGate() {
+  const { openSignIn } = useAuth();
+  return (
+    <div className="wrap" style={{ textAlign: "center" }}>
+      <div className="play-gate-icon">🎹</div>
+      <h1 className="serif" style={{ fontSize: 26, fontWeight: 600, margin: "0 0 8px" }}>
+        Sign in to use the keyboard
+      </h1>
+      <p style={{ color: "var(--ink-soft)", margin: "0 auto 26px", maxWidth: 420, lineHeight: 1.5 }}>
+        Playback and the piano keyboard are for signed-in accounts. Annotating and
+        downloading sheets still work without one.
+      </p>
+      {isAuthConfigured ? (
+        <button type="button" className="btn-pill" onClick={openSignIn}>
+          Sign in
+        </button>
+      ) : (
+        <p style={{ color: "var(--ink-soft)", fontSize: 14 }}>
+          Sign-in isn&apos;t configured on this deployment.
+        </p>
+      )}
+      <div style={{ marginTop: 22 }}>
+        <Link href="/" style={{ color: "var(--accent)" }}>Back to uploading</Link>
+      </div>
+    </div>
+  );
 }
 
 /** Landing state: which of your annotated sheets do you want to play? */

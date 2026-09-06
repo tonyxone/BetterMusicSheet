@@ -335,3 +335,4 @@ details.options[open] summary::before { content: "▾ "; }
 .play-error { color: var(--danger); padding: 24px; text-align: center; }
 /* The picker reuses .history-row, which is an <a> there and a <button> here. */
 button.history-row { width: 100%; font-family: inherit; cursor: pointer; text-align: left; }
+.play-gate-icon { font-size: 40px; margin-bottom: 14px; }

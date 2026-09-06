@@ -15,7 +15,19 @@ export function Header() {
         <Logo />
       </Link>
       <nav className="flex items-center gap-3">
-        <Link href="/play" className="nav-btn ghost">
+        {/* Playback is for signed-in accounts. Open the modal in place rather
+            than sending a signed-out visitor to a page that would only ask
+            them to sign in anyway (/play gates itself too, for direct hits). */}
+        <Link
+          href="/play"
+          className="nav-btn ghost"
+          onClick={(e) => {
+            if (!loading && !user) {
+              e.preventDefault();
+              openSignIn();
+            }
+          }}
+        >
           Play
         </Link>
         <Link href="/history" className="nav-btn ghost">
