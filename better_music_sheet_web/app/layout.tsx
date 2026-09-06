@@ -7,9 +7,8 @@ import { AuthProvider } from "./auth-context";
 
 export const metadata: Metadata = {
   // The tab shows the domain first, so a bookmarked tab is recognisable by
-  // name, with what the site does after it. The tagline covers both halves of
-  // the product: the labelled sheet and the playback.
-  title: "BetterMusicSheet.com | Every note named, then played",
+  // name, with what the site is for after it.
+  title: "BetterMusicSheet.com | Make your playing easier",
   description:
     "Upload piano sheet music and get every note labeled with its letter name, " +
     "then play it back with the notes lit up on a keyboard.",
