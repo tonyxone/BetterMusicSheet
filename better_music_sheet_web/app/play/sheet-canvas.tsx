@@ -153,12 +153,28 @@ export function SheetCanvas({
   const scrollerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (playingIndex === null) return;
-    const el = scrollerRef.current?.querySelector<HTMLElement>(`[data-measure="${playingIndex}"]`);
-    if (!el) return;
+    const root = scrollerRef.current;
+    const el = root?.querySelector<HTMLElement>(`[data-measure="${playingIndex}"]`);
+    if (!root || !el) return;
+
+    // The element that scrolls is an ancestor, not this one - measuring
+    // against this container compares the box to the full content height,
+    // which is never out of view, so nothing ever scrolled.
+    let scroller: HTMLElement | null = root.parentElement;
+    while (scroller) {
+      const overflow = getComputedStyle(scroller).overflowY;
+      if ((overflow === "auto" || overflow === "scroll") && scroller.scrollHeight > scroller.clientHeight) break;
+      scroller = scroller.parentElement;
+    }
+    if (!scroller) return;
+
     const box = el.getBoundingClientRect();
-    const view = scrollerRef.current!.getBoundingClientRect();
-    if (box.top < view.top + 8 || box.bottom > view.bottom - 8) {
-      el.scrollIntoView({ block: "center", behavior: "smooth" });
+    const view = scroller.getBoundingClientRect();
+    const margin = 12;
+    if (box.top < view.top + margin || box.bottom > view.bottom - margin) {
+      // Centre it, so the following measures are already visible.
+      const delta = box.top - view.top - (view.height - box.height) / 2;
+      scroller.scrollBy({ top: delta, behavior: "smooth" });
     }
   }, [playingIndex]);
 

@@ -78,6 +78,15 @@ export class SynthEngine {
     return id;
   }
 
+  /** Silence output without changing anything else. Muting at the master
+   * gain rather than skipping noteOn keeps scheduling, timing and the
+   * keyboard highlight identical whether or not you can hear it. */
+  setMuted(muted: boolean) {
+    const now = this.ctx.currentTime;
+    this.master.gain.cancelScheduledValues(now);
+    this.master.gain.setTargetAtTime(muted ? 0.0001 : 0.22, now, 0.01);
+  }
+
   /** Cut everything immediately - used on pause/stop. */
   allOff() {
     const now = this.ctx.currentTime;

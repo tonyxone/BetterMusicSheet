@@ -16,6 +16,10 @@ import type { Timeline, TimelineNote } from "@/lib/timeline";
 
 const LOOKAHEAD_SECONDS = 0.1;
 const SCHEDULER_INTERVAL_MS = 25;
+/** Released a little early on the keyboard, so two of the same pitch in a row
+ * read as two strikes instead of one held note. Without it the key simply
+ * stays lit across the repeat and the re-attack is invisible. */
+const HIGHLIGHT_RELEASE_SECONDS = 0.07;
 
 type ScheduledNote = {
   note: TimelineNote;
@@ -241,7 +245,10 @@ export class Playback {
       // breaking at the first note that has ended.
       for (const s of this.schedule) {
         if (s.start > pos) break;
-        if (s.end > pos) {
+        // Never shorten a note to nothing: very fast passages would flicker
+        // rather than showing anything at all.
+        const lit = Math.max(s.start + 0.02, s.end - HIGHLIGHT_RELEASE_SECONDS);
+        if (lit > pos) {
           active.push(s.note);
           if (measure === null) measure = s.note.measure_index;
         }

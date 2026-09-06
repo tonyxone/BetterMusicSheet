@@ -126,6 +126,7 @@ function Player({ jobId }: { jobId: string }) {
   // down to 0.1x for picking a passage apart.
   const [speed, setSpeed] = useState(1);
   const [showKeyNames, setShowKeyNames] = useState(true);
+  const [soundOn, setSoundOn] = useState(true);
   const [activeNotes, setActiveNotes] = useState<TimelineNote[]>([]);
   const [beat, setBeat] = useState(0);
   // A ref, not state: the progress callback is created once and must see the
@@ -228,6 +229,7 @@ function Player({ jobId }: { jobId: string }) {
           (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
         ctxRef.current = new Ctor();
         synthRef.current = new SynthEngine(ctxRef.current);
+        synthRef.current.setMuted(!soundOn);
       }
       ctxRef.current.resume().catch(() => {});
       if (!playbackRef.current) {
@@ -250,8 +252,13 @@ function Player({ jobId }: { jobId: string }) {
       }
       return playbackRef.current;
     },
-    [openSignIn],
+    [openSignIn, soundOn],
   );
+
+  // Applies mid-playback too, not just at the next press.
+  useEffect(() => {
+    synthRef.current?.setMuted(!soundOn);
+  }, [soundOn]);
 
   const playWholePiece = useCallback(
     (fromBeat?: number) => {
@@ -411,6 +418,15 @@ function Player({ jobId }: { jobId: string }) {
             onChange={(e) => setShowKeyNames(e.target.checked)}
           />
           Key names
+        </label>
+
+        <label className="play-toggle">
+          <input
+            type="checkbox"
+            checked={soundOn}
+            onChange={(e) => setSoundOn(e.target.checked)}
+          />
+          Sound
         </label>
 
 
