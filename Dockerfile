@@ -40,7 +40,12 @@ ADD https://repo1.maven.org/maven2/org/bytedeco/leptonica/1.87.0-1.5.13/leptonic
     https://repo1.maven.org/maven2/org/bytedeco/tesseract/5.5.2-1.5.13/tesseract-5.5.2-1.5.13-linux-x86_64.jar \
     ./tools/Audiveris/Audiveris/app/
 
-COPY annotate.py audiveris_heads.py labels.py omr_notes.py run.py server.py auth.py db.py storage.py config.py ./
+# Every module at the repo root, rather than a hand-written list. The list
+# silently went stale when timeline.py and musicxml.py were added: the image
+# built and deployed fine, and playback then failed at runtime with "No module
+# named 'timeline'" on every sheet. .dockerignore already keeps .venv,
+# __pycache__ and friends out of the build context.
+COPY *.py ./
 COPY static/ ./static/
 
 EXPOSE 8000
