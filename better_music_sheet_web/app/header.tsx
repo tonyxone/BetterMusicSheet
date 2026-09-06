@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Logo } from "./logo";
+import { KeyboardIcon } from "./keyboard-icon";
 import { useAuth } from "./auth-context";
 import { isAuthConfigured } from "@/lib/auth";
 
@@ -20,7 +21,9 @@ export function Header() {
             them to sign in anyway (/play gates itself too, for direct hits). */}
         <Link
           href="/play"
-          className="nav-btn ghost"
+          className="nav-btn ghost icon-only"
+          title="Play with the keyboard"
+          aria-label="Play with the keyboard"
           onClick={(e) => {
             if (!loading && !user) {
               e.preventDefault();
@@ -28,7 +31,7 @@ export function Header() {
             }
           }}
         >
-          Play
+          <KeyboardIcon />
         </Link>
         <Link href="/history" className="nav-btn ghost">
           History

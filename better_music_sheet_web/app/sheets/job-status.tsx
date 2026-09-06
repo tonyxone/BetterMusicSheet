@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { clientApiFetch } from "@/lib/client-api";
 import { setAdsPaused } from "@/lib/ads";
 import { useAuth } from "../auth-context";
+import { KeyboardIcon } from "../keyboard-icon";
 import type { AnnotationJob } from "@/lib/api";
 
 const POLL_INTERVAL_MS = 2500;
@@ -118,7 +119,9 @@ function PlayLink({ jobId }: { jobId: string }) {
   return (
     <Link
       href={`/play?job=${jobId}`}
-      className="btn-pill ghost"
+      className="btn-pill ghost icon-only"
+      title="Play with the keyboard"
+      aria-label="Play with the keyboard"
       onClick={(e) => {
         if (!loading && !user) {
           e.preventDefault();
@@ -126,7 +129,7 @@ function PlayLink({ jobId }: { jobId: string }) {
         }
       }}
     >
-      Play
+      <KeyboardIcon size={20} />
     </Link>
   );
 }
