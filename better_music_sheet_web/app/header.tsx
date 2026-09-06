@@ -21,7 +21,7 @@ export function Header() {
             them to sign in anyway (/play gates itself too, for direct hits). */}
         <Link
           href="/play"
-          className="nav-btn ghost icon-only"
+          className="icon-link"
           title="Play with the keyboard"
           aria-label="Play with the keyboard"
           onClick={(e) => {
@@ -31,7 +31,7 @@ export function Header() {
             }
           }}
         >
-          <KeyboardIcon />
+          <KeyboardIcon size={32} />
         </Link>
         <Link href="/history" className="nav-btn ghost">
           History

@@ -119,7 +119,7 @@ function PlayLink({ jobId }: { jobId: string }) {
   return (
     <Link
       href={`/play?job=${jobId}`}
-      className="btn-pill ghost icon-only"
+      className="icon-link"
       title="Play with the keyboard"
       aria-label="Play with the keyboard"
       onClick={(e) => {
@@ -129,7 +129,7 @@ function PlayLink({ jobId }: { jobId: string }) {
         }
       }}
     >
-      <KeyboardIcon size={20} />
+      <KeyboardIcon size={30} />
     </Link>
   );
 }

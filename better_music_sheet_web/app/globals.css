@@ -336,9 +336,16 @@ details.options[open] summary::before { content: "▾ "; }
 /* The picker reuses .history-row, which is an <a> there and a <button> here. */
 button.history-row { width: 100%; font-family: inherit; cursor: pointer; text-align: left; }
 .play-gate-icon { font-size: 40px; margin-bottom: 14px; }
-/* Icon-only buttons: square off the pill padding so the glyph sits centred
-   rather than in a wide capsule sized for text. */
-.nav-btn.icon-only, .btn-pill.icon-only {
-  padding: 9px 13px; justify-content: center;
+/* An icon that IS the control - no pill, no border. Padding is kept so the
+   tap target stays a comfortable size even though nothing is drawn around
+   the glyph. */
+.icon-link {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 44px; min-height: 44px; padding: 6px;
+  background: none; border: none; border-radius: 12px;
+  color: var(--ink-soft); cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
 }
-.btn-pill.icon-only { display: inline-flex; align-items: center; }
+.icon-link:hover { color: var(--accent); background: var(--paper-deep); }
+.icon-link:active { color: var(--accent-deep); }
+.icon-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
