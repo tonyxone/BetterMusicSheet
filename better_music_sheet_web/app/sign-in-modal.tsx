@@ -135,7 +135,7 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
 
     if (view === "signup") {
       if (!name.trim()) {
-        setError("Please enter your name.");
+        setError("Please enter a display name.");
         return;
       }
       return run(async () => {
@@ -228,7 +228,7 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
 
           {view === "signup" && (
             <label className="modal-field">
-              <span>Name</span>
+              <span>Display name</span>
               <input
                 type="text"
                 autoComplete="name"
