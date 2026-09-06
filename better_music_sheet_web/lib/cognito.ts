@@ -37,14 +37,32 @@ export class CognitoError extends Error {
 }
 
 async function call(target: string, body: Record<string, unknown>) {
-  const res = await fetch(`https://cognito-idp.${REGION}.amazonaws.com/`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-amz-json-1.1",
-      "X-Amz-Target": `AWSCognitoIdentityProviderService.${target}`,
-    },
-    body: JSON.stringify({ ClientId: CLIENT_ID, ...body }),
-  });
+  if (!isCognitoConfigured) {
+    throw new CognitoError(
+      "NotConfigured",
+      "Sign-in isn't configured for this build (NEXT_PUBLIC_COGNITO_REGION / _CLIENT_ID).",
+    );
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(`https://cognito-idp.${REGION}.amazonaws.com/`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-amz-json-1.1",
+        "X-Amz-Target": `AWSCognitoIdentityProviderService.${target}`,
+      },
+      body: JSON.stringify({ ClientId: CLIENT_ID, ...body }),
+    });
+  } catch {
+    // fetch only rejects for transport-level failures, and the browser hides
+    // the reason - all we get is "Failed to fetch", which tells the user
+    // nothing. Name what we were trying to reach instead.
+    throw new CognitoError(
+      "NetworkError",
+      "Couldn't reach the sign-in service. Check your internet connection and try again.",
+    );
+  }
 
   const text = await res.text();
   const data = text ? JSON.parse(text) : {};
@@ -86,8 +104,13 @@ export async function refreshTokens(refreshToken: string): Promise<CognitoTokens
 /** Returns true when Cognito still needs the emailed code before this
  * account can sign in (the normal case for self sign-up). */
 export async function signUp(email: string, password: string, name: string): Promise<boolean> {
-  const attributes = [{ Name: "email", Value: email }];
-  if (name.trim()) attributes.push({ Name: "name", Value: name.trim() });
+  // The pool's `name` attribute can't be made required after creation
+  // (Cognito schema attributes are immutable), so sign-up enforces it here
+  // and always sends one.
+  const attributes = [
+    { Name: "email", Value: email },
+    { Name: "name", Value: name.trim() },
+  ];
   const data = await call("SignUp", {
     Username: email,
     Password: password,

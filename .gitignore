@@ -28,3 +28,6 @@ server.log
 # Claude Code session state (local-only, not meant for the public repo)
 .claude/
 /infra/
+
+# Local backend config (Cognito ids for local sign-in) - see .env.example
+.env

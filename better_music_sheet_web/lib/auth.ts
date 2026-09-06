@@ -55,12 +55,28 @@ function clearSession() {
 /** Trade a Cognito ID token for our backend's own token, plus the user row
  * it creates on first sign-in. */
 async function exchangeWithBackend(tokens: CognitoTokens, refreshToken: string | null): Promise<Session> {
-  const res = await fetch(`${API_BASE}/api/auth/token`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id_token: tokens.IdToken }),
-  });
-  if (!res.ok) throw new Error(`sign-in failed (${res.status})`);
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/auth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id_token: tokens.IdToken }),
+    });
+  } catch {
+    // Same reasoning as cognito.ts: a transport failure surfaces only as
+    // "Failed to fetch". Naming the address makes the usual local cause -
+    // the backend simply isn't running - obvious.
+    throw new Error(`Couldn't reach the app backend at ${API_BASE}. Is it running?`);
+  }
+  if (!res.ok) {
+    // The backend explains itself (an unconfigured user pool, Cognito
+    // unreachable); pass that through rather than just the status code.
+    const detail = await res
+      .json()
+      .then((d) => (typeof d?.detail === "string" ? d.detail : null))
+      .catch(() => null);
+    throw new Error(detail || `Sign-in failed (${res.status}).`);
+  }
   const data = await res.json();
   const session: Session = {
     token: data.access_token,

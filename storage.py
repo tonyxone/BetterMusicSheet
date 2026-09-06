@@ -39,6 +39,13 @@ def _output_key(user_id, sheet_name):
     return f"{user_id}/output/{_safe_stem(sheet_name)} (annotated).pdf"
 
 
+def _timeline_key(user_id, sheet_name):
+    """Playback timeline JSON (see ../timeline.py) - a sidecar to the
+    annotated PDF, stored the same way rather than in the database, since it
+    is per-sheet file content and not job state."""
+    return f"{user_id}/output/{_safe_stem(sheet_name)} (timeline).json"
+
+
 if IS_PRODUCTION:
     import os
 
@@ -52,6 +59,15 @@ if IS_PRODUCTION:
 
     def upload_output_pdf(user_id, local_path, sheet_name):
         _s3.upload_file(str(local_path), _BUCKET, _output_key(user_id, sheet_name))
+
+    def upload_output_timeline(user_id, local_path, sheet_name):
+        _s3.upload_file(str(local_path), _BUCKET, _timeline_key(user_id, sheet_name))
+
+    def download_output_timeline(user_id, sheet_name):
+        """(body, content_length) for the timeline JSON, streamed back through
+        this backend for the same reason the PDF is - see download_output_pdf."""
+        obj = _s3.get_object(Bucket=_BUCKET, Key=_timeline_key(user_id, sheet_name))
+        return obj["Body"], obj["ContentLength"]
 
     def download_output_pdf(user_id, sheet_name):
         """Returns (body, content_length) for the annotated PDF, to be
@@ -81,6 +97,12 @@ else:
 
     def upload_output_pdf(user_id, local_path, sheet_name):
         shutil.copyfile(local_path, _local_path(_output_key(user_id, sheet_name)))
+
+    def upload_output_timeline(user_id, local_path, sheet_name):
+        shutil.copyfile(local_path, _local_path(_timeline_key(user_id, sheet_name)))
+
+    def local_output_timeline_path(user_id, sheet_name):
+        return _local_path(_timeline_key(user_id, sheet_name))
 
     def local_output_path(user_id, sheet_name):
         """Local-only: server.py serves this file itself instead of

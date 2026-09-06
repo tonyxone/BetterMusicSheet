@@ -35,6 +35,7 @@ Endpoints:
     GET    /api/sheets/{job_id}/download   the annotated PDF, streamed through this backend either way
                                             (from S3 in production, from disk in local dev)
                                             (?inline=1 for in-browser preview instead of a forced download)
+    GET    /api/sheets/{job_id}/timeline   playback timeline JSON for the Play page (404 if none)
     GET    /api/music-sheets               this user's uploaded sheets, one row per sheet regardless of reprocess count
 
 The UI (static/index.html + static/config.js) is deployment-independent from
@@ -59,6 +60,7 @@ import queue
 import shutil
 import threading
 import time
+import traceback
 import unicodedata
 import uuid
 from pathlib import Path
@@ -68,7 +70,7 @@ from urllib.parse import quote
 import pymupdf
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -93,8 +95,31 @@ MAX_ACTIVE_JOBS_PER_USER = 3
 
 app = FastAPI(title="Music-Sheet Annotator API")
 
+@app.middleware("http")
+async def json_errors(request, call_next):
+    """Turn an unhandled exception into a JSON 500 the browser can actually read.
+
+    Starlette's own handler for an uncaught error returns a plain-text 500 from
+    *outside* the CORS middleware, so it carries no Access-Control-Allow-Origin
+    header. The browser then refuses to expose the response and reports a bare
+    "Failed to fetch" - which says nothing about what broke and looks like the
+    server is unreachable when it isn't. Registered before CORS below so it
+    sits inside it, and its response picks the headers up on the way out.
+    """
+    try:
+        return await call_next(request)
+    except Exception:
+        traceback.print_exc()
+        return JSONResponse(
+            {"detail": "Internal server error - see the server log for the traceback."},
+            status_code=500,
+        )
+
+
 # comma-separated list of allowed UI origins, e.g. "https://bettermusicsheet.com";
-# defaults to "*" (any origin) which is fine for local dev, not for production
+# defaults to "*" (any origin) which is fine for local dev, not for production.
+# Added last, so it is the outermost middleware and can attach headers to
+# whatever the handler above produces.
 _allowed = os.environ.get("ALLOWED_ORIGINS", "*")
 app.add_middleware(
     CORSMiddleware,
@@ -117,13 +142,20 @@ def _process(job_id):
         db.update_annotation_job(_jid, stage=msg)
 
     try:
+        timeline_file = job_dir / "timeline.json"
         n = annotate_pdf(
             job_dir / "input.pdf", job_dir / "annotated.pdf", job_dir / "work",
             style=job["style"], octave=job["octave"], font_size=job["font_size"],
             dpi=job["dpi"], auto_retry=job["auto_retry"], log=log,
+            timeline_path=timeline_file,
         )
         sheet = db.get_music_sheet(job["music_sheet_id"])
-        storage.upload_output_pdf(job["user_id"], job_dir / "annotated.pdf", sheet["sheet_name"] if sheet else job["music_sheet_id"])
+        sheet_name = sheet["sheet_name"] if sheet else job["music_sheet_id"]
+        storage.upload_output_pdf(job["user_id"], job_dir / "annotated.pdf", sheet_name)
+        # Best-effort, like its build: no timeline just means no Play mode for
+        # this sheet (GET /timeline 404s), never a failed job.
+        if timeline_file.exists():
+            storage.upload_output_timeline(job["user_id"], timeline_file, sheet_name)
         db.update_annotation_job(job_id, status="done", labeled_groups=n)
     except Exception as e:
         log(f"FAILED: {e}")
@@ -179,7 +211,9 @@ def me(user_id: str = Depends(get_signed_in_user_id)):
     if user is None:
         # Valid token, but the row is gone (e.g. table wiped between
         # deploys) - recreate lazily rather than 500ing on a live session.
-        db.create_user_if_missing(user_id, None, user_id)
+        # No name is passed: the token carries only the subject, and putting
+        # the id there would show the user a UUID where their name goes.
+        db.create_user_if_missing(user_id, None, None)
         user = db.get_user(user_id)
     return user
 
@@ -319,6 +353,35 @@ def job_download(job_id: str, inline: bool = False, user_id: str = Depends(get_c
         path, media_type="application/pdf", filename=filename,
         content_disposition_type=disposition,
     )
+
+
+@app.get("/api/sheets/{job_id}/timeline")
+def job_timeline(job_id: str, user_id: str = Depends(get_current_user_id)):
+    """Playback data for the Play page (see ../timeline.py): notes with beat
+    positions and MIDI numbers, plus per-measure page regions.
+
+    404 rather than 500 when a finished job has no timeline - building it is
+    best-effort (see run.py), so its absence is an expected state meaning
+    "Play mode isn't available for this sheet", not a server fault."""
+    job = _owned_job_or_404(job_id, user_id)
+    if job["status"] != "done":
+        raise HTTPException(409, f"job is '{job['status']}', not done yet")
+    sheet = db.get_music_sheet(job["music_sheet_id"])
+    sheet_name = sheet["sheet_name"] if sheet else job["music_sheet_id"]
+    if IS_PRODUCTION:
+        try:
+            body, content_length = storage.download_output_timeline(job["user_id"], sheet_name)
+        except Exception:
+            raise HTTPException(404, "no playback timeline for this sheet")
+        return StreamingResponse(
+            body.iter_chunks(chunk_size=65536),
+            media_type="application/json",
+            headers={"Content-Length": str(content_length)},
+        )
+    path = storage.local_output_timeline_path(job["user_id"], sheet_name)
+    if not path.exists():
+        raise HTTPException(404, "no playback timeline for this sheet")
+    return FileResponse(path, media_type="application/json")
 
 
 @app.get("/api/music-sheets")

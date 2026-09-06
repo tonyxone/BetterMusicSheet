@@ -122,21 +122,27 @@ def find_sparse_pages(omr_path, num_pages):
 
 def retry_sparse_pages(pdf_path, work_dir, counts, sparse_pages):
     """Re-run Audiveris at a higher DPI for just the flagged pages. Returns
-    {page: alternate_omr_path} for pages where the retry actually found more
-    notes than the original pass; pages where it didn't help are left alone."""
+    {page: {"omr": path, "mxl": path}} for pages where the retry actually found
+    more notes than the original pass; pages where it didn't help are left
+    alone.
+
+    Both halves of Audiveris's output are kept, not just the .omr: anything
+    reading rhythm from the MusicXML (see timeline.py) has to read the SAME
+    recognition pass this page's pixel data came from, or the two sources
+    disagree on note counts for exactly the pages that needed a retry."""
     overrides = {}
     for page in sparse_pages:
         print(f"  page {page}: only {counts[page]} noteheads detected (piece median "
               f"is much higher) - retrying at {RETRY_DPI} DPI ...")
         retry_dir = work_dir / f"_retry_p{page}"
         try:
-            _mxl, omr = run_audiveris(pdf_path, retry_dir, dpi=RETRY_DPI, sheets=[page])
+            mxl, omr = run_audiveris(pdf_path, retry_dir, dpi=RETRY_DPI, sheets=[page])
         except subprocess.CalledProcessError:
             print(f"    retry failed for page {page}; keeping the original recognition")
             continue
         new_count = len(load_sheet_heads(str(omr), page))
         if new_count > counts[page]:
-            overrides[page] = str(omr)
+            overrides[page] = {"omr": str(omr), "mxl": str(mxl)}
             print(f"    {counts[page]} -> {new_count} noteheads - using the retry for this page")
         else:
             print(f"    {new_count} noteheads, no better than the original - keeping the original")
@@ -144,9 +150,13 @@ def retry_sparse_pages(pdf_path, work_dir, counts, sparse_pages):
 
 
 def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font_size=6.5,
-                  dpi=None, auto_retry=True, log=print):
+                  dpi=None, auto_retry=True, log=print, timeline_path=None):
     """Run the full PDF -> Audiveris OMR -> annotated PDF pipeline. Shared by the
     CLI (main(), below) and the web API (server.py) so the two stay in sync.
+
+    ``timeline_path``: optional path to also write the playback timeline JSON
+    (see timeline.py). Best-effort - a failure there is logged and ignored, so
+    a bug in the playback data can never cost someone their annotated PDF.
 
     Returns the number of labeled beat-groups written to ``output``.
     """
@@ -177,6 +187,19 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
     records = build_records(str(pdf_path), str(omr), num_pages, style=style, octave=octave,
                              page_omr_overrides=page_overrides)
 
+    if timeline_path is not None:
+        try:
+            import json
+
+            from timeline import build_timeline
+            tl = build_timeline(str(pdf_path), str(mxl), str(omr), num_pages,
+                                page_omr_overrides=page_overrides)
+            Path(timeline_path).write_text(json.dumps(tl), encoding="utf-8")
+            log(f"[2b/3] Playback timeline: {len(tl['measures'])} measures, "
+                f"{len(tl['notes'])} notes")
+        except Exception as e:
+            log(f"[2b/3] Timeline build failed, Play mode unavailable for this sheet: {e}")
+
     log(f"[3/3] Rendering {output} ...")
     render(str(pdf_path), str(output), records, font_size=font_size)
     log(f"Done: {output} ({len(records)} labeled beat-groups)")
@@ -191,6 +214,8 @@ def main():
     ap.add_argument("--octave", action="store_true")
     ap.add_argument("--font-size", type=float, default=6.5)
     ap.add_argument("--work-dir", default="output")
+    ap.add_argument("--timeline", default=None,
+                     help="Also write the playback timeline JSON here (see timeline.py).")
     ap.add_argument("--dpi", type=int, default=None,
                      help="Override Audiveris's PDF rasterization DPI (default: Audiveris's own, "
                           "normally 300). Try 450-600 for pages where dense passages go unrecognized.")
@@ -203,7 +228,8 @@ def main():
     output = args.output or str(pdf_path.with_name(pdf_path.stem + " (annotated).pdf"))
 
     annotate_pdf(pdf_path, output, args.work_dir, style=args.style, octave=args.octave,
-                 font_size=args.font_size, dpi=args.dpi, auto_retry=not args.no_auto_retry)
+                 font_size=args.font_size, dpi=args.dpi, auto_retry=not args.no_auto_retry,
+                 timeline_path=args.timeline)
 
 
 if __name__ == "__main__":

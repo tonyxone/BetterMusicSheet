@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Logo } from "./logo";
+import { KeyboardIcon } from "./keyboard-icon";
 import { useAuth } from "./auth-context";
 import { isAuthConfigured } from "@/lib/auth";
 
@@ -15,6 +16,16 @@ export function Header() {
         <Logo />
       </Link>
       <nav className="flex items-center gap-3">
+        {/* Open to everyone: signed-out visitors get the first few measures,
+            and are asked to sign in only when they reach past them. */}
+        <Link
+          href="/play"
+          className="icon-link"
+          title="Play with the keyboard"
+          aria-label="Play with the keyboard"
+        >
+          <KeyboardIcon size={44} />
+        </Link>
         <Link href="/history" className="nav-btn ghost">
           History
         </Link>
@@ -22,7 +33,14 @@ export function Header() {
             signed in never sees "Sign in" flash first. Sign-in is optional -
             uploading works signed out - so this is the only auth UI. */}
         {loading ? null : user ? (
-          <UserMenu name={user.display_name} email={user.email} onSignOut={signOut} />
+          <UserMenu
+            // An account made before names were required may not have one.
+            // Fall back to the email rather than the id - a raw UUID where a
+            // name belongs just looks broken.
+            name={user.display_name || user.email || "Account"}
+            email={user.email}
+            onSignOut={signOut}
+          />
         ) : isAuthConfigured ? (
           <button type="button" className="nav-btn primary" onClick={openSignIn}>
             Sign in

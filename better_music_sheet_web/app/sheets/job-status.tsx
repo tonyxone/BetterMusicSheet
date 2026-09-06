@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { clientApiFetch } from "@/lib/client-api";
 import { setAdsPaused } from "@/lib/ads";
+import { KeyboardIcon } from "../keyboard-icon";
 import type { AnnotationJob } from "@/lib/api";
 
 const POLL_INTERVAL_MS = 2500;
@@ -98,6 +99,14 @@ export function JobStatus() {
         <div className="result-actions">
           <Link href="/" className="btn-pill ghost">
             Annotate another
+          </Link>
+          <Link
+            href={`/play?job=${jobId}`}
+            className="icon-link"
+            title="Play with the keyboard"
+            aria-label="Play with the keyboard"
+          >
+            <KeyboardIcon size={44} />
           </Link>
           <DownloadButton jobId={jobId} sheetName={job.sheet_name} />
         </div>

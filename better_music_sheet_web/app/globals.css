@@ -269,3 +269,116 @@ details.options[open] summary::before { content: "▾ "; }
   color: var(--accent); text-decoration: underline; cursor: pointer;
 }
 .modal-links button:hover { color: var(--accent-deep); }
+
+/* ---- Play page (sheet + keyboard) ---- */
+.play-view {
+  display: flex; flex-direction: column; height: calc(100vh - 88px);
+  max-width: 1400px; margin: 0 auto; padding: 16px 24px 0;
+}
+.play-sheet {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  background: var(--card); border: 1px solid var(--paper-deep); border-radius: 16px;
+  padding: 16px;
+}
+.sheet-pages { display: flex; flex-direction: column; gap: 16px; align-items: center; }
+/* Positioning root for the measure overlays, which are placed as percentages
+   of the page box so they track the canvas at any rendered size. */
+.sheet-page { position: relative; width: 100%; max-width: 900px; line-height: 0; }
+.sheet-page > canvas { width: 100%; height: auto; display: block; border-radius: 6px; }
+.measure-box {
+  position: absolute; border-radius: 4px; cursor: pointer;
+  border: 1px solid transparent; transition: background 0.12s, border-color 0.12s;
+}
+.measure-box:hover { background: rgba(217, 164, 65, 0.16); border-color: var(--gold); }
+/* The measure sounding right now, following the playback clock. */
+.measure-box.playing {
+  background: rgba(168, 60, 52, 0.20); border-color: var(--accent); border-style: solid;
+}
+
+.play-transport {
+  flex: none; display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  padding: 14px 4px;
+}
+.play-speed { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink-soft); }
+.play-speed input { accent-color: var(--accent); }
+.play-speed input:disabled { opacity: 0.5; }
+/* Icon toggles in the transport. Off reads as a plain outline; on fills so
+   the state is visible without a text label beside it. */
+.icon-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; padding: 0;
+  border: 1px solid var(--paper-deep); border-radius: 12px;
+  background: transparent; color: var(--ink-soft); cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+.icon-toggle:hover { border-color: var(--ink-soft); color: var(--ink); }
+.icon-toggle.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.icon-toggle.on:hover { background: var(--accent-deep); border-color: var(--accent-deep); }
+.icon-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.play-status { font-size: 14px; color: var(--ink); display: flex; align-items: center; gap: 8px; }
+.play-status.subtle { color: var(--ink-soft); }
+.play-clear {
+  background: none; border: none; padding: 0; font-family: inherit; font-size: 13.5px;
+  color: var(--accent); text-decoration: underline; cursor: pointer;
+}
+.play-keyboard {
+  flex: none; height: 200px; min-height: 200px; background: var(--paper-deep);
+  border-radius: 16px 16px 0 0; padding: 8px 12px 4px;
+}
+.keyboard-3d { width: 100%; height: 100%; position: relative; }
+/* Key names are HTML over the WebGL canvas, positioned by projecting each key
+   through the (fixed) camera - crisp at any size, and no per-key texture. */
+.key-labels { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.15s; }
+.key-labels.visible { opacity: 1; }
+.key-label {
+  position: absolute; transform: translate(-50%, -50%);
+  font-size: 8px; font-weight: 600; line-height: 1; letter-spacing: -0.02em;
+  color: #6b5847; white-space: nowrap;
+}
+.key-label.black { color: #cbb8a4; font-size: 7px; }
+.key-label.lit { color: #fff; }
+.play-hint { color: var(--ink-soft); padding: 24px; text-align: center; }
+.play-error { color: var(--danger); padding: 24px; text-align: center; }
+/* The picker reuses .history-row, which is an <a> there and a <button> here. */
+button.history-row { width: 100%; font-family: inherit; cursor: pointer; text-align: left; }
+.play-gate-icon { font-size: 40px; margin-bottom: 14px; }
+/* An icon that IS the control - no pill, no border. Padding is kept so the
+   tap target stays a comfortable size even though nothing is drawn around
+   the glyph. */
+.icon-link {
+  display: inline-flex; align-items: center; justify-content: center;
+  /* 45px matches the pill buttons beside it, so the row lines up even though
+     nothing is drawn around this one. */
+  min-width: 52px; min-height: 45px; padding: 4px 6px;
+  background: none; border: none; border-radius: 12px;
+  color: var(--ink); cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.icon-link:hover { color: var(--accent); background: var(--paper-deep); }
+.icon-link:active { color: var(--accent-deep); }
+.icon-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Measures a signed-out visitor can't play yet: dimmed rather than hidden, so
+   the limit is visible before it's reached. */
+.measure-box.locked { background: rgba(46, 33, 23, 0.06); }
+.measure-box.locked:hover { background: rgba(46, 33, 23, 0.12); border-color: var(--ink-soft); }
+/* Transport play/pause: a filled pill sized around the glyph rather than a
+   text label, so it stays square instead of stretching to a word's width. */
+.btn-pill.icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 48px; height: 48px; padding: 0; border-radius: 999px;
+}
+/* Playhead: a dashed line standing on whatever is sounding, stepping from
+   one onset to the next. The short transition softens the jump without
+   turning it into a sweep that would drift off the notes. */
+.playhead {
+  position: absolute; width: 0; pointer-events: none; z-index: 2;
+  border-left: 2px dashed var(--accent);
+  transition: left 0.09s linear, top 0.09s linear;
+}
+/* Scrub bar: drag to move the playhead; the sheet and keyboard follow. */
+.play-scrub { display: flex; align-items: center; gap: 12px; padding: 10px 4px 0; }
+.play-scrub input { flex: 1; accent-color: var(--accent); cursor: pointer; }
+.play-time {
+  font-size: 13px; color: var(--ink-soft); font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

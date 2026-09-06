@@ -83,6 +83,14 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
           return "That code has expired - request a new one.";
         case "LimitExceededException":
           return "Too many attempts. Wait a few minutes and try again.";
+        case "InvalidPasswordException":
+          return "That password doesn't meet the requirements below.";
+        case "UserNotConfirmedException":
+          return "This account still needs the emailed confirmation code.";
+        case "NetworkError":
+        case "NotConfigured":
+          // Already written for a human by cognito.ts.
+          return err.message;
         default:
           return err.message;
       }
@@ -126,6 +134,10 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
     }
 
     if (view === "signup") {
+      if (!name.trim()) {
+        setError("Please enter a display name.");
+        return;
+      }
       return run(async () => {
         const needsCode = await signUp(email, password, name);
         if (needsCode) {
@@ -216,8 +228,14 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
 
           {view === "signup" && (
             <label className="modal-field">
-              <span>Name <em>(optional)</em></span>
-              <input type="text" autoComplete="name" value={name} onChange={(e) => setName(e.target.value)} />
+              <span>Display name</span>
+              <input
+                type="text"
+                autoComplete="name"
+                required
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
             </label>
           )}
 
