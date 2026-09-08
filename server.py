@@ -92,6 +92,14 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
 
+# Bounds on the optional "force DPI" upload option. Rasterization cost grows
+# with the square of the DPI, so leaving this open-ended lets one upload eat
+# an unbounded slice of a shared worker. 300 is Audiveris's own default;
+# pages that genuinely need more get it from the automatic sparse-page retry
+# (run.py's RETRY_DPI), which is bounded to the pages that need it.
+MIN_DPI = 150
+MAX_DPI = 300
+
 app = FastAPI(title="Music-Sheet Annotator API")
 
 @app.middleware("http")
@@ -223,12 +231,15 @@ async def submit_sheet(
     style: str = Form("unicode", description="'unicode' (B♭) or 'ascii' (Bb)"),
     octave: bool = Form(False, description="Append octave number, e.g. B♭4"),
     font_size: float = Form(6.5),
-    dpi: Optional[int] = Form(None, description="Force Audiveris's rasterization DPI"),
+    dpi: Optional[int] = Form(None, description=f"Force Audiveris's rasterization DPI ({MIN_DPI}-{MAX_DPI})"),
     auto_retry: bool = Form(True, description="Auto re-scan under-recognized pages at higher DPI"),
     user_id: str = Depends(get_current_user_id),
 ):
     if style not in ("unicode", "ascii"):
         raise HTTPException(400, "style must be 'unicode' or 'ascii'")
+    # The form caps this too, but that's advisory - this is the real limit.
+    if dpi is not None and not (MIN_DPI <= dpi <= MAX_DPI):
+        raise HTTPException(400, f"dpi must be between {MIN_DPI} and {MAX_DPI}")
     ext = Path(file.filename).suffix.lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(400, "only PDF or image (JPG/PNG) uploads are supported")

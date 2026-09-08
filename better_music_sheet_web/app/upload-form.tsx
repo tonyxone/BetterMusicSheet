@@ -96,7 +96,7 @@ export function UploadForm() {
                 id="dpi"
                 type="number"
                 min={150}
-                max={1200}
+                max={300}
                 step={50}
                 placeholder="auto"
                 value={dpi}
