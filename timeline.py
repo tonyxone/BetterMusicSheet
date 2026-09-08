@@ -237,7 +237,7 @@ def build_timeline(pdf_path, mxl_path, omr_path, num_pages,
         groups.sort(key=lambda g: g['cx'])
 
     # --- notes + measure lengths, splicing any retried page's own export ---
-    main_notes, main_measures = musicxml.load_part_notes(mxl_path)
+    main_notes, main_measures = musicxml.load_score_notes(mxl_path)
     notes_by_measure = {}
     for n in main_notes:
         notes_by_measure.setdefault(n['measure_index'], []).append(n)
@@ -251,7 +251,7 @@ def build_timeline(pdf_path, mxl_path, omr_path, num_pages,
             # This page was re-recognized on its own; take its measures whole
             # rather than the main pass's version of the same page.
             try:
-                r_notes, r_measures = musicxml.load_part_notes(override['mxl'])
+                r_notes, r_measures = musicxml.load_score_notes(override['mxl'])
                 r_by_measure = {}
                 for n in r_notes:
                     r_by_measure.setdefault(n['measure_index'], []).append(n)

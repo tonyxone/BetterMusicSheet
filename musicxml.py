@@ -51,34 +51,24 @@ def _int_text(el, default=0):
         return default
 
 
-def load_part_notes(mxl_path):
-    """Parse one part's notes with rhythm.
+def _parse_part(part, part_ordinal, default_staff):
+    """One <part>'s pitched notes and per-measure lengths.
 
-    Returns (notes, measures):
-
-      notes    - one dict per PITCHED note (rests dropped), in document order:
-                 {measure_index, staff, step, octave, alter,
-                  start_beat_in_measure, duration_beats, is_grace}
-      measures - one dict per measure:
-                 {measure_index, label, length_beats, nominal_length_beats,
-                  content_length_beats} - length_beats is the one to sequence
-                 with; the other two are kept for diagnosing bad recognition
+    Measures are keyed by their own ``number`` label rather than by position:
+    parts hold different subsets of the score's measures, so position means
+    nothing across parts (see load_score_notes).
 
     Beats are quarter-note units throughout (MusicXML's <divisions> is ticks
     per quarter note, and it can change mid-piece, so every duration is
     converted at the point it is read rather than once globally).
     """
-    root = _score_root(mxl_path)
-    part = root.find("{*}part")
-    if part is None:
-        raise ValueError(f"no <part> in {mxl_path}")
-
     notes = []
     measures = []
     divisions = 1          # ticks per quarter note, until <attributes> says otherwise
     beats, beat_type = 4, 4  # time signature, until <time> says otherwise
 
-    for m_index, measure in enumerate(part.findall("{*}measure")):
+    for measure in part.findall("{*}measure"):
+        label = measure.get("number") or str(len(measures) + 1)
         cursor = 0          # ticks from the start of this measure
         max_cursor = 0      # high-water mark, since <backup> rewinds it
         # start tick of the last non-chord note, so <chord/> members can share it
@@ -115,9 +105,14 @@ def load_part_notes(mxl_path):
                     pitch = el.find("{*}pitch")
                     if pitch is not None:
                         notes.append({
-                            "measure_index": m_index,
-                            "staff": _int_text(el.find("{*}staff"), 1),
-                            "voice": _int_text(el.find("{*}voice"), 1),
+                            "label": label,
+                            "staff": _int_text(el.find("{*}staff"), default_staff),
+                            # Offset per part, so two parts' voice 1 stay two
+                            # voices once merged. timeline.py keys note-to-
+                            # notehead matching on (onset, voice), and
+                            # collapsing them would undercount against the OMR
+                            # side and cost the measure its highlight positions.
+                            "voice": part_ordinal * 100 + _int_text(el.find("{*}voice"), 1),
                             "step": (pitch.findtext("{*}step") or "C").strip(),
                             "octave": _int_text(pitch.find("{*}octave"), 4),
                             "alter": _int_text(pitch.find("{*}alter"), 0),
@@ -133,10 +128,116 @@ def load_part_notes(mxl_path):
                     cursor += dur_ticks
                     max_cursor = max(max_cursor, cursor)
 
-        nominal = beats * 4.0 / beat_type
-        content = max_cursor / divisions
+        measures.append({
+            "label": label,
+            "nominal_length_beats": beats * 4.0 / beat_type,
+            "content_length_beats": max_cursor / divisions,
+        })
 
-        if m_index == 0 and 0 < content < nominal:
+    return notes, measures
+
+
+def _merge_label_order(sequences):
+    """A single measure order that respects every part's own sequence.
+
+    Not a sort: the labels are usually integers, but Audiveris also emits
+    things like "X1" for irregular measures, and sorting would strand those at
+    one end. Instead the longest part supplies the spine, and any label missing
+    from it is spliced in where the part that does have it puts it.
+    """
+    sequences = [s for s in sequences if s]
+    if not sequences:
+        return []
+    spine = list(max(sequences, key=len))
+    for seq in sequences:
+        pos = -1
+        for label in seq:
+            if label in spine:
+                pos = spine.index(label)
+            else:
+                pos += 1
+                spine.insert(pos, label)
+    return spine
+
+
+def load_score_notes(mxl_path):
+    """Parse the whole score's notes with rhythm, across every <part>.
+
+    Returns (notes, measures):
+
+      notes    - one dict per PITCHED note (rests dropped), in time order:
+                 {measure_index, staff, voice, step, octave, alter,
+                  start_beat_in_measure, duration_beats, is_grace}
+      measures - one dict per measure:
+                 {measure_index, label, length_beats, nominal_length_beats,
+                  content_length_beats} - length_beats is the one to sequence
+                 with; the other two are kept for diagnosing bad recognition
+
+    Every part is merged, not just the first. Audiveris does not reliably
+    export a piano score as a single part: where a score's systems disagree
+    about staff count it invents extra parts (logging "dummyPart") and
+    scatters the measures between them. A real example from this project
+    exported three parts - two near-empty "Voice" parts holding 24 and 8
+    notes, and a "Piano" part holding 701 - covering *different* measures, so
+    reading only the first part yielded 24 notes for a 733-note piece and
+    playback was silent everywhere but one measure.
+
+    Parts are merged rather than chosen between: no one part is guaranteed to
+    be complete, and for piano - the only thing this project handles -
+    everything on the page is meant to sound together anyway.
+    """
+    root = _score_root(mxl_path)
+    parts = root.findall("{*}part")
+    if not parts:
+        raise ValueError(f"no <part> in {mxl_path}")
+
+    parsed = []
+    staffless = 0
+    for ordinal, part in enumerate(parts):
+        if part.find(".//{*}staff") is not None:
+            default_staff = 1
+        else:
+            # A part whose notes never say which staff they sit on is one
+            # Audiveris failed to fold into a grand staff. Such parts come out
+            # top-to-bottom, so the first is the right hand and the second the
+            # left. This only decides the highlight colour - a wrong guess
+            # costs nothing else.
+            default_staff = 2 if staffless % 2 else 1
+            staffless += 1
+        parsed.append(_parse_part(part, ordinal, default_staff))
+
+    order = _merge_label_order([[m["label"] for m in ms] for _, ms in parsed])
+    index_of = {label: i for i, label in enumerate(order)}
+
+    notes = []
+    # Merged per measure: parts can disagree about a measure's length, and the
+    # longest reading is the one that doesn't truncate somebody's notes.
+    lengths = [{"nominal": 0.0, "content": 0.0} for _ in order]
+
+    for part_notes, part_measures in parsed:
+        for n in part_notes:
+            index = index_of.get(n.pop("label"))
+            if index is None:
+                continue
+            n["measure_index"] = index
+            notes.append(n)
+        for m in part_measures:
+            index = index_of.get(m["label"])
+            if index is None:
+                continue
+            lengths[index]["nominal"] = max(lengths[index]["nominal"],
+                                            m["nominal_length_beats"])
+            lengths[index]["content"] = max(lengths[index]["content"],
+                                            m["content_length_beats"])
+
+    notes.sort(key=lambda n: (n["measure_index"], n["start_beat_in_measure"]))
+
+    measures = []
+    for index, label in enumerate(order):
+        nominal = lengths[index]["nominal"] or 4.0
+        content = lengths[index]["content"]
+
+        if index == 0 and 0 < content < nominal:
             # Pickup/anacrusis: MusicXML has no explicit flag for it, so a
             # first measure simply holding less than the time signature allows
             # is taken at its actual length.
@@ -144,17 +245,18 @@ def load_part_notes(mxl_path):
         else:
             # max(), not nominal, and not content:
             #  - content > nominal happens for real (Audiveris misreads time
-            #    signatures; this very file parses as 7/8 while its measures
-            #    hold 4 quarter-notes). Using nominal there would overlap every
-            #    measure into the next one, compounding down the piece.
+            #    signatures; one file in this project parses as 7/8 while its
+            #    measures hold 4 quarter-notes). Using nominal there would
+            #    overlap every measure into the next one, compounding down the
+            #    piece.
             #  - content < nominal is usually a dropped/unrecognized note, so
             #    nominal keeps the grid honest instead of letting the piece
             #    shrink measure by measure.
             length = max(nominal, content)
 
         measures.append({
-            "measure_index": m_index,
-            "label": measure.get("number") or str(m_index + 1),
+            "measure_index": index,
+            "label": label,
             "length_beats": length,
             "nominal_length_beats": nominal,
             "content_length_beats": content,
