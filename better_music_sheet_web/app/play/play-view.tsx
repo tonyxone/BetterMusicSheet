@@ -17,7 +17,7 @@ import { clientApiFetch } from "@/lib/client-api";
 import { useAuth } from "../auth-context";
 import type { AnnotationJob } from "@/lib/api";
 import type { Timeline, TimelineNote } from "@/lib/timeline";
-import { SynthEngine } from "./synth";
+import { GRACE_SECONDS, SynthEngine } from "./synth";
 import { Playback } from "./playback";
 
 // ssr:false is required, not just an optimization: both touch WebGL/Worker
@@ -30,12 +30,101 @@ const SheetCanvas = dynamic(() => import("./sheet-canvas"), {
   ssr: false,
   loading: () => <p className="play-hint">Loading the sheet…</p>,
 });
+const NoteRoll = dynamic(() => import("./note-roll"), {
+  ssr: false,
+  loading: () => <div className="note-roll" />,
+});
 
 function PlayIcon() {
   return (
     <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true">
       <path d="M8 5.5a1 1 0 0 1 1.53-.85l9 6.5a1 1 0 0 1 0 1.7l-9 6.5A1 1 0 0 1 8 18.5z" />
     </svg>
+  );
+}
+
+/** Step forward: the play triangle stopped against a bar. */
+function StepForwardIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true">
+      <path d="M6.5 5.8 15.6 12 6.5 18.2z" />
+      <rect x="16.6" y="5.6" width="2.5" height="12.8" rx="1.1" />
+    </svg>
+  );
+}
+
+/** Its mirror image, so the pair reads as one control. */
+function StepBackIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true">
+      <path d="M17.5 5.8 8.4 12 17.5 18.2z" />
+      <rect x="4.9" y="5.6" width="2.5" height="12.8" rx="1.1" />
+    </svg>
+  );
+}
+
+/** A disclosure triangle; rotated by CSS when its panel is open. */
+function ChevronIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true">
+      <path d="M9 5.5 16.5 12 9 18.5z" />
+    </svg>
+  );
+}
+
+/** One collapsible section of the page.
+ *
+ * Both sections share the space left over by the transport and keyboard, in
+ * proportion to `grow`. Collapsing one gives its room to the other rather
+ * than leaving a hole, which is the whole point: the sheet and the falling
+ * notes are two ways of reading the same thing, and how much of each you want
+ * changes as you practise. */
+function Panel({
+  title,
+  label,
+  open,
+  onToggle,
+  grow,
+  flush = false,
+  dark = false,
+  children,
+}: {
+  /** Shown in the header. Omit for a panel whose content speaks for itself -
+   * the chevron alone is then the whole header. */
+  title?: string;
+  /** Accessible name when there is no visible title. */
+  label?: string;
+  open: boolean;
+  onToggle: () => void;
+  grow: number;
+  /** Skip the inner padding, for a child that paints to its own edges. */
+  flush?: boolean;
+  /** Dark surface, for the note roll. */
+  dark?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <section
+      className={`play-panel${open ? " open" : ""}${dark ? " dark" : ""}`}
+      // Only a growing panel needs a basis of 0; a closed one is sized by its
+      // header alone, so it must not grow at all.
+      style={open ? { flex: `${grow} 1 0` } : { flex: "none" }}
+    >
+      <button
+        type="button"
+        className="play-panel-head"
+        onClick={onToggle}
+        aria-expanded={open}
+        aria-label={title ?? label}
+      >
+        <ChevronIcon />
+        {title && <span>{title}</span>}
+      </button>
+      {/* Unmounted rather than hidden when closed: the roll runs an animation
+          frame loop and the sheet holds a pdf.js document, and neither should
+          keep working behind a collapsed header. */}
+      {open && <div className={`play-panel-body${flush ? " flush" : ""}`}>{children}</div>}
+    </section>
   );
 }
 
@@ -346,6 +435,108 @@ function Player({ jobId }: { jobId: string }) {
     playWholePiece();
   }, [timeline, playWholePiece]);
 
+  const [sheetOpen, setSheetOpen] = useState(true);
+  const [rollOpen, setRollOpen] = useState(true);
+
+  /** Whether a step has placed the playhead yet - see step(). */
+  const steppedRef = useRef(false);
+
+  // The roll reads the position every animation frame, so it can't go through
+  // React state - and a plain closure over `beat` would go stale. A ref keeps
+  // one stable callback pointing at the current value.
+  const beatRef = useRef(beat);
+  useEffect(() => {
+    beatRef.current = beat;
+  }, [beat]);
+  /** Live position for the roll: the audio clock while playing, and the
+   * paused/scrubbed position otherwise (Playback.seek keeps that current). */
+  const getBeat = useCallback(
+    () => playbackRef.current?.currentBeat ?? beatRef.current,
+    [],
+  );
+
+  /** Every distinct onset in the piece, in order - the stops the step buttons
+   * walk between. Onsets rather than metrical beats: what you want to land
+   * on is the next thing that is actually struck, which in a run of 16ths is
+   * four times a beat and during a held chord is not on the next beat at all. */
+  const onsetBeats = useMemo(() => {
+    if (!timeline) return [];
+    return [...new Set(timeline.notes.map((n) => n.start_beat))].sort((a, b) => a - b);
+  }, [timeline]);
+
+  /** Move one onset and stop there. Nothing runs on afterwards - this is for
+   * walking a passage a note at a time. */
+  const step = useCallback((direction: 1 | -1) => {
+    if (!timeline) return;
+    // Must happen inside the click: this may be the first gesture on the
+    // page, and the AudioContext can only start from one.
+    const pb = ensurePlayback(timeline);
+    // Stepping is a deliberate stop-and-look, so a running playback gives way
+    // rather than the two fighting over the position.
+    if (pb.isPlaying) {
+      pb.pause();
+      setPlaying(false);
+    }
+
+    let next: number | undefined;
+    if (direction > 0) {
+      // The first press lands *on* the opening onset instead of past it: the
+      // playhead starts at beat 0 and so does the first note, so "the next
+      // onset after here" would skip it. Wraps to the start once past the
+      // last onset, so the button never goes dead.
+      next =
+        !steppedRef.current && beat <= (onsetBeats[0] ?? 0) + 1e-6
+          ? onsetBeats[0]
+          : onsetBeats.find((b) => b > beat + 1e-6) ?? onsetBeats[0];
+    } else {
+      // Strictly before the current position, so pausing part-way through a
+      // note steps back to the onset you are inside rather than past it to
+      // the one before. Clamps at the first onset instead of wrapping round
+      // to the end - back at the start of a piece is a mis-click far more
+      // often than it is a request to jump to the last bar.
+      for (let i = onsetBeats.length - 1; i >= 0; i--) {
+        if (onsetBeats[i] < beat - 1e-6) {
+          next = onsetBeats[i];
+          break;
+        }
+      }
+      next = next ?? onsetBeats[0];
+    }
+    if (next === undefined) return;
+    steppedRef.current = true;
+
+    const measure = measureIndexAt(timeline, next);
+    if (measure !== null && isLocked(measure)) {
+      openSignIn();
+      return;
+    }
+
+    // seek() sets the paused position and pushes the highlight/measure for
+    // it, so a later Play carries on from where the stepping left off.
+    pb.seek(next);
+
+    const synth = synthRef.current;
+    const ctx = ctxRef.current;
+    if (synth && ctx) {
+      // Only what is *struck* here sounds. Notes still ringing from an
+      // earlier onset stay lit on the keyboard but aren't re-hammered.
+      const struck = timeline.notes.filter((n) => Math.abs(n.start_beat - next) < 1e-6);
+      const secondsPerBeat = 60 / (timeline.tempo_bpm_default || 96) / (speed || 1);
+      const at = ctx.currentTime + 0.02;
+      synth.allOff(); // stepping quickly shouldn't pile voices up
+      for (const n of struck) {
+        const beats = n.is_grace || n.duration_beats <= 0 ? 0 : n.duration_beats;
+        // Capped: a whole note held for its full written length just drones
+        // while you're reading the next one.
+        const seconds = beats > 0 ? Math.min(1.5, beats * secondsPerBeat) : GRACE_SECONDS;
+        synth.noteOn(n.midi, at, at + Math.max(GRACE_SECONDS, seconds));
+      }
+    }
+  }, [timeline, ensurePlayback, onsetBeats, beat, isLocked, openSignIn, speed]);
+
+  const handleStepBack = useCallback(() => step(-1), [step]);
+  const handleStepForward = useCallback(() => step(1), [step]);
+
   /** Drag the playhead. Locked regions clamp back to the free part and ask
    * for a sign-in, so scrubbing can't be used to walk past the preview. */
   const handleScrub = useCallback(
@@ -396,16 +587,17 @@ function Player({ jobId }: { jobId: string }) {
 
   return (
     <div className="play-view">
-      <div className="play-sheet">
+      <Panel title="Sheet" open={sheetOpen} onToggle={() => setSheetOpen((v) => !v)} grow={1}>
         <SheetCanvas
           pdfData={pdfData}
           measures={timeline.measures}
           playingIndex={playingMeasure}
           lockedFromIndex={lockedFrom}
-          activeNotes={activeNotes}
+          notes={timeline.notes}
+          beat={beat}
           onMeasureClick={handleMeasureClick}
         />
-      </div>
+      </Panel>
 
       <div className="play-scrub">
         <input
@@ -437,6 +629,22 @@ function Player({ jobId }: { jobId: string }) {
           aria-label={playing ? "Pause" : "Play"}
         >
           {playing ? <PauseIcon /> : <PlayIcon />}
+        </button>
+        <button
+          className="btn-pill icon"
+          onClick={handleStepBack}
+          title="Previous note"
+          aria-label="Step to the previous note"
+        >
+          <StepBackIcon />
+        </button>
+        <button
+          className="btn-pill icon"
+          onClick={handleStepForward}
+          title="Next note"
+          aria-label="Step to the next note"
+        >
+          <StepForwardIcon />
         </button>
         <label className="play-speed">
           Speed
@@ -480,6 +688,21 @@ function Player({ jobId }: { jobId: string }) {
 
 
       </div>
+
+      <Panel
+        label="Falling notes"
+        open={rollOpen}
+        onToggle={() => setRollOpen((v) => !v)}
+        grow={1}
+        flush
+        dark
+      >
+        <NoteRoll
+          timeline={timeline}
+          getBeat={getBeat}
+          lockedFromBeat={lockedFrom === null ? null : freeEndBeat}
+        />
+      </Panel>
 
       <div className="play-keyboard">
         <Keyboard3D

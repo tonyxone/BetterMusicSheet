@@ -20,87 +20,30 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
+import {
+  BLACK_W,
+  COLOR_LEFT,
+  COLOR_RIGHT,
+  FIRST_MIDI,
+  FRUSTUM_MARGIN,
+  GAP,
+  LAST_MIDI,
+  WHITE_W,
+  isBlackKey,
+  keyLayout,
+  noteName,
+} from "./keyboard-layout";
 
-const FIRST_MIDI = 21; // A0
-const LAST_MIDI = 108; // C8
-
-const BLACK_CLASSES = new Set([1, 3, 6, 8, 10]);
-const NOTE_NAMES = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"];
-
-// White key = 1 unit wide. Real ratios: 2.4cm vs 1.4cm wide, 15cm vs 9cm long.
-const WHITE_W = 1;
 const WHITE_D = 6.25;
 const WHITE_H = 0.55;
-const BLACK_W = 0.583;
 const BLACK_D = 3.75;
 const BLACK_H = 0.95;
-const GAP = 0.055; // hairline between white keys
 
 const COLOR_WHITE = 0xfbf9f4;
 const COLOR_BLACK = 0x1c1613;
-// One colour per hand, so you can see at a glance which hand plays what.
-const COLOR_RIGHT = 0x2f6fb5; // right hand (top staff)
-const COLOR_LEFT = 0x3e8e5a;  // left hand
 /** How much of the hand colour to mix into the key. Enough to read clearly at
  * a glance while still leaving the key itself visible underneath. */
 const HIGHLIGHT_MIX = 0.7;
-const COLOR_FELT = 0x8c2f2a;
-
-export function isBlackKey(midi: number) {
-  return BLACK_CLASSES.has(((midi % 12) + 12) % 12);
-}
-
-export function noteName(midi: number, withOctave = false) {
-  const pc = ((midi % 12) + 12) % 12;
-  return NOTE_NAMES[pc] + (withOctave ? String(Math.floor(midi / 12) - 1) : "");
-}
-
-/** Key centres in white-key units, measured from the left edge of the board.
- *
- * White keys tile evenly. Each black key is placed by the "twelve equal
- * divisions at the back of the octave" rule described above, which is what
- * produces the familiar uneven look of the 2- and 3-key groups. */
-function keyLayout() {
-  const centers = new Map<number, number>();
-  let whiteIndex = 0;
-
-  for (let midi = FIRST_MIDI; midi <= LAST_MIDI; midi++) {
-    if (!isBlackKey(midi)) {
-      centers.set(midi, whiteIndex + 0.5);
-      whiteIndex++;
-    }
-  }
-
-  for (let midi = FIRST_MIDI; midi <= LAST_MIDI; midi++) {
-    if (!isBlackKey(midi)) continue;
-    // Anchor on the C of this key's octave when it exists, else on the
-    // neighbouring white key, so the bottom of the board (which starts at A0)
-    // is laid out on the same rule as everywhere else.
-    const pc = ((midi % 12) + 12) % 12;
-    const belowWhite = centers.get(midi - 1);
-    const aboveWhite = centers.get(midi + 1);
-    if (belowWhite === undefined || aboveWhite === undefined) {
-      centers.set(midi, (belowWhite ?? aboveWhite ?? 0) + (belowWhite === undefined ? -0.5 : 0.5));
-      continue;
-    }
-    const boundary = (belowWhite + aboveWhite) / 2;
-    // Offset from that boundary, in white-key units. An octave is 7 white
-    // keys wide and its twelve semitones are equally spaced at the back, so
-    // semitone n is centred at (n + 0.5) * 7/12; the offset is that minus the
-    // white-key boundary it sits over. Hence the familiar look: C# and F#
-    // lean left, A# leans right, G# sits nearly centred.
-    const OFFSET: Record<number, number> = {
-      1: -1 / 8,    // C#  centre 0.875 vs boundary 1
-      3: 1 / 24,    // D#  centre 2.042 vs boundary 2
-      6: -5 / 24,   // F#  centre 3.792 vs boundary 4
-      8: -1 / 24,   // G#  centre 4.958 vs boundary 5
-      10: 1 / 8,    // A#  centre 6.125 vs boundary 6
-    };
-    centers.set(midi, boundary + (OFFSET[pc] ?? 0));
-  }
-
-  return { centers, whiteCount: whiteIndex };
-}
 
 /** A white key with its front edge rounded, so it reads as a key rather than
  * a slab. Extruded along Y, then laid flat. */
@@ -127,10 +70,39 @@ function whiteKeyGeometry() {
   return geo;
 }
 
+/** A black key, built the same way as the white one - extruded from a
+ * rounded-front outline, then bevelled - rather than a plain box. A sharp-
+ * edged box under directional light only ever shows two flat tones (top,
+ * side), which reads as a painted rectangle next to the white keys' rounded,
+ * highlight-catching edges. The bevel is what a box can't fake: it puts a
+ * curved strip of varying normals along every edge, which is what a light
+ * source needs to draw a highlight line at all. */
 function blackKeyGeometry() {
-  const geo = new THREE.BoxGeometry(BLACK_W, BLACK_H, BLACK_D);
+  const w = BLACK_W;
+  const d = BLACK_D;
+  const r = 0.07;
+  const s = new THREE.Shape();
+  s.moveTo(-w / 2, -d / 2 + r);
+  s.lineTo(-w / 2, d / 2);
+  s.lineTo(w / 2, d / 2);
+  s.lineTo(w / 2, -d / 2 + r);
+  s.quadraticCurveTo(w / 2, -d / 2, w / 2 - r, -d / 2);
+  s.lineTo(-w / 2 + r, -d / 2);
+  s.quadraticCurveTo(-w / 2, -d / 2, -w / 2, -d / 2 + r);
+  const geo = new THREE.ExtrudeGeometry(s, {
+    depth: BLACK_H,
+    bevelEnabled: true,
+    bevelThickness: 0.022,
+    bevelSize: 0.016,
+    bevelSegments: 2,
+  });
+  geo.rotateX(-Math.PI / 2);
+  // Extrude spans local Y 0..BLACK_H; recentre on 0 so the existing mesh
+  // placement below (which offsets by half the key's height, as it did for
+  // the old centred BoxGeometry) doesn't need to change.
+  geo.translate(0, -BLACK_H / 2, 0);
   // Taper the top slightly, the way a real black key narrows toward its top
-  // face - catches the light instead of reading as a flat brick.
+  // face - the bevel alone doesn't produce this, it only rounds the edges.
   const pos = geo.attributes.position;
   for (let i = 0; i < pos.count; i++) {
     if (pos.getY(i) > 0) {
@@ -185,15 +157,6 @@ export function Keyboard3D({
     const rim = new THREE.DirectionalLight(0xffe9c8, 0.5);
     rim.position.set(12, 10, -14);
     scene.add(rim);
-
-    // Felt strip along the back, as on a real instrument - also hides the gap
-    // where the black keys meet the back rail.
-    const felt = new THREE.Mesh(
-      new THREE.BoxGeometry(spanX + 0.5, 0.34, 0.75),
-      new THREE.MeshStandardMaterial({ color: COLOR_FELT, roughness: 1 }),
-    );
-    felt.position.set(0, WHITE_H / 2, -WHITE_D / 2 - 0.3);
-    scene.add(felt);
 
     const whiteGeo = whiteKeyGeometry();
     const blackGeo = blackKeyGeometry();
@@ -251,21 +214,58 @@ export function Keyboard3D({
     };
     layoutLabelsRef.current = layoutLabels;
 
+    // How tall the board actually is once this camera has looked at it, in
+    // world units along the camera's own up axis.
+    //
+    // Measured rather than assumed: it depends on the key depth, the black
+    // keys' height and the camera's tilt all at once, and any hand-written
+    // number would quietly stop being true the first time one of those
+    // changed. Computed from the key meshes alone - Box3.setFromObject over
+    // the whole scene would include the lights, which sit far outside it.
+    camera.updateMatrixWorld();
+    const bounds = new THREE.Box3();
+    keys.forEach((mesh) => bounds.expandByObject(mesh));
+    let minV = Infinity;
+    let maxV = -Infinity;
+    const corner = new THREE.Vector3();
+    for (const x of [bounds.min.x, bounds.max.x]) {
+      for (const y of [bounds.min.y, bounds.max.y]) {
+        for (const z of [bounds.min.z, bounds.max.z]) {
+          // View space, not NDC: NDC would depend on the frustum height this
+          // is being used to choose, which is circular.
+          corner.set(x, y, z).applyMatrix4(camera.matrixWorldInverse);
+          minV = Math.min(minV, corner.y);
+          maxV = Math.max(maxV, corner.y);
+        }
+      }
+    }
+    const boardHeight = Math.max(0.001, maxV - minV);
+    const boardCenter = (minV + maxV) / 2;
+    const halfW = spanX / 2 + FRUSTUM_MARGIN;
+
+    // Let the board decide the element's shape. Without this the host has to
+    // guess a height, and any guess leaves dead space above the keys - which
+    // is exactly the gap the falling notes would have to cross before
+    // reaching them. Scale-invariant, so it never needs recomputing.
+    mount.style.aspectRatio = `${2 * halfW} / ${boardHeight}`;
+
     const resize = () => {
       const w = mount.clientWidth || 1;
       const h = mount.clientHeight || 1;
-      // updateStyle must stay on: with a devicePixelRatio above 1 the
-      // drawing buffer is larger than the element, and without a matching
-      // CSS size the canvas displays at buffer size and gets clipped.
-      renderer.setSize(w, h);
+      // updateStyle off: the canvas is sized by CSS (see .keyboard-3d >
+      // canvas). Letting three.js write an inline height instead would hold
+      // the element open at that height, defeating the aspect-ratio below and
+      // leaving dead space above the keys.
+      renderer.setSize(w, h, false);
       // Fit the board horizontally; height follows the element's aspect so
-      // keys never distort.
-      const halfW = spanX / 2 + 0.8;
+      // keys never distort. With the aspect above that lands exactly on the
+      // board; if the host overrides it, the board stays centred and
+      // undistorted rather than stretching to fill.
       const halfH = (halfW * h) / w;
       camera.left = -halfW;
       camera.right = halfW;
-      camera.top = halfH;
-      camera.bottom = -halfH;
+      camera.top = boardCenter + halfH;
+      camera.bottom = boardCenter - halfH;
       camera.updateProjectionMatrix();
       render();
       layoutLabels();
@@ -279,8 +279,6 @@ export function Keyboard3D({
       ro.disconnect();
       whiteGeo.dispose();
       blackGeo.dispose();
-      felt.geometry.dispose();
-      (felt.material as THREE.Material).dispose();
       keys.forEach((m) => (m.material as THREE.Material).dispose());
       renderer.dispose();
       if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement);

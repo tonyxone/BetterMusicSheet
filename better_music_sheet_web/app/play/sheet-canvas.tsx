@@ -42,7 +42,8 @@ export function SheetCanvas({
   measures,
   playingIndex,
   lockedFromIndex,
-  activeNotes,
+  notes,
+  beat,
   onMeasureClick,
 }: {
   pdfData: ArrayBuffer;
@@ -52,8 +53,11 @@ export function SheetCanvas({
   /** First measure a signed-out visitor can't play, or null when unrestricted.
    * Shown dimmed so the limit is visible before it's hit. */
   lockedFromIndex: number | null;
-  /** Notes sounding right now, marked on the sheet. */
-  activeNotes: TimelineNote[];
+  /** Every note in the piece - the playhead is placed from the onsets, not
+   * from whatever happens to be sounding. */
+  notes: TimelineNote[];
+  /** Playback position, in beats. */
+  beat: number;
   onMeasureClick: (index: number) => void;
 }) {
   const [pages, setPages] = useState<PageInfo[]>([]);
@@ -178,39 +182,70 @@ export function SheetCanvas({
     }
   }, [playingIndex]);
 
-  /** A single vertical line at whatever is sounding, spanning the staves of
-   * that measure. It steps from onset to onset rather than sweeping: the x
-   * comes from the noteheads themselves, so it lands on the notes instead of
-   * drifting between them at a constant rate.
+  /** Every onset in the piece, in time order, with the position the playhead
+   * takes while that onset is the most recent one.
+   *
+   * Built from onsets rather than from what is sounding, which is what an
+   * earlier version did: a held note stays in the sounding set long after it
+   * was struck, so averaging over that set drags the line backwards every
+   * time a shorter note in the other hand releases. An onset, once passed,
+   * stays passed - so the line can only advance as the beat does.
    *
    * For notes the backend couldn't match to a notehead, the position is
    * interpolated across the measure - approximate, but it keeps the line
    * moving instead of dropping out. */
-  const playhead = useMemo(() => {
-    if (!activeNotes.length) return null;
+  const onsets = useMemo(() => {
     const byMeasure = new Map(measures.map((m) => [m.index, m]));
+    // Keyed by start beat, so a chord - and both hands striking together -
+    // give one position instead of several. Engravers offset colliding
+    // noteheads horizontally, so the mean keeps the line on the group.
+    const groups = new Map<number, { page: number; y0: number; y1: number; xs: number[] }>();
 
-    const xs: number[] = [];
-    let measure: TimelineMeasure | undefined;
-    for (const n of activeNotes) {
+    for (const n of notes) {
       const m = byMeasure.get(n.measure_index);
       if (!m?.bbox_pt || m.page === null) continue;
-      measure = measure ?? m;
+      let x: number;
       if (n.bbox_pt) {
-        xs.push((n.bbox_pt[0] + n.bbox_pt[2]) / 2);
+        x = (n.bbox_pt[0] + n.bbox_pt[2]) / 2;
       } else if (m.length_beats > 0) {
         const frac = Math.min(0.96, Math.max(0, (n.start_beat - m.start_beat) / m.length_beats));
-        xs.push(m.bbox_pt[0] + frac * (m.bbox_pt[2] - m.bbox_pt[0]));
+        x = m.bbox_pt[0] + frac * (m.bbox_pt[2] - m.bbox_pt[0]);
+      } else {
+        continue;
+      }
+      const g = groups.get(n.start_beat);
+      if (g) g.xs.push(x);
+      else groups.set(n.start_beat, { page: m.page, y0: m.bbox_pt[1], y1: m.bbox_pt[3], xs: [x] });
+    }
+
+    return [...groups.entries()]
+      .map(([b, g]) => ({
+        beat: b,
+        page: g.page,
+        y0: g.y0,
+        y1: g.y1,
+        x: g.xs.reduce((a, c) => a + c, 0) / g.xs.length,
+      }))
+      .sort((a, b) => a.beat - b.beat);
+  }, [measures, notes]);
+
+  /** The latest onset at or before the clock. Binary search, because this
+   * runs on every frame of playback. */
+  const playhead = useMemo(() => {
+    let lo = 0;
+    let hi = onsets.length - 1;
+    let found = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (onsets[mid].beat <= beat + 1e-9) {
+        found = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
       }
     }
-    if (!measure?.bbox_pt || measure.page === null || !xs.length) return null;
-
-    // Notes of one chord sit at slightly different x when engraved offset to
-    // avoid collisions; the mean keeps the line centred on the group.
-    const x = xs.reduce((a, b) => a + b, 0) / xs.length;
-    const [, y0, , y1] = measure.bbox_pt;
-    return { page: measure.page, x, y0, y1 };
-  }, [activeNotes, measures]);
+    return found < 0 ? null : onsets[found];
+  }, [onsets, beat]);
 
   const handleClick = useCallback(
     (page: PageInfo, e: React.MouseEvent<HTMLDivElement>) => {

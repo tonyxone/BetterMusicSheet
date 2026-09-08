@@ -275,11 +275,50 @@ details.options[open] summary::before { content: "▾ "; }
   display: flex; flex-direction: column; height: calc(100vh - 88px);
   max-width: 1400px; margin: 0 auto; padding: 16px 24px 0;
 }
-.play-sheet {
-  flex: 1 1 auto; min-height: 0; overflow-y: auto;
-  background: var(--card); border: 1px solid var(--paper-deep); border-radius: 16px;
-  padding: 16px;
+/* Holds the two collapsible sections and absorbs whatever space they don't
+   use, so collapsing both leaves the gap here rather than under the keyboard. */
+.play-panel {
+  min-height: 0; display: flex; flex-direction: column; margin-bottom: 10px;
+  background: var(--card); border-radius: 16px; overflow: hidden;
+  /* An inset shadow, not a border: a border would inset the content box by a
+     pixel relative to .play-keyboard, and the falling-note lanes have to line
+     up with the keys underneath them exactly. */
+  box-shadow: inset 0 0 0 1px var(--paper-deep);
 }
+.play-panel-head {
+  flex: none; display: flex; align-items: center; gap: 7px;
+  padding: 7px 14px; background: none; border: 0; cursor: pointer;
+  font: inherit; font-size: 12.5px; font-weight: 600; letter-spacing: 0.02em;
+  color: var(--ink-soft); text-align: left;
+}
+.play-panel-head:hover { color: var(--ink); }
+.play-panel-head svg { transition: transform 0.15s; }
+.play-panel.open .play-panel-head svg { transform: rotate(90deg); }
+.play-panel-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 16px 16px; }
+/* For a child that paints to its own edges - the roll's canvas. */
+.play-panel-body.flush { padding: 0; overflow: hidden; }
+
+/* The note roll sits directly on the keyboard, so it is dark and squared off
+   at the bottom: the two read as one instrument rather than two cards.
+   Coloured bars on a lit background look like stickers; on black they read as
+   light travelling toward you, which is the whole effect. */
+.play-panel.dark {
+  background: #0f1113; box-shadow: inset 0 0 0 1px #262b30;
+  margin-bottom: 0; border-radius: 16px 16px 0 0;
+  /* Keeps the roll and the keyboard together at the bottom when both panels
+     are collapsed and nothing is left to absorb the slack. No effect while
+     either panel is growing, since a grown panel takes the free space first. */
+  margin-top: auto;
+}
+.play-panel.dark .play-panel-head { color: rgba(255, 255, 255, 0.42); }
+.play-panel.dark .play-panel-head:hover { color: rgba(255, 255, 255, 0.85); }
+
+/* Same horizontal padding as .play-keyboard, so the lanes line up with the
+   keys they land on. */
+.note-roll { width: 100%; height: 100%; padding: 0 12px; }
+/* Sized by CSS so it lands on exactly the same box as .keyboard-3d's canvas;
+   note-roll.tsx reads that box back and only sets the backing store. */
+.note-roll > canvas { display: block; width: 100%; height: 100%; }
 .sheet-pages { display: flex; flex-direction: column; gap: 16px; align-items: center; }
 /* Positioning root for the measure overlays, which are placed as percentages
    of the page box so they track the canvas at any rendered size. */
@@ -322,10 +361,36 @@ details.options[open] summary::before { content: "▾ "; }
   color: var(--accent); text-decoration: underline; cursor: pointer;
 }
 .play-keyboard {
-  flex: none; height: 200px; min-height: 200px; background: var(--paper-deep);
-  border-radius: 16px 16px 0 0; padding: 8px 12px 4px;
+  /* Height comes from the board itself (keyboard-3d.tsx sets an aspect-ratio
+     on .keyboard-3d), not from a guess here: a fixed height left ~120px of
+     dead space above the keys, which the falling notes would have to cross
+     before touching anything. No padding on top for the same reason - the
+     roll has to meet the keys, not a beige margin. */
+  flex: none;
+  /* Same dark as the roll, not the page's beige: the 12px side padding below
+     mirrors .note-roll's own 12px padding above, but that padding sits on a
+     black panel there, so it reads as part of the roll rather than a margin.
+     A beige background here broke that continuity - the two side strips have
+     to be the same colour as the roll for their widths to visually align. */
+  background: #0f1113;
+  /* Square on top: the note roll sits flush against it, and a rounded corner
+     there would cut a notch between two surfaces meant to read as one. */
+  border-radius: 0; padding: 0 12px 4px;
 }
-.keyboard-3d { width: 100%; height: 100%; position: relative; }
+/* aspect-ratio is set from the real geometry at runtime; this is only a
+   placeholder so the page doesn't jump before the scene has been built.
+   Background matches the note roll above: black keys stand taller than
+   white ones, so the camera frustum (fitted to the tallest point) leaves a
+   sliver of the canvas transparent directly above every white key - without
+   this, that sliver showed the beige page background as a seam between the
+   roll and the keys. Matching the roll's colour here means that sliver reads
+   as the roll simply continuing down to the keys, not a gap. */
+.keyboard-3d { width: 100%; aspect-ratio: 9.4; position: relative; background: #0f1113; }
+/* Out of flow, so the box is sized by that aspect-ratio and not by the
+   canvas: an in-flow canvas keeps the block open at its own height, and
+   three.js writes that height itself on every resize. CSS owns the display
+   size here; keyboard-3d.tsx only sets the drawing buffer. */
+.keyboard-3d > canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 /* Key names are HTML over the WebGL canvas, positioned by projecting each key
    through the (fixed) camera - crisp at any size, and no per-key texture. */
 .key-labels { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.15s; }
