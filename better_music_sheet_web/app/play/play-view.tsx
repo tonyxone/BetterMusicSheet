@@ -252,6 +252,15 @@ function Player({ jobId }: { jobId: string }) {
   // Full speed by default; the slider still goes down to 0.1x for picking a
   // passage apart.
   const [speed, setSpeed] = useState(1);
+  // What the speed slider actually achieves, after tempoClock's own
+  // MAX_EFFECTIVE_BPM clamp - can read lower than `speed` when a BPM
+  // override near the ceiling leaves no headroom for it. Falls back to the
+  // raw request before the timeline has loaded, when there's nothing to
+  // clamp against yet.
+  const effectiveSpeed = useMemo(
+    () => (timeline ? tempoClock(timeline, speed, baseBpm).rate : speed),
+    [timeline, speed, baseBpm],
+  );
   const [showKeyNames, setShowKeyNames] = useState(false);
   const [soundOn, setSoundOn] = useState(true);
   const [activeNotes, setActiveNotes] = useState<TimelineNote[]>([]);
@@ -702,7 +711,13 @@ function Player({ jobId }: { jobId: string }) {
               playbackRef.current?.setSpeed(value);
             }}
           />
-          <span>{speed.toFixed(1)}x</span>
+          {/* The true rate, not just an echo of the slider - a BPM override
+              near the ceiling can pull this below what's requested (see
+              MAX_EFFECTIVE_BPM in tempo.ts), and showing "2.0x" while it's
+              actually playing at 1.0x would read as broken, not capped. */}
+          <span title={effectiveSpeed < speed - 1e-6 ? `Capped from ${speed.toFixed(1)}x by the BPM limit` : undefined}>
+            {effectiveSpeed.toFixed(1)}x
+          </span>
         </label>
         <label className="play-speed">
           BPM ({tempoControl(timeline).unit})

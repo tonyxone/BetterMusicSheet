@@ -51,6 +51,11 @@ export function tempoClock(timeline: Timeline, speed = 1, baseBpm?: number | nul
     return { beat: t.start_beat, seconds, secondsPerBeat: 60 / (t.bpm * scale * rate) };
   });
   return {
+    // The speed actually applied, after the MAX_EFFECTIVE_BPM clamp above -
+    // equal to `speed` unless the BPM override pushed the requested combo
+    // past the ceiling. Exposed so the UI can display what's really
+    // happening rather than just echoing back the slider's raw value.
+    rate,
     secondsAt(beat: number) {
       let s = segments[0];
       for (const candidate of segments) {
