@@ -39,6 +39,7 @@ def load_sheet_heads(omr_path, sheet_index):
             'shape': head.get('shape'),
             'id': head.get('id'),
             'pitch': int(pitch) if pitch is not None else None,
+            'confidence': float(head.get('ctx-grade', head.get('grade', '0'))),
             'x': x, 'y': y, 'w': w, 'h': h,
             'cx': x + w / 2.0,
             'cy': y + h / 2.0,
@@ -99,23 +100,43 @@ def load_omr_clefs(omr_path, sheet_index):
 
 
 def load_key_signature(omr_path, sheet_index):
-    """Return {staff_id: fifths} derived from Audiveris's key-signature alters.
+    """Initial signature per staff; use load_key_timeline for note resolution."""
+    return {staff: events[0][1] for staff, events in load_key_timeline(omr_path, sheet_index).items()}
 
-    fifths > 0 -> that many sharps; fifths < 0 -> that many flats; 0 = C major.
+
+def load_key_timeline(omr_path, sheet_index):
+    """Positioned key events, including cancellation to zero fifths.
+
+    Audiveris stores the complete fifths value on each key object. Counting
+    all key-alter glyphs merges unrelated signatures and loses cancellations.
     """
     root = _parse_sheet(omr_path, sheet_index)
-    counts = {}
-    for ka in root.iter('key-alter'):
-        staff = ka.get('staff')
-        shape = ka.get('shape')
-        if staff is None or shape is None:
-            continue
-        counts.setdefault(int(staff), {'SHARP': 0, 'FLAT': 0})
-        if shape in counts[int(staff)]:
-            counts[int(staff)][shape] += 1
     result = {}
-    for staff, c in counts.items():
-        result[staff] = c['SHARP'] - c['FLAT']
+    for key in root.iter('key'):
+        bounds = key.find('bounds')
+        if key.get('staff') and key.get('fifths') is not None and bounds is not None:
+            result.setdefault(int(key.get('staff')), []).append(
+                (float(bounds.get('x')), int(key.get('fifths'))))
+    # Older exports may have only key-alter glyphs. Group adjacent glyphs;
+    # never sum separate signatures across an entire staff.
+    glyphs = {}
+    for ka in root.iter('key-alter'):
+        bounds = ka.find('bounds')
+        if not ka.get('staff') or bounds is None:
+            continue
+        staff = int(ka.get('staff'))
+        if staff not in result:
+            glyphs.setdefault(staff, []).append((float(bounds.get('x')), float(bounds.get('w', '10')), ka.get('shape')))
+    for staff, items in glyphs.items():
+        groups = []
+        for item in sorted(items):
+            if not groups or item[0] - groups[-1][-1][0] > 3 * max(item[1], groups[-1][-1][1]):
+                groups.append([])
+            groups[-1].append(item)
+        result[staff] = [(g[0][0], sum(1 if shape == 'SHARP' else -1 if shape == 'FLAT' else 0
+                                     for _, _, shape in g)) for g in groups]
+    for events in result.values():
+        events.sort()
     return result
 
 

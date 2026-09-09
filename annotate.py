@@ -16,7 +16,7 @@ import argparse
 import os
 import sys
 
-import fitz
+import pymupdf as fitz
 
 from audiveris_heads import (
     load_sheet_heads, group_heads_by_staff, load_chord_id_groups,
@@ -130,7 +130,7 @@ def _clef_at(timeline, x, default=None):
 
 
 def build_records(pdf_path, omr_path, num_pages, style='unicode', octave=False, verbose=True,
-                   page_omr_overrides=None):
+                   page_omr_overrides=None, resolved_notes=None, suppress_repeated_chords=False):
     """Return list of label records: {page, part, anchor_x_pt, top_y_pt, bottom_y_pt, labels}.
 
     One record per simultaneous-note group (Audiveris's own head-chord grouping),
@@ -146,157 +146,56 @@ def build_records(pdf_path, omr_path, num_pages, style='unicode', octave=False, 
     """
     if pdf_path is None:
         raise ValueError("build_records needs the original PDF path (for clef glyphs)")
-    pdf_doc = fitz.open(pdf_path)
-    try:
-        records, stats = _build_records_inner(pdf_doc, omr_path, num_pages, style, octave, verbose,
-                                               page_omr_overrides or {})
-    finally:
-        pdf_doc.close()
+    from score_notes import resolve_score_notes
+    resolved = resolved_notes if resolved_notes is not None else resolve_score_notes(
+        pdf_path, omr_path, num_pages, page_omr_overrides)
+    records = records_from_resolved(resolved, style, octave, suppress_repeated_chords)
+    if verbose:
+        print(f"Resolved {len(resolved['notes'])} noteheads into {len(records)} label groups.")
     return records
 
 
-def _build_records_inner(pdf_doc, omr_path, num_pages, style, octave, verbose, page_omr_overrides):
-    records = []
-    stats = {'heads': 0, 'groups': 0, 'unpitched': 0, 'tied': 0}
-    seen_in_measure = {}
+def records_from_resolved(resolved, style='unicode', octave=False, suppress_repeated_chords=False):
+    """Render every recognized written note, including tied continuations.
 
-    for page in range(1, num_pages + 1):
-        # page_omr_overrides is {page: {'omr': ..., 'mxl': ...}} (see
-        # run.py's retry_sparse_pages); only the omr half matters here.
-        src_omr = page_omr_overrides.get(page, {}).get('omr', omr_path)
-        heads = load_sheet_heads(src_omr, page)
-        if not heads:
-            continue
-        by_staff = group_heads_by_staff(heads)
-        id_to_chord = load_chord_id_groups(src_omr, page)
-        staff_lines = load_staff_lines(src_omr, page)
-        barlines = load_staff_barlines(src_omr, page)
-        key_fifths = load_key_signature(src_omr, page)
-        alt_map = load_alter_map(src_omr, page)
-        tie_stops = load_tie_stop_heads(src_omr, page)
-        omr_clefs = load_omr_clefs(src_omr, page)
-
-        # a page's dominant (median) notehead width, used to scale down labels
-        # for noticeably smaller noteheads (cue/ornament-sized passages) instead
-        # of drawing a full-size label over a miniature notehead. Audiveris
-        # doesn't flag these explicitly, but it does report exact head geometry,
-        # which is a real signal even without a "cue"/"grace" attribute to key off.
-        widths = sorted(h['w'] for h in heads if h['w'] > 0)
-        ref_w = widths[len(widths) // 2] if widths else 0
-
-        # Audiveris's internal picture is a raster of the PDF page at whatever
-        # DPI it was actually loaded with (normally 300, but overridable via
-        # -constant org.audiveris.omr.image.ImageLoading.pdfResolution=<dpi> for
-        # dense passages that need more pixels to recognize correctly) - derive
-        # the px->pt scale from the real picture size vs. the PDF page size
-        # instead of assuming a fixed DPI, so both cases work unmodified.
-        pic_w, _pic_h = get_picture_size(src_omr, page)
-        px_to_pt = pdf_doc[page - 1].rect.width / pic_w
-
-        staff_lines_pt = {s: tuple(y * px_to_pt for y in ys) for s, ys in staff_lines.items()}
-        pdf_clefs = pdf_clef_timeline(pdf_doc, page, staff_lines_pt)
-
-        system_staff_groups = load_system_staff_groups(src_omr, page)
-
-        for system_idx, staff_ids in enumerate(system_staff_groups):
-            # every staff in the system gets annotated, however many there are -
-            # not just an assumed RH/LH pair. Placement above/below still follows
-            # the RH-above/others-below convention below (part_idx == 0).
-            for part_idx, staff_num in enumerate(staff_ids):
-                staff_heads = by_staff.get(staff_num, [])
-                if not staff_heads:
-                    continue
-                head_groups = cluster_chords_by_relation(staff_heads, id_to_chord)
-
-                for hg in head_groups:
-                    pitches = []
-                    labels = []
-                    for h in hg:
-                        if h['id'] in tie_stops:
-                            stats['tied'] += 1
-                            continue
-                        if h['pitch'] is None:
-                            stats['unpitched'] += 1
-                            continue
-                        stats['heads'] += 1
-                        # Audiveris's <head pitch> is the note's diatonic SLOT:
-                        # steps from the staff's middle line (0 = middle line),
-                        # independent of clef.  Convert to an absolute pitch by
-                        # adding the middle-line reference of the clef actually
-                        # in effect at this notehead (the PDF's clef when known,
-                        # else Audiveris's own clef).
-                        pdf_clef = None
-                        if pdf_clefs.get(staff_num):
-                            pdf_clef = _clef_at(pdf_clefs[staff_num], h['cx'] * px_to_pt, None)
-                        if pdf_clef is not None:
-                            eff_clef = pdf_clef
-                        else:
-                            eff_clef = _clef_at(omr_clefs.get(staff_num, []), h['cx'], 'G')
-                        diatonic = h['pitch'] + PITCH_REF.get(eff_clef, 0)
-
-                        acc = key_accidental(diatonic, key_fifths.get(staff_num, 0))
-                        shape = alt_map.get(h['id'])
-                        if shape is not None:
-                            acc = alter_symbol(shape, style)
-                        pitches.append(diatonic)
-                        labels.append(diatonic_label(
-                            diatonic, acc if acc else '', style=style, octave=octave))
-
-                    if not labels:
-                        continue
-                    stats['groups'] += 1
-
-                    # render() expects labels ordered highest-pitch-first.  Our
-                    # diatonic value counts steps BELOW B4 (0 = B4, 6 = C4, ...),
-                    # so ascending value == highest pitch first.
-                    order = sorted(range(len(pitches)), key=lambda i: pitches[i])
-                    labels = [labels[i] for i in order]
-
-                    anchor_x = sum(h['cx'] for h in hg) / len(hg)
-                    top_y = min(h['cy'] for h in hg)
-                    bottom_y = max(h['cy'] for h in hg)
-                    group_w = sum(h['w'] for h in hg) / len(hg)
-                    scale = max(0.65, min(1.0, group_w / ref_w)) if ref_w else 1.0
-                    # measure index within this staff's system: count this staff's
-                    # internal barlines before the group (the staff's leftmost
-                    # barline is the system edge, not a measure boundary)
-                    bars = barlines.get(staff_num, [])
-                    if bars:
-                        bars = [bx for bx in bars if bx > bars[0]]
-                    measure = sum(1 for bx in bars if bx < anchor_x) + 1
-
-                    # show a repeated 2+-note stack (dyad or bigger chord) only
-                    # once per measure; single notes are always shown
-                    if len(labels) > 1:
-                        seen = seen_in_measure.setdefault((page, staff_num, measure), set())
-                        group_key = tuple(sorted(labels))
-                        if group_key in seen:
-                            continue
-                        seen.add(group_key)
-
-                    records.append({
-                        'page': page, 'part': part_idx, 'system': system_idx,
-                        'anchor_x_pt': anchor_x * px_to_pt,
-                        'top_y_pt': top_y * px_to_pt,
-                        'bottom_y_pt': bottom_y * px_to_pt,
-                        'labels': labels,
-                        'measure': measure,
-                        'scale': scale,
-                        'notehead_w_pt': group_w * px_to_pt,
-                    })
-
-    if verbose:
-        print(f"Matching summary: {stats['groups']} labeled beat-groups, "
-              f"{stats['heads']} noteheads labeled, {stats['unpitched']} heads without pitch data, "
-              f"{stats['tied']} tied-continuation heads skipped.")
-    return records, stats
+    Optional compact labeling compares full pitches, never display strings.
+    """
+    from collections import defaultdict
+    from labels import diatonic_label
+    groups = defaultdict(list)
+    widths = defaultdict(list)
+    for n in resolved['notes']:
+        groups[(n['page'], n['staff'], n['chord_id'])].append(n)
+        widths[n['page']].append(n['w'])
+    medians = {p: sorted(ws)[len(ws) // 2] for p, ws in widths.items()}
+    seen, records = {}, []
+    symbols = {-2: '𝄫', -1: '♭', 0: '', 1: '♯', 2: '𝄪'}
+    for group in sorted(groups.values(), key=lambda g: (g[0]['page'], g[0]['system'], g[0]['staff'], min(n['cx'] for n in g))):
+        group.sort(key=lambda n: (n.get('label_diatonic', n['diatonic']), -n['alter']))
+        first = group[0]
+        pitches = tuple((n.get('label_diatonic', n['diatonic']), n['alter']) for n in group)
+        key = (first['page'], first['staff'], first['system_measure'])
+        if suppress_repeated_chords and len(group) > 1:
+            old = seen.setdefault(key, set())
+            if pitches in old:
+                continue
+            old.add(pitches)
+        labels = [diatonic_label(n.get('label_diatonic', n['diatonic']), symbols.get(n['alter'], ''), style=style, octave=octave)
+                  + ('?' if n.get('pitch_uncertain') else '') for n in group]
+        boxes = [n['bbox_pt'] for n in group]
+        width = sum(n['w'] for n in group) / len(group)
+        records.append({
+            'page': first['page'], 'part': first['role'], 'system': first['system'],
+            'anchor_x_pt': sum((b[0] + b[2]) / 2 for b in boxes) / len(boxes),
+            'top_y_pt': min((b[1] + b[3]) / 2 for b in boxes),
+            'bottom_y_pt': max((b[1] + b[3]) / 2 for b in boxes),
+            'labels': labels, 'measure': (first['system_measure'] or 0) + 1,
+            'scale': max(.65, min(1, width / medians[first['page']])) if medians[first['page']] else 1,
+            'notehead_w_pt': sum(b[2] - b[0] for b in boxes) / len(boxes),
+        })
+    return records
 
 
-# Needs a Unicode font with the flat/sharp glyphs (plain arial.ttf lacks U+266D)
-# and the Latin letters/digits the labels also use. Windows ships Arial Unicode
-# MS with both; on Linux (e.g. the Docker image) DejaVu Sans covers the same
-# ground and is freely redistributable. Override with LABEL_FONT_PATH for any
-# other font file.
 _DEFAULT_FONT_PATH = (
     r"C:\Windows\Fonts\arialuni.ttf" if sys.platform == "win32"
     else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
