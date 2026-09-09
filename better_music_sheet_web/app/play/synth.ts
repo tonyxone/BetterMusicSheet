@@ -34,7 +34,7 @@ export class SynthEngine {
 
   /** Schedule a note. `at`/`until` are AudioContext times, so timing comes
    * from the audio clock rather than JS timers. Returns a voice id. */
-  noteOn(midi: number, at: number, until: number): number {
+  noteOn(midi: number, at: number, until: number, velocity = 80): number {
     const ctx = this.ctx;
     const osc = ctx.createOscillator();
     // Triangle, not sine: a sine reads as a dull flute with no harmonic
@@ -43,13 +43,13 @@ export class SynthEngine {
     osc.frequency.value = midiToFrequency(midi);
 
     const gain = ctx.createGain();
-    const peak = 0.9;
-    const sustain = 0.28;
-    const attack = 0.006;
+    const peak = 0.9 * Math.pow(Math.max(1, Math.min(127, velocity)) / 100, 1.5);
+    const sustain = peak * 0.31;
+    const attack = Math.min(0.006, Math.max(0.001, (until - at) / 3));
     // A real piano decays continuously rather than holding flat, so the
     // envelope always slides toward the sustain level instead of sitting at
     // the peak - this is most of what makes it read as a piano at all.
-    const decay = Math.min(0.35, Math.max(0.08, (until - at) * 0.5));
+    const decay = Math.max(0.001, Math.min(0.35, (until - at - attack) * 0.5));
 
     gain.gain.setValueAtTime(0.0001, at);
     gain.gain.linearRampToValueAtTime(peak, at + attack);

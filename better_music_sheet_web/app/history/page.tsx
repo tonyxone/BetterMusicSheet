@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { clientApiFetch } from "@/lib/client-api";
 import { setAdsPaused } from "@/lib/ads";
+import { KeyboardIcon } from "../keyboard-icon";
 import type { AnnotationJob } from "@/lib/api";
 
 const STATUS_LABEL: Record<AnnotationJob["status"], string> = {
@@ -42,14 +43,29 @@ export default function HistoryPage() {
       ) : (
         <div>
           {jobs.map((job) => (
-            <Link key={job.job_id} href={`/sheets?job=${job.job_id}`} className="history-row">
-              <div className="history-icon">📄</div>
-              <div className="history-info">
-                <div className="history-title">{job.sheet_name}</div>
-                <div className="history-meta">{new Date(job.created_at * 1000).toLocaleString()}</div>
-              </div>
+            // A plain div, not the link itself: a Play link sits alongside the
+            // main one below, and an <a> can't nest inside another <a>.
+            <div key={job.job_id} className="history-row">
+              <Link href={`/sheets?job=${job.job_id}`} className="history-row-link">
+                <div className="history-icon">📄</div>
+                <div className="history-info">
+                  <div className="history-title">{job.sheet_name}</div>
+                  <div className="history-meta">{new Date(job.created_at * 1000).toLocaleString()}</div>
+                </div>
+              </Link>
+              {/* Only a finished sheet has a timeline to play back. */}
+              {job.status === "done" && (
+                <Link
+                  href={`/play?job=${job.job_id}`}
+                  className="icon-link"
+                  title="Play with the keyboard"
+                  aria-label="Play with the keyboard"
+                >
+                  <KeyboardIcon />
+                </Link>
+              )}
               <span className={`history-badge ${job.status}`}>{STATUS_LABEL[job.status]}</span>
-            </Link>
+            </div>
           ))}
         </div>
       )}

@@ -17,6 +17,11 @@ import { clientApiFetch } from "@/lib/client-api";
 import { useAuth } from "../auth-context";
 import type { AnnotationJob } from "@/lib/api";
 import type { Timeline, TimelineNote } from "@/lib/timeline";
+import { notesAtBeat, measureIndexAt } from "@/lib/timeline";
+import { applyCorrections, validCorrection } from "@/lib/corrections";
+import type { Corrections, NoteCorrection } from "@/lib/corrections";
+import NoteCorrections from "./note-corrections";
+import { tempoClock, tempoControl } from "./tempo";
 import { GRACE_SECONDS, SynthEngine } from "./synth";
 import { Playback } from "./playback";
 
@@ -234,30 +239,20 @@ function SheetPicker({ onPick }: { onPick: (jobId: string) => void }) {
 /** What is sounding at a beat, straight from the timeline. Mirrors
  * Playback.notesAt for the case where nothing has been played yet and so no
  * audio graph exists to ask - scrubbing has to work before the first play. */
-function notesAtBeat(timeline: Timeline, beat: number) {
-  return timeline.notes.filter((n) => {
-    const len = n.is_grace || n.duration_beats <= 0 ? 0.25 : n.duration_beats;
-    return beat >= n.start_beat - 1e-9 && beat < n.start_beat + len;
-  });
-}
-
-function measureIndexAt(timeline: Timeline, beat: number) {
-  const m = timeline.measures.find(
-    (mm) => beat >= mm.start_beat && beat < mm.start_beat + mm.length_beats,
-  );
-  return m ? m.index : null;
-}
-
 function Player({ jobId }: { jobId: string }) {
   const [timeline, setTimeline] = useState<Timeline | null>(null);
+  const originalTimeline = useRef<Timeline | null>(null);
+  const [corrections, setCorrections] = useState<Corrections>({});
+  const [baseBpm, setBaseBpm] = useState<number | null>(null);
+  const [correctionMessage, setCorrectionMessage] = useState("");
   const [pdfData, setPdfData] = useState<ArrayBuffer | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const [playing, setPlaying] = useState(false);
-  // Full speed by default, with every key labelled; the slider still goes
-  // down to 0.1x for picking a passage apart.
+  // Full speed by default; the slider still goes down to 0.1x for picking a
+  // passage apart.
   const [speed, setSpeed] = useState(1);
-  const [showKeyNames, setShowKeyNames] = useState(true);
+  const [showKeyNames, setShowKeyNames] = useState(false);
   const [soundOn, setSoundOn] = useState(true);
   const [activeNotes, setActiveNotes] = useState<TimelineNote[]>([]);
   const [beat, setBeat] = useState(0);
@@ -327,7 +322,14 @@ function Player({ jobId }: { jobId: string }) {
         if (!pdfRes.ok) throw new Error(`couldn't load the sheet (${pdfRes.status})`);
         const [tl, pdf] = await Promise.all([tlRes.json(), pdfRes.arrayBuffer()]);
         if (cancelled) return;
-        setTimeline(tl);
+        originalTimeline.current = tl;
+        let saved: Corrections = {};
+        try {
+          const raw = JSON.parse(localStorage.getItem(`sheet-corrections:${jobId}`) ?? "{}");
+          saved = Object.fromEntries(Object.entries(raw).filter(([, value]) => validCorrection(value))) as Corrections;
+        } catch { /* Browser storage may be unavailable. */ }
+        setCorrections(saved);
+        setTimeline(applyCorrections(tl, saved));
         setPdfData(pdf);
       })
       .catch((err) => {
@@ -382,9 +384,10 @@ function Player({ jobId }: { jobId: string }) {
           },
         });
       }
+      playbackRef.current.setTempo(baseBpm);
       return playbackRef.current;
     },
-    [openSignIn, soundOn],
+    [openSignIn, soundOn, baseBpm],
   );
 
   // Applies mid-playback too, not just at the next press.
@@ -449,11 +452,29 @@ function Player({ jobId }: { jobId: string }) {
     beatRef.current = beat;
   }, [beat]);
   /** Live position for the roll: the audio clock while playing, and the
-   * paused/scrubbed position otherwise (Playback.seek keeps that current). */
-  const getBeat = useCallback(
-    () => playbackRef.current?.currentBeat ?? beatRef.current,
-    [],
-  );
+   * paused/scrubbed position otherwise (Playback.seek keeps that current).
+   * leadBeat, not currentBeat: during the count-in at the start of the piece
+   * it keeps counting up from below zero instead of pinning at it, which is
+   * what lets the first notes fall into place rather than appearing already
+   * at the keys. Nothing else reads leadBeat - the sheet, keyboard and
+   * scrubber all come from Playback's onProgress/onHighlight/onMeasure
+   * callbacks instead, which correctly report nothing until the count-in
+   * ends and the piece actually starts sounding.
+   *
+   * Before the very first Play/Step press, though, no Playback exists yet
+   * to run that count-in at all - so without this, the roll would just
+   * render its static beat-0..4 window the instant the page loads, notes
+   * already sitting there having never fallen. Reporting -Infinity for that
+   * one pristine moment keeps it empty until something real has happened.
+   * Scoped to `playbackRef.current === null` rather than "paused at 0", so
+   * stepping back to the first note later still shows it - that object is
+   * created (see ensurePlayback) the first time Play or a step is pressed,
+   * and stays alive for the rest of the session from then on. */
+  const getBeat = useCallback(() => {
+    const pb = playbackRef.current;
+    if (!pb) return beatRef.current <= 1e-9 ? Number.NEGATIVE_INFINITY : beatRef.current;
+    return pb.leadBeat;
+  }, []);
 
   /** Every distinct onset in the piece, in order - the stops the step buttons
    * walk between. Onsets rather than metrical beats: what you want to land
@@ -520,19 +541,19 @@ function Player({ jobId }: { jobId: string }) {
     if (synth && ctx) {
       // Only what is *struck* here sounds. Notes still ringing from an
       // earlier onset stay lit on the keyboard but aren't re-hammered.
-      const struck = timeline.notes.filter((n) => Math.abs(n.start_beat - next) < 1e-6);
-      const secondsPerBeat = 60 / (timeline.tempo_bpm_default || 96) / (speed || 1);
+      const struck = timeline.notes.filter((n) => n.attack !== false && Math.abs(n.start_beat - next) < 1e-6);
+      const clock = tempoClock(timeline, speed, baseBpm);
       const at = ctx.currentTime + 0.02;
       synth.allOff(); // stepping quickly shouldn't pile voices up
       for (const n of struck) {
-        const beats = n.is_grace || n.duration_beats <= 0 ? 0 : n.duration_beats;
+        const beats = n.key_duration_beats ?? n.duration_beats;
         // Capped: a whole note held for its full written length just drones
         // while you're reading the next one.
-        const seconds = beats > 0 ? Math.min(1.5, beats * secondsPerBeat) : GRACE_SECONDS;
-        synth.noteOn(n.midi, at, at + Math.max(GRACE_SECONDS, seconds));
+        const seconds = beats > 0 ? Math.min(1.5, clock.secondsAt(n.start_beat + beats) - clock.secondsAt(n.start_beat)) : GRACE_SECONDS;
+        synth.noteOn(n.midi, at, at + Math.max(.02, seconds), n.velocity);
       }
     }
-  }, [timeline, ensurePlayback, onsetBeats, beat, isLocked, openSignIn, speed]);
+  }, [timeline, ensurePlayback, onsetBeats, beat, isLocked, openSignIn, speed, baseBpm]);
 
   const handleStepBack = useCallback(() => step(-1), [step]);
   const handleStepForward = useCallback(() => step(1), [step]);
@@ -571,6 +592,27 @@ function Player({ jobId }: { jobId: string }) {
     [playFromMeasure],
   );
 
+  const saveCorrections = (next: Corrections) => {
+    if (!originalTimeline.current) return;
+    playbackRef.current?.dispose();
+    playbackRef.current = null;
+    setPlaying(false);
+    setActiveNotes([]);
+    const updated = applyCorrections(originalTimeline.current, next);
+    setTimeline(updated);
+    setCorrections(next);
+    try {
+      localStorage.setItem(`sheet-corrections:${jobId}`, JSON.stringify(next));
+      setCorrectionMessage("Correction saved for this browser.");
+    } catch {
+      setCorrectionMessage("Correction applied for this session; browser storage is unavailable.");
+    }
+  };
+
+  const saveNote = (id: string, correction: NoteCorrection) => {
+    if (validCorrection(correction)) saveCorrections({ ...corrections, [id]: correction });
+  };
+
   if (error) {
     return (
       <div className="wrap" style={{ textAlign: "center" }}>
@@ -605,7 +647,7 @@ function Player({ jobId }: { jobId: string }) {
           min={0}
           max={Math.max(1, timeline.total_beats)}
           step={0.05}
-          value={Math.min(beat, timeline.total_beats)}
+          value={Math.max(0, Math.min(beat, timeline.total_beats))}
           aria-label="Position in the piece"
           // While the pointer is down the input owns the value; letting the
           // playback clock write back mid-drag would fight the thumb.
@@ -615,9 +657,9 @@ function Player({ jobId }: { jobId: string }) {
           onChange={(e) => handleScrub(Number(e.target.value))}
         />
         <span className="play-time">
-          {/* Measures, not a clock: beats are not seconds, and the piece has
-              no real tempo to convert with (see timeline.py). */}
-          Measure {(measureIndexAt(timeline, beat) ?? 0) + 1} / {playableMeasureCount}
+          {/* A printed measure label plus performed occurrence count. Repeats
+              can make the two differ, which is useful information. */}
+          Measure {timeline.measures[measureIndexAt(timeline, beat) ?? 0]?.label} · {Math.min((measureIndexAt(timeline, beat) ?? 0) + 1, playableMeasureCount)} / {playableMeasureCount}
         </span>
       </div>
 
@@ -654,12 +696,39 @@ function Player({ jobId }: { jobId: string }) {
             max={2}
             step={0.1}
             value={speed}
-            // Remapping an in-flight schedule mid-note is more complexity than
-            // it's worth here, so speed applies to the next Play.
-            disabled={playing}
-            onChange={(e) => setSpeed(Number(e.target.value))}
+            onChange={(e) => {
+              const value = Number(e.target.value);
+              setSpeed(value);
+              playbackRef.current?.setSpeed(value);
+            }}
           />
           <span>{speed.toFixed(1)}x</span>
+        </label>
+        <label className="play-speed">
+          BPM ({tempoControl(timeline).unit})
+          <input
+            type="number"
+            min={20}
+            max={300}
+            className="play-tempo-input"
+            value={tempoControl(timeline, baseBpm).bpm}
+            aria-label={`Base tempo in ${tempoControl(timeline).unit}s per minute`}
+            // The score/assumed distinction still matters - it just doesn't need
+            // to live in the label text anymore, so it's a hover title instead.
+            title={
+              timeline.tempo_source === "score"
+                ? `Detected from the score (${tempoControl(timeline).unit} beats) - change it to override`
+                : "No tempo marking was found on the sheet; this is a default"
+            }
+            onChange={(e) => {
+              const value = Number(e.target.value);
+              if (value >= 20 && value <= 300) {
+                const quarterBpm = tempoControl(timeline).toQuarterBpm(value);
+                setBaseBpm(quarterBpm);
+                playbackRef.current?.setTempo(quarterBpm);
+              }
+            }}
+          />
         </label>
 
         <button
@@ -688,6 +757,10 @@ function Player({ jobId }: { jobId: string }) {
 
 
       </div>
+
+      <NoteCorrections timeline={timeline} measureIndex={playingMeasure ?? measureIndexAt(timeline, beat)} corrections={corrections}
+        onSave={saveNote} onReset={(id) => { const next = { ...corrections }; delete next[id]; saveCorrections(next); }} />
+      {correctionMessage && <p className="play-hint" role="status">{correctionMessage}</p>}
 
       <Panel
         label="Falling notes"

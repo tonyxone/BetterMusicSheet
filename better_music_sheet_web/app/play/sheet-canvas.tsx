@@ -199,7 +199,7 @@ export function SheetCanvas({
     // Keyed by start beat, so a chord - and both hands striking together -
     // give one position instead of several. Engravers offset colliding
     // noteheads horizontally, so the mean keeps the line on the group.
-    const groups = new Map<number, { page: number; y0: number; y1: number; xs: number[] }>();
+    const groups = new Map<number, { page: number; y0: number; y1: number; xs: number[]; approximate: boolean; measure: number }>();
 
     for (const n of notes) {
       const m = byMeasure.get(n.measure_index);
@@ -214,8 +214,8 @@ export function SheetCanvas({
         continue;
       }
       const g = groups.get(n.start_beat);
-      if (g) g.xs.push(x);
-      else groups.set(n.start_beat, { page: m.page, y0: m.bbox_pt[1], y1: m.bbox_pt[3], xs: [x] });
+      if (g) { g.xs.push(x); g.approximate ||= !n.bbox_pt; }
+      else groups.set(n.start_beat, { page: m.page, y0: m.bbox_pt[1], y1: m.bbox_pt[3], xs: [x], approximate: !n.bbox_pt, measure: m.index });
     }
 
     return [...groups.entries()]
@@ -225,6 +225,8 @@ export function SheetCanvas({
         y0: g.y0,
         y1: g.y1,
         x: g.xs.reduce((a, c) => a + c, 0) / g.xs.length,
+        approximate: g.approximate,
+        measure: g.measure,
       }))
       .sort((a, b) => a.beat - b.beat);
   }, [measures, notes]);
@@ -244,8 +246,9 @@ export function SheetCanvas({
         hi = mid - 1;
       }
     }
-    return found < 0 ? null : onsets[found];
-  }, [onsets, beat]);
+    const current = measures.find((m) => beat >= m.start_beat && beat < m.start_beat + m.length_beats);
+    return found < 0 || onsets[found].measure !== current?.index ? null : onsets[found];
+  }, [onsets, beat, measures]);
 
   const handleClick = useCallback(
     (page: PageInfo, e: React.MouseEvent<HTMLDivElement>) => {
@@ -258,7 +261,7 @@ export function SheetCanvas({
       const xPt = ((e.clientX - rect.left) / rect.width) * page.widthPt;
       const yPt = ((e.clientY - rect.top) / rect.height) * page.heightPt;
 
-      const hit = measures.find(
+      const hits = measures.filter(
         (m) =>
           m.page === page.pageNumber &&
           m.bbox_pt &&
@@ -267,9 +270,11 @@ export function SheetCanvas({
           yPt >= m.bbox_pt[1] &&
           yPt <= m.bbox_pt[3],
       );
+      const hit = hits.find((m) => m.index === playingIndex)
+        ?? hits.find((m) => m.start_beat >= beat) ?? hits[0];
       if (hit) onMeasureClick(hit.index);
     },
-    [measures, onMeasureClick],
+    [measures, onMeasureClick, playingIndex, beat],
   );
 
   if (error) {
@@ -295,6 +300,12 @@ export function SheetCanvas({
               stay aligned at any rendered size without re-rastering. */}
           {measures
             .filter((m) => m.page === page.pageNumber && m.bbox_pt)
+            .filter((m, _, all) => {
+              const occurrences = all.filter((other) => (other.printed_index ?? other.index) === (m.printed_index ?? m.index));
+              const visible = occurrences.find((other) => other.index === playingIndex)
+                ?? occurrences.find((other) => other.start_beat >= beat) ?? occurrences[0];
+              return m === visible;
+            })
             .map((m) => {
               const [x0, y0, x1, y1] = m.bbox_pt!;
               return (
@@ -317,7 +328,8 @@ export function SheetCanvas({
             })}
           {playhead && playhead.page === page.pageNumber && (
             <span
-              className="playhead"
+              className={`playhead${playhead.approximate ? " approximate" : ""}`}
+              title={playhead.approximate ? "Approximate note position" : "Matched note position"}
               style={{
                 left: `${(playhead.x / page.widthPt) * 100}%`,
                 top: `${(playhead.y0 / page.heightPt) * 100}%`,

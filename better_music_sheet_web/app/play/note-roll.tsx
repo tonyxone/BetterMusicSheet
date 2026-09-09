@@ -24,12 +24,16 @@ import {
   normalizedKeyX,
   normalizedOctaveLines,
 } from "./keyboard-layout";
+import { LEAD_IN_BEATS } from "./playback";
 
-/** How much music is in view above the keys. Four beats is the compromise:
- * enough warning to read ahead, while a 16th note is still a bar you can see
- * rather than a line. Height only changes how big the bars are, not how much
- * time is shown - that is what makes a short strip workable. */
-const BEATS_AHEAD = 4;
+/** How much music is in view above the keys. Shared with playback.ts's
+ * count-in, which delays the very first note by exactly this many beats -
+ * so the first note starts at the top of the roll and arrives at the hit
+ * line exactly as it's due to sound. A shorter window here would make it
+ * pop in mid-air; a longer one would make it wait at the bottom in silence.
+ * Four beats otherwise reads as the right compromise: enough warning to read
+ * ahead, while a 16th note is still a bar you can see rather than a line. */
+const BEATS_AHEAD = LEAD_IN_BEATS;
 
 /** A sliver below the hit line, so a note stays visible for a moment after it
  * lands instead of vanishing at the instant you need to see it. */

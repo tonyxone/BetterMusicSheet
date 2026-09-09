@@ -199,6 +199,14 @@ details.options[open] summary::before { content: "▾ "; }
   transition: box-shadow .15s, transform .15s; text-decoration: none; color: inherit;
 }
 .history-row:hover { box-shadow: 0 10px 26px rgba(46, 33, 23, 0.10); transform: translateY(-1px); }
+/* The row's own link, covering everything but the Play icon and the status
+   badge - those need their own click targets, so only this part can be the
+   <a>. Repeats the row's former gap/alignment so splitting it out doesn't
+   shift the icon or title. */
+.history-row-link {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 18px;
+  text-decoration: none; color: inherit;
+}
 .history-icon {
   width: 44px; height: 56px; background: var(--paper); border: 1px solid var(--paper-deep); border-radius: 6px;
   flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 18px;
@@ -390,10 +398,14 @@ details.options[open] summary::before { content: "▾ "; }
    canvas: an in-flow canvas keeps the block open at its own height, and
    three.js writes that height itself on every resize. CSS owns the display
    size here; keyboard-3d.tsx only sets the drawing buffer. */
-.keyboard-3d > canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.keyboard-3d > canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; z-index: 0; }
 /* Key names are HTML over the WebGL canvas, positioned by projecting each key
    through the (fixed) camera - crisp at any size, and no per-key texture. */
-.key-labels { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.15s; }
+/* z-index above the canvas: both are absolutely positioned now (the canvas
+   for the aspect-ratio fix above), and three.js appends its canvas to the DOM
+   after this div renders - without an explicit order, later-in-DOM would
+   paint on top and hide every label under the keys. */
+.key-labels { position: absolute; inset: 0; z-index: 1; pointer-events: none; opacity: 0; transition: opacity 0.15s; }
 .key-labels.visible { opacity: 1; }
 .key-label {
   position: absolute; transform: translate(-50%, -50%);
@@ -404,7 +416,7 @@ details.options[open] summary::before { content: "▾ "; }
 .key-label.lit { color: #fff; }
 .play-hint { color: var(--ink-soft); padding: 24px; text-align: center; }
 .play-error { color: var(--danger); padding: 24px; text-align: center; }
-/* The picker reuses .history-row, which is an <a> there and a <button> here. */
+/* The picker reuses .history-row, which is a <div> there and a <button> here. */
 button.history-row { width: 100%; font-family: inherit; cursor: pointer; text-align: left; }
 .play-gate-icon { font-size: 40px; margin-bottom: 14px; }
 /* An icon that IS the control - no pill, no border. Padding is kept so the
@@ -447,3 +459,21 @@ button.history-row { width: 100%; font-family: inherit; cursor: pointer; text-al
   font-size: 13px; color: var(--ink-soft); font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+.play-review { flex: none; max-height: 34vh; overflow: auto; font-size: 13px; padding: 6px 12px; }
+.play-review summary { cursor: pointer; font-weight: 600; }
+.play-review p { margin: 6px 0; }
+.play-review form { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin: 10px 0; }
+.play-review label { display: inline-flex; flex-direction: column; gap: 3px; }
+.play-review input { width: 100px; }
+.play-review input, .play-review select, .play-review button { padding: 5px 8px; border: 1px solid var(--ink-soft); border-radius: 5px; }
+.play-speed input[type="number"] { width: 68px; }
+/* Called out deliberately - this one field silently rescales the whole
+   piece's timing, so it shouldn't blend in with the rest of the transport. */
+.play-tempo-input {
+  border: 2px solid var(--accent);
+  border-radius: 6px; padding: 3px 6px;
+  box-shadow: 0 0 0 2px rgba(168, 60, 52, 0.15);
+}
+.play-tempo-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.playhead.approximate { border-color: #b7771d; }
