@@ -188,19 +188,26 @@ with `npm run dev` alongside the API and open `http://localhost:3000`.
 [Mutopia Project](https://www.mutopiaproject.org/) as above — the dashed line
 marks what is sounding, and the lit keys are coloured by hand.*
 
-- Keys light while they sound, coloured by hand — right blue, left green — and
+- Keys light while they are physically held, coloured by staff or a saved hand
+  correction — right blue, left green — and
   a dashed playhead steps from note to note on the sheet, which scrolls to
   follow along.
 - Click any measure to play from there; drag the scrub bar to move anywhere.
   Both work while paused, so you can read a passage without hearing it.
-- Speed runs from 0.1x to 2x. Key names and sound each toggle off.
+- Speed runs from 0.1x to 2x. Key names and sound each toggle off. Playback
+  follows recognized tempo changes, dynamics, articulation, pedal, ties,
+  repeats/endings, common ornaments, arpeggios, octave lines, grace notes, and
+  fermatas. The BPM field can override the detected or assumed opening tempo.
+- The Review notes panel shows recognition notices and lets you correct pitch,
+  beat, duration, and hand. Corrections apply to repeated occurrences and are
+  saved in that browser.
 - Signing in is optional for annotating, but playback past the first two lines
   needs an account. Set `COGNITO_USER_POOL_ID` and `COGNITO_APP_CLIENT_ID` (see
   `.env.example`) to sign in locally; without them everything else still works.
 
-There is no tempo in OMR output — Audiveris does not emit one — so playback
-uses a fixed default BPM and the speed control scales it. It will not match a
-printed `♩ = 72`.
+MusicXML tempo is used when present. For vector PDFs, the pipeline also reads a
+conventional printed metronome mark such as `♩ = 72` when its music glyph and
+text are recoverable. Scans or unusual fonts may still need the BPM override.
 
 ---
 
@@ -242,7 +249,9 @@ audiveris_heads.py Parse <head> positions, pitches, chord relations, key
                    signature, accidentals and staff lines out of the .omr zip
 labels.py          Diatonic pitch + accidental -> label text (unicode/ascii, octave)
 musicxml.py        Note durations/onsets out of the .mxl (stdlib only, no music21)
-timeline.py        Joins that rhythm with the .omr's geometry -> playback JSON
+score_notes.py     Shared written-pitch resolution and notehead identity
+pdf_marks.py       Conservative vector-PDF octave-line and tempo recovery
+timeline.py        Performance order, expression, audio, and sheet alignment
 omr_notes.py       (obsolete) old music21/.mxl parsing — kept for reference only
 auth.py            Optional Cognito sign-in; anonymous guest ids otherwise
 db.py / storage.py Job state and files (DynamoDB/S3 in prod, local otherwise)
@@ -262,25 +271,28 @@ server_jobs/       Web UI's uploaded/output files and job state (not committed, 
 ## Known limitations
 
 - Labels come from the noteheads Audiveris detects. A notehead Audiveris fails to
-  detect at all (rare — roughly 1% of notes on the reference pieces) simply has
+  detect simply has
   no label; there is no fallback detector.
 - Audiveris occasionally misreads a *clef change* (e.g. the left hand switching
   to bass clef mid-piece). The pipeline compensates by reading the clef from the
   PDF's own clef glyphs; for PDFs with no readable text layer (scanned sheets),
   it falls back to Audiveris's clef reading and such passages can be wrong.
-- Repeated 3+-note chords within the same measure are labeled once (a deliberate
-  de-duplication); single notes and two-note dyads are always labeled.
-- The pipeline assumes a standard two-part piano layout (two staves per system:
-  right hand above, left hand below), regardless of which clefs the parts use.
+- Every detected chord occurrence is labeled. Compact repeated-chord suppression
+  remains available internally and compares full pitches including octave.
+- Staff and hand are kept separate. Initial colors follow staff position because
+  OMR cannot infer hands reliably in cross-staff writing; the Play page allows a
+  hand correction.
 - Playback timing is only as good as the recognition behind it. Audiveris also
   misreads time signatures on occasion; measure length is taken as the larger of
   the written signature and what the measure actually holds, which recovers the
   common cases but not all of them.
-- On the sheet, the playhead lands exactly on the notehead for roughly two
-  thirds of notes. For the rest, Audiveris's own MusicXML and .omr outputs
-  disagree about the measure — usually by a single chord — and rather than
-  guess an alignment (which would drift for every note after it), the position
-  is interpolated across the measure instead.
+- The playhead uses measure/voice/onset/pitch identity and only accepts a unique
+  notehead match. Unmatched positions are interpolated within their own measure,
+  shown in amber, and reported in Review notes. Missing geometry is never shifted
+  onto another page.
+- Common ornaments and fermatas use conventional, documented playback defaults.
+  Their exact execution remains a performer choice; the Review notes panel and
+  tempo/note controls make those choices adjustable.
 - The timeline is written when a sheet is annotated, so anything processed
   before the Play page existed has none; re-upload it to get playback.
 
