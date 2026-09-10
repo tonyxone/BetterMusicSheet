@@ -1,113 +1,116 @@
-// A small Web Audio piano-ish synth.
-//
-// Deliberately synthesized rather than sampled: a real piano soundfont is
-// megabytes of assets for a feature whose point is showing you *which* keys
-// sound, not reproducing a concert grand. Easy to swap later - nothing
-// outside this file knows how a note is produced.
+import type { Smplr } from "smplr";
+import { SynthEngine as BasicSynth } from "./basic-synth";
+export { GRACE_SECONDS, midiToFrequency } from "./basic-synth";
 
-/** How long a grace note (duration_beats === 0) should actually sound. */
-export const GRACE_SECONDS = 0.12;
+export const INSTRUMENTS = [
+  { id: "grand", name: "Grand piano" },
+  { id: "electric", name: "Electric piano · Wurlitzer" },
+  { id: "cp80", name: "Electric grand · CP80" },
+  { id: "organ", name: "Church organ" },
+  { id: "basic", name: "Basic synth (offline)" },
+] as const;
+export type InstrumentId = typeof INSTRUMENTS[number]["id"];
+export const isInstrumentId = (value: string): value is InstrumentId => INSTRUMENTS.some((i) => i.id === value);
 
-type Voice = {
-  osc: OscillatorNode;
-  gain: GainNode;
-};
-
-export function midiToFrequency(midi: number) {
-  return 440 * Math.pow(2, (midi - 69) / 12);
-}
-
+/** Samples are loaded before the playback clock starts. */
 export class SynthEngine {
-  private ctx: AudioContext;
+  private instrument: Smplr | null = null;
+  private basic: BasicSynth;
   private master: GainNode;
-  private voices = new Map<number, Voice>();
-  private nextId = 1;
+  private limiter: DynamicsCompressorNode;
+  private loading: { id: InstrumentId; promise: Promise<void> } | null = null;
+  private pending: Smplr | null = null;
+  private generation = 0;
+  private disposed = false;
+  private nextId = 0;
+  private loadedNotes = new Set<number>();
+  instrumentId: InstrumentId = "basic";
 
-  constructor(ctx: AudioContext) {
-    this.ctx = ctx;
+  constructor(private ctx: AudioContext) {
+    this.basic = new BasicSynth(ctx);
     this.master = ctx.createGain();
-    // Headroom: a dense chord is many simultaneous oscillators, and summing
-    // them at full gain clips audibly.
-    this.master.gain.value = 0.22;
-    this.master.connect(ctx.destination);
+    this.master.gain.value = .65;
+    this.limiter = ctx.createDynamicsCompressor();
+    this.limiter.threshold.value = -6;
+    this.limiter.knee.value = 6;
+    this.limiter.ratio.value = 12;
+    this.master.connect(this.limiter);
+    this.limiter.connect(ctx.destination);
+  }
+  get usesPianoPedal() { return this.instrumentId !== "organ"; }
+
+  load(id: InstrumentId, notes: number[], progress: (percent: number) => void = () => {}) {
+    if (this.disposed) return Promise.reject(new Error("Audio was closed."));
+    if (this.loading?.id === id) return this.loading.promise;
+    if (id === this.instrumentId && !this.loading && (id !== "grand" || notes.every((n) => this.loadedNotes.has(Math.round(n))))) return Promise.resolve();
+    const generation = ++this.generation;
+    this.pending?.dispose();
+    this.pending = null;
+    const promise = (async () => {
+      let candidate: Smplr | null = null;
+      try {
+        if (id !== "basic") {
+          const lib = await import("smplr");
+          if (generation !== this.generation || this.disposed) return;
+          const http = lib.HttpStorage;
+          const cache = lib.CacheStorage("music-sheet-instruments-v1");
+          const storage = { fetch: async (url: string) => {
+            try { return await cache.fetch(url); } catch { return http.fetch(url); }
+          } };
+          const options = { destination: this.master, storage, volume: 85,
+            onLoadProgress: ({ loaded, total }: { loaded: number; total: number }) => {
+              if (generation === this.generation && !this.disposed) progress(total ? Math.round(loaded / total * 100) : 0);
+            } };
+          candidate = id === "grand"
+            ? lib.SplendidGrandPiano(this.ctx, { ...options, decayTime: .35,
+                notesToLoad: { notes: [...new Set(notes.map(Math.round))], velocityRange: [1, 127] } })
+            : id === "organ"
+              ? lib.Soundfont(this.ctx, { ...options, instrument: "church_organ", kit: "FluidR3_GM", loadLoopData: true })
+              : lib.ElectricPiano(this.ctx, { ...options, instrument: id === "cp80" ? "CP80" : "WurlitzerEP200" });
+          this.pending = candidate;
+          await candidate.ready;
+        }
+        if (generation !== this.generation || this.disposed) { candidate?.dispose(); return; }
+        this.allOff();
+        this.instrument?.dispose();
+        this.instrument = candidate;
+        this.instrumentId = id;
+        this.loadedNotes = new Set(notes.map(Math.round));
+        this.pending = null;
+        progress(100);
+      } catch (error) {
+        candidate?.dispose();
+        throw error;
+      } finally {
+        if (generation === this.generation) { this.loading = null; this.pending = null; }
+      }
+    })();
+    this.loading = { id, promise };
+    void promise.then(() => { if (this.loading?.promise === promise) this.loading = null; }, () => {});
+    return promise;
   }
 
-  /** Schedule a note. `at`/`until` are AudioContext times, so timing comes
-   * from the audio clock rather than JS timers. Returns a voice id. */
-  noteOn(midi: number, at: number, until: number, velocity = 80): number {
-    const ctx = this.ctx;
-    const osc = ctx.createOscillator();
-    // Triangle, not sine: a sine reads as a dull flute with no harmonic
-    // content, and a full additive piano model is out of scope here.
-    osc.type = "triangle";
-    osc.frequency.value = midiToFrequency(midi);
-
-    const gain = ctx.createGain();
-    const peak = 0.9 * Math.pow(Math.max(1, Math.min(127, velocity)) / 100, 1.5);
-    const sustain = peak * 0.31;
-    const attack = Math.min(0.006, Math.max(0.001, (until - at) / 3));
-    // A real piano decays continuously rather than holding flat, so the
-    // envelope always slides toward the sustain level instead of sitting at
-    // the peak - this is most of what makes it read as a piano at all.
-    const decay = Math.max(0.001, Math.min(0.35, (until - at - attack) * 0.5));
-
-    gain.gain.setValueAtTime(0.0001, at);
-    gain.gain.linearRampToValueAtTime(peak, at + attack);
-    gain.gain.exponentialRampToValueAtTime(sustain, at + attack + decay);
-
-    const release = 0.08;
-    const stopAt = Math.max(at + attack + 0.02, until);
-    gain.gain.setTargetAtTime(0.0001, stopAt, release / 3);
-
-    osc.connect(gain);
-    gain.connect(this.master);
-    osc.start(at);
-    osc.stop(stopAt + release * 3);
-
-    const id = this.nextId++;
-    this.voices.set(id, { osc, gain });
-    osc.onended = () => {
-      try {
-        osc.disconnect();
-        gain.disconnect();
-      } catch {
-        // already torn down
-      }
-      this.voices.delete(id);
-    };
+  noteOn(midi: number, at: number, until: number, velocity = 80) {
+    if (this.disposed || until <= at) return -1;
+    if (!this.instrument) return this.basic.noteOn(midi, at, until, velocity);
+    const id = ++this.nextId;
+    this.instrument.start({ note: midi, time: at, duration: until - at,
+      velocity: Math.max(1, Math.min(127, velocity)), stopId: id });
     return id;
   }
-
-  /** Silence output without changing anything else. Muting at the master
-   * gain rather than skipping noteOn keeps scheduling, timing and the
-   * keyboard highlight identical whether or not you can hear it. */
   setMuted(muted: boolean) {
-    const now = this.ctx.currentTime;
-    this.master.gain.cancelScheduledValues(now);
-    this.master.gain.setTargetAtTime(muted ? 0.0001 : 0.22, now, 0.01);
+    this.basic.setMuted(muted);
+    this.master.gain.setTargetAtTime(muted ? 0 : .65, this.ctx.currentTime, .01);
   }
-
-  /** Cut everything immediately - used on pause/stop. */
-  allOff() {
-    const now = this.ctx.currentTime;
-    for (const [id, v] of this.voices) {
-      try {
-        v.gain.gain.cancelScheduledValues(now);
-        v.gain.gain.setTargetAtTime(0.0001, now, 0.015);
-        v.osc.stop(now + 0.1);
-      } catch {
-        // already stopped
-      }
-      this.voices.delete(id);
-    }
-  }
-
+  allOff() { this.basic.allOff(); this.instrument?.stop(); }
   dispose() {
-    this.allOff();
-    try {
-      this.master.disconnect();
-    } catch {
-      // already disconnected
-    }
+    if (this.disposed) return;
+    this.disposed = true;
+    this.generation++;
+    this.pending?.dispose();
+    this.instrument?.dispose();
+    this.basic.dispose();
+    this.master.disconnect();
+    this.limiter.disconnect();
   }
 }

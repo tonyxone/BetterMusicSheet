@@ -1,0 +1,20 @@
+Instrument sound credits
+
+Playback engine: smplr by Dani Garcia, MIT license.
+https://github.com/danigb/smplr
+
+Grand Piano: Splendid Grand Piano, AKAI Steinway samples (public domain),
+SFZ mapping and fixes by kinwie and contributors; web adaptation by smplr.
+https://github.com/sfzinstruments/SplendidGrandPiano
+
+Electric Piano / Electric Grand: Greg Sullivan's Wurlitzer EP200 and Yamaha
+CP80 samples, CC BY 3.0. SFZ mapping by kinwie; web adaptation by smplr.
+https://github.com/sfzinstruments/GregSullivan.E-Pianos
+https://creativecommons.org/licenses/by/3.0/
+
+Church Organ: FluidR3 GM by Frank Wen; prerendered audio distributed by
+Benjamin Gleitzman and contributors under CC BY 3.0, used through smplr.
+https://github.com/gleitz/midi-js-soundfonts
+
+Samples are fetched on demand from upstream public sample hosting and cached
+in this browser when available. No uploaded score is sent to sample hosts.

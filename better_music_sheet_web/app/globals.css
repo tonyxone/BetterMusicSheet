@@ -460,13 +460,6 @@ button.history-row { width: 100%; font-family: inherit; cursor: pointer; text-al
   white-space: nowrap;
 }
 
-.play-review { flex: none; max-height: 34vh; overflow: auto; font-size: 13px; padding: 6px 12px; }
-.play-review summary { cursor: pointer; font-weight: 600; }
-.play-review p { margin: 6px 0; }
-.play-review form { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin: 10px 0; }
-.play-review label { display: inline-flex; flex-direction: column; gap: 3px; }
-.play-review input { width: 100px; }
-.play-review input, .play-review select, .play-review button { padding: 5px 8px; border: 1px solid var(--ink-soft); border-radius: 5px; }
 .play-speed input[type="number"] { width: 68px; }
 /* Called out deliberately - this one field silently rescales the whole
    piece's timing, so it shouldn't blend in with the rest of the transport. */
@@ -477,3 +470,6 @@ button.history-row { width: 100%; font-family: inherit; cursor: pointer; text-al
 }
 .play-tempo-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .playhead.approximate { border-color: #b7771d; }
+.play-instrument { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink-soft); }
+.play-instrument label { display: flex; align-items: center; gap: 8px; }
+.play-instrument select { max-width: 240px; padding: 7px 10px; border: 1px solid #bbb; border-radius: 8px; background: white; color: #222; }

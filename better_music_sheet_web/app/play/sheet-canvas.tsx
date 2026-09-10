@@ -196,10 +196,11 @@ export function SheetCanvas({
    * moving instead of dropping out. */
   const onsets = useMemo(() => {
     const byMeasure = new Map(measures.map((m) => [m.index, m]));
-    // Keyed by start beat, so a chord - and both hands striking together -
-    // give one position instead of several. Engravers offset colliding
-    // noteheads horizontally, so the mean keeps the line on the group.
-    const groups = new Map<number, { page: number; y0: number; y1: number; xs: number[]; approximate: boolean; measure: number }>();
+    // Keyed by measure and start beat, so a chord - and both hands striking
+    // together - give one position instead of several. Exact notehead
+    // positions take priority over interpolated fallbacks: mixing the two can
+    // pull the line backwards even though playback time is moving forward.
+    const groups = new Map<string, { beat: number; page: number; y0: number; y1: number; exactXs: number[]; fallbackXs: number[]; measure: number }>();
 
     for (const n of notes) {
       const m = byMeasure.get(n.measure_index);
@@ -213,22 +214,46 @@ export function SheetCanvas({
       } else {
         continue;
       }
-      const g = groups.get(n.start_beat);
-      if (g) { g.xs.push(x); g.approximate ||= !n.bbox_pt; }
-      else groups.set(n.start_beat, { page: m.page, y0: m.bbox_pt[1], y1: m.bbox_pt[3], xs: [x], approximate: !n.bbox_pt, measure: m.index });
+      const key = `${m.index}:${n.start_beat}`;
+      const g = groups.get(key);
+      if (g) {
+        (n.bbox_pt ? g.exactXs : g.fallbackXs).push(x);
+      } else {
+        groups.set(key, {
+          beat: n.start_beat,
+          page: m.page,
+          y0: m.bbox_pt[1],
+          y1: m.bbox_pt[3],
+          exactXs: n.bbox_pt ? [x] : [],
+          fallbackXs: n.bbox_pt ? [] : [x],
+          measure: m.index,
+        });
+      }
     }
 
-    return [...groups.entries()]
-      .map(([b, g]) => ({
-        beat: b,
-        page: g.page,
-        y0: g.y0,
-        y1: g.y1,
-        x: g.xs.reduce((a, c) => a + c, 0) / g.xs.length,
-        approximate: g.approximate,
-        measure: g.measure,
-      }))
+    const result = [...groups.values()]
+      .map((g) => {
+        const xs = g.exactXs.length ? g.exactXs : g.fallbackXs;
+        return {
+          beat: g.beat,
+          page: g.page,
+          y0: g.y0,
+          y1: g.y1,
+          x: xs.reduce((a, c) => a + c, 0) / xs.length,
+          approximate: !g.exactXs.length,
+          measure: g.measure,
+        };
+      })
       .sort((a, b) => a.beat - b.beat);
+
+    // Recognition can still assign a later onset to a slightly earlier x.
+    // Clamp within each measure so the playhead never retreats on the page.
+    let previous: (typeof result)[number] | undefined;
+    for (const onset of result) {
+      if (previous?.measure === onset.measure) onset.x = Math.max(onset.x, previous.x);
+      previous = onset;
+    }
+    return result;
   }, [measures, notes]);
 
   /** The latest onset at or before the clock. Binary search, because this

@@ -10,7 +10,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Execute the actual TypeScript against a deterministic audio clock. No
 // browser/audio device is needed, and no copy of player logic lives here.
-function modules() {
+function modules(external = {}) {
   const cache = new Map();
   const frames = new Map();
   let frameId = 0;
@@ -23,7 +23,7 @@ function modules() {
     const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
     vm.runInNewContext(js, {
       exports,
-      require: (id) => load(id.startsWith('@/') ? id.slice(2) + '.ts' : path.resolve(path.dirname(filename), id + '.ts')),
+      require: (id) => external[id] ?? load(id.startsWith('@/') ? id.slice(2) + '.ts' : path.resolve(path.dirname(filename), id + '.ts')),
       setInterval: () => 1, clearInterval() {},
       requestAnimationFrame: (f) => { frames.set(++frameId, f); return frameId; },
       cancelAnimationFrame: (id) => frames.delete(id),
@@ -35,6 +35,66 @@ function modules() {
 
 const note = (start, duration, midi = 60, extra = {}) => ({ source_id: `${start}:${midi}`, start_beat: start, duration_beats: duration,
   midi, role: 0, measure_index: 0, is_grace: false, bbox_pt: null, ...extra });
+
+function sampleEngine() {
+  const instruments = [];
+  const create = () => {
+    let resolve, reject;
+    const ready = new Promise((a,b) => { resolve=a; reject=b; });
+    const instrument = { ready, resolve, reject, calls:[], disposed:false, stopped:0,
+      start(event) { this.calls.push(event); }, stop() { this.stopped++; }, dispose() { this.disposed=true; } };
+    instruments.push(instrument); return instrument;
+  };
+  const lib = { SplendidGrandPiano:create, ElectricPiano:create, Soundfont:create,
+    HttpStorage:{fetch(){}}, CacheStorage:()=>({fetch(){}}) };
+  const { SynthEngine } = modules({smplr:lib}).load('app/play/synth.ts');
+  const param = () => ({value:0,setTargetAtTime(){}});
+  const node = () => ({gain:param(),threshold:param(),knee:param(),ratio:param(),connect(){},disconnect(){}});
+  const engine = new SynthEngine({currentTime:0,createGain:node,createDynamicsCompressor:node,destination:{}});
+  return {engine,instruments};
+}
+
+test('sample loading waits for readiness and gives repeated pitches distinct voices', async () => {
+  const {engine,instruments} = sampleEngine();
+  const ready=engine.load('grand',[60]); await new Promise(setImmediate);
+  assert.equal(engine.instrumentId,'basic');
+  instruments[0].resolve(); await ready;
+  assert.equal(engine.instrumentId,'grand');
+  engine.noteOn(60,1,2,40); engine.noteOn(60,1.5,3,100);
+  assert.notEqual(instruments[0].calls[0].stopId,instruments[0].calls[1].stopId);
+  assert.equal(instruments[0].calls[1].duration,1.5);
+  assert.equal(instruments[0].calls[0].velocity,40);
+  engine.dispose(); assert.equal(instruments[0].disposed,true);
+});
+
+test('a stale instrument load cannot replace a newer selection', async () => {
+  const {engine,instruments} = sampleEngine();
+  const first=engine.load('grand',[60]); await new Promise(setImmediate);
+  const second=engine.load('electric',[60]); await new Promise(setImmediate);
+  instruments[1].resolve(); await second;
+  instruments[0].resolve(); await first;
+  assert.equal(engine.instrumentId,'electric');
+  assert.equal(instruments[0].disposed,true);
+  engine.dispose();
+});
+
+test('failed samples can be retried or replaced with the offline preset', async () => {
+  const {engine,instruments} = sampleEngine();
+  const first=engine.load('grand',[60]); await new Promise(setImmediate);
+  instruments[0].reject(new Error('network')); await assert.rejects(first);
+  const retry=engine.load('grand',[60]); await new Promise(setImmediate);
+  instruments[1].resolve(); await retry;
+  await engine.load('basic',[60]);
+  assert.equal(engine.instrumentId,'basic');
+  assert.equal(instruments[1].disposed,true);
+  engine.dispose();
+});
+
+test('organ releases follow the written tie chain rather than piano pedal', () => {
+  const t=score([note(0,1,60)],4,{audio_notes:[note(0,4,60,{segment_ids:['0:60']})]});
+  const x=player(t); x.p.synth.usesPianoPedal=false; x.p.play(1);
+  assert.equal(x.p.schedule[0].end,1);
+});
 const score = (notes, total = 8, extra = {}) => ({ version: 2, tempo_bpm_default: 60, total_beats: total, notes,
   measures: [{ index: 0, start_beat: 0, length_beats: total, label: '1', page: 1, bbox_pt: null, distinct_midis: [] }], ...extra });
 function player(timeline) {

@@ -42,8 +42,11 @@ const BEATS_BEHIND = 0.45;
 /** Grace notes have no duration; give them a bar you can actually see. */
 const MIN_BAR_BEATS = 0.12;
 
-/** How long the flash at the hit line lasts, in beats. */
+/** How long the brighter strike flash at the hit line lasts, in beats. */
 const FLASH_BEATS = 0.35;
+
+/** White foreground mixed over a note while its piano key is held. */
+const ACTIVE_FOREGROUND_ALPHA = 0.42;
 
 function roundedBar(
   ctx: CanvasRenderingContext2D,
@@ -196,9 +199,26 @@ export function NoteRoll({
           const past = locked !== null && n.start_beat >= locked;
 
           if (phase === 2) {
-            // The moment of the strike, fading as it crosses the line.
+            // A translucent white foreground follows the note for its active
+            // key duration. The hand colour remains visible underneath while
+            // the played note is much easier to pick out from notes above it.
             const since = beat - n.start_beat;
-            if (past || since < 0 || since >= FLASH_BEATS) continue;
+            const activeBeats = Math.max(
+              MIN_BAR_BEATS,
+              n.key_duration_beats ?? (n.is_grace || n.duration_beats <= 0 ? 0 : n.duration_beats),
+            );
+            if (past || since < 0 || since >= activeBeats) continue;
+            const drawTop = Math.max(top, -8);
+            const drawBottom = Math.min(bottom, height + 8);
+            if (drawBottom > drawTop) {
+              ctx.globalAlpha = ACTIVE_FOREGROUND_ALPHA;
+              ctx.fillStyle = "#ffffff";
+              roundedBar(ctx, cx - w / 2, drawTop, w, drawBottom - drawTop, 3);
+            }
+
+            // Keep the existing landing flash for a crisp attack, especially
+            // when the same pitch is struck repeatedly.
+            if (since >= FLASH_BEATS) continue;
             ctx.globalAlpha = 1 - since / FLASH_BEATS;
             ctx.fillStyle = "#ffffff";
             roundedBar(ctx, cx - w / 2, hitY - 5, w, 10, 3);

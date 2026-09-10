@@ -48,21 +48,28 @@ def _match_head(n, candidates, used):
     ref = clef_reference(clef['sign'], clef['line'])
     if ref is None:
         return None
-    # MusicXML already includes octave-shift/clef-octave changes in its pitch.
-    # Remove these only to compare with the written staff slot.
+    # Audiveris exports the pitch at the written staff position even while an
+    # octave line is active. Match that position first. This matters for an
+    # octave-spaced unison: shifting before matching turns both candidates
+    # into the same pitch class and leaves one of them unmatched.
     written = 34 - (n['octave'] * 7 + 'CDEFGAB'.index(n['step']))
-    slot = written + 7 * (n['octave_shift'] + clef['octave']) - ref
     positioned = [h for h in candidates if h['source_id'] not in used
                 and h['role'] == max(0, n['staff'] - 1)
                 and h.get('onset') is not None
                 and abs(h['onset'] - n['start_beat_in_measure']) < 1e-6]
-    possible = [h for h in positioned if h['pitch'] == slot]
+    written_slot = written - ref
+    possible = [h for h in positioned if h['pitch'] == written_slot]
+    if not possible:
+        # Keep accepting MusicXML that encodes the true sounding octave, as
+        # required by the format, rather than Audiveris's written octave.
+        sounding_slot = written + 7 * (n['octave_shift'] + clef['octave']) - ref
+        possible = [h for h in positioned if h['pitch'] == sounding_slot]
     if not possible:
         # Some exports contain dangling octave-shift directions while pitches
         # have already returned to the normal register. Sounding pitch remains
         # authoritative for the octave; a unique letter/voice/slot-time match
         # can still establish identity without trusting that dangling direction.
-        possible = [h for h in positioned if (h['pitch'] - slot) % 7 == 0]
+        possible = [h for h in positioned if (h['pitch'] - written_slot) % 7 == 0]
     voice_matches = [h for h in possible if h.get('voice') == n['voice']]
     if voice_matches:
         possible = voice_matches
@@ -81,7 +88,10 @@ def _realize_graces(notes, warnings):
         voices[(n['part'], n['voice'])].append(n)
     inserts = []
     for voice in voices.values():
-        voice.sort(key=lambda n: (n['start_beat_in_measure'], int(n['source_id'].rsplit(':', 1)[1])))
+        def source_order(note):
+            suffix = note['source_id'].rsplit(':', 1)[-1]
+            return (int(suffix), '') if suffix.isdigit() else (float('inf'), note['source_id'])
+        voice.sort(key=lambda n: (n['start_beat_in_measure'], source_order(n)))
         pending, previous = [], []
         for n in voice:
             if n['is_grace']:
@@ -227,6 +237,124 @@ def _recover_measure_tail(measure, notes, candidates, used):
     return len(recovered)
 
 
+def _recover_known_onsets(measure, notes, candidates, used):
+    """Keep OMR attacks that MusicXML omitted from the playback timeline.
+
+    Annotation density is a rendering decision, so it must never determine
+    which notes sound.  Audiveris occasionally retains a notehead and its
+    voice/onset relation in the OMR file while leaving that attack out of the
+    MusicXML export.  Reconcile the two sources by count at each staff/onset;
+    existing MusicXML notes remain authoritative and only the deficit is
+    restored, which avoids duplicating merely-unmatched MusicXML notes.
+    """
+    from collections import Counter
+
+    recovered = []
+    groups = defaultdict(list)
+    for h in candidates:
+        if h.get('onset') is not None:
+            groups[(h['role'], float(h['onset']))].append(h)
+
+    original = list(notes)
+    for (role, onset), heads in sorted(groups.items()):
+        recovered_before = len(recovered)
+        existing = [n for n in original if n['staff'] - 1 == role
+                    and abs(n['start_beat_in_measure'] - onset) < 1e-6]
+        deficit = len(heads) - len(existing)
+        if deficit <= 0:
+            continue
+
+        role_notes = [n for n in original if n['staff'] - 1 == role]
+        fallback = role_notes or original
+        prototype = min(fallback, key=lambda n: abs(n['start_beat_in_measure'] - onset)) if fallback else None
+        transpose = prototype.get('transpose', 0) if prototype else 0
+
+        # Pair existing pitches with detected heads first. Any surplus head is
+        # the best candidate for a MusicXML omission, including a repeated
+        # same-pitch attack at a later onset.
+        represented = Counter(n['midi'] for n in existing)
+        missing = []
+        for h in sorted(heads, key=lambda item: (item['cx'], item['source_id'])):
+            diatonic = h.get('label_diatonic', h['diatonic'])
+            midi = midi_of(diatonic, h['alter']) + transpose
+            if represented[midi] > 0:
+                represented[midi] -= 1
+            elif h['source_id'] not in used:
+                missing.append((h, diatonic, midi))
+        if len(missing) < deficit:
+            selected = {h['source_id'] for h, _, _ in missing}
+            for h in sorted(heads, key=lambda item: (item['cx'], item['source_id'])):
+                if h['source_id'] in used or h['source_id'] in selected:
+                    continue
+                diatonic = h.get('label_diatonic', h['diatonic'])
+                missing.append((h, diatonic, midi_of(diatonic, h['alter']) + transpose))
+                if len(missing) == deficit:
+                    break
+
+        for h, diatonic, midi in missing[:deficit]:
+            voice = h.get('voice') or (prototype.get('voice', '1') if prototype else '1')
+            same_attack = [n for n in existing if n['voice'] == voice]
+            if same_attack:
+                duration = max(n['duration_beats'] for n in same_attack)
+            else:
+                later = [float(other['onset']) for other in candidates
+                         if other['role'] == role and other.get('onset') is not None
+                         and (other.get('voice') or voice) == voice
+                         and float(other['onset']) > onset + 1e-6]
+                duration = (min(later) if later else measure['length_beats']) - onset
+            if duration <= 1e-6:
+                continue
+
+            clef_sign = h.get('clef', 'G' if role == 0 else 'F')
+            clef = prototype.get('clef') if prototype else None
+            if not isinstance(clef, dict):
+                clef = {'sign': clef_sign, 'line': 2 if clef_sign == 'G' else 4, 'octave': 0}
+            base = dict(prototype) if prototype else {}
+            source_id = f'recovered:{h["source_id"]}'
+            base.update(identity=(measure['identity'], source_id), label=measure['label'],
+                        part=h.get('part', base.get('part', 0)), staff=role + 1, voice=voice,
+                        step=step_of(diatonic), octave=octave_of(diatonic), alter=h['alter'],
+                        start_beat_in_measure=onset, duration_beats=duration,
+                        is_grace=False, grace={}, chord=bool(existing), tie_start=False,
+                        tie_stop=False, articulations=[], ornaments=[], fermata=False,
+                        arpeggiate=False, fingering=None, clef=clef, octave_shift=0,
+                        key_fifths=h.get('key_fifths', base.get('key_fifths', 0)),
+                        transpose=transpose, default_x=h.get('cx'), source_id=source_id,
+                        printed_id=source_id, midi=midi, xml_midi=midi,
+                        bbox_pt=h['bbox_pt'], confidence=h.get('confidence'),
+                        head_id=h['source_id'], pitch_source='omr-recovered-onset',
+                        timing_source='omr-onset')
+            recovered.append(base)
+            used.add(h['source_id'])
+        if len(recovered) > recovered_before:
+            measure['warnings'].append(
+                'Recovered note attacks omitted from MusicXML using detected OMR timing.')
+
+    notes.extend(recovered)
+    return len(recovered)
+
+
+def _prepare_musicxml_only(mxl_path, num_pages, page_omr_overrides=None):
+    """Prepare playable notes when PDF/OMR geometry cannot be reconciled."""
+    printed = _printed_sources(mxl_path, num_pages, page_omr_overrides)
+    note_count = 0
+    warning = 'PDF note matching failed; playback uses MusicXML-only score data.'
+    for printed_index, (measure, notes) in enumerate(printed):
+        measure['printed_index'] = printed_index
+        measure['bbox_pt'] = None
+        measure['warnings'].append(warning)
+        for n in notes:
+            n['printed_id'] = f'{measure["page"]}:{n["source_id"]}'
+            n['xml_midi'] = step_octave_to_midi(n['step'], n['octave'], n['alter']) + n['transpose']
+            n['midi'] = n['xml_midi']
+            n.update(bbox_pt=None, pitch_source='musicxml-only', confidence=None, head_id=None)
+            note_count += 1
+    stats = {'notes_matched': 0, 'notes_unmatched': note_count, 'pitch_corrections': 0,
+             'measure_count_mismatch': 0, 'pages_without_regions': num_pages,
+             'measures_without_note_positions': len(printed), 'musicxml_only': 1}
+    return {'resolved': {'pages': {}, 'notes': []}, 'printed': printed, 'stats': stats}
+
+
 def prepare_score(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=None, resolved_notes=None):
     resolved = resolved_notes if resolved_notes is not None else resolve_score_notes(pdf_path, omr_path, num_pages, page_omr_overrides)
     printed = _printed_sources(mxl_path, num_pages, page_omr_overrides)
@@ -312,8 +440,11 @@ def prepare_score(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=No
                 pending_ties[tie_key] = (absolute + n['duration_beats'], n['midi'],
                                          h['alter'] if h else n['alter'],
                                          h.get('label_diatonic', h['diatonic']) if h else 34 - (n['octave'] * 7 + 'CDEFGAB'.index(n['step'])))
-        count = _recover_measure_tail(m, notes, candidates, used)
-        stats['notes_recovered'] = stats.get('notes_recovered', 0) + count
+        onset_count = _recover_known_onsets(m, notes, candidates, used)
+        tail_count = _recover_measure_tail(m, notes, candidates, used)
+        stats['notes_recovered'] = stats.get('notes_recovered', 0) + onset_count + tail_count
+        stats['notes_recovered_from_omr_onsets'] = (
+            stats.get('notes_recovered_from_omr_onsets', 0) + onset_count)
         if any(n['bbox_pt'] is None for n in notes):
             stats['measures_without_note_positions'] += 1
             m['warnings'].append('Some notes have approximate positions or unverified pitch alignment.')
@@ -448,7 +579,15 @@ def _realize_fermatas(notes, measure, warnings):
 
 def build_timeline(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=None,
                    tempo_bpm=DEFAULT_TEMPO_BPM, prepared_score=None):
-    prepared = prepared_score or prepare_score(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides)
+    fallback_warning = None
+    if prepared_score is not None:
+        prepared = prepared_score
+    else:
+        try:
+            prepared = prepare_score(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides)
+        except Exception:
+            prepared = _prepare_musicxml_only(mxl_path, num_pages, page_omr_overrides)
+            fallback_warning = 'PDF note matching failed; playback uses MusicXML-only score data.'
     printed = deepcopy(prepared['printed'])
     for m, ns in printed:
         inserts = _realize_graces(ns, m['warnings'])
@@ -459,6 +598,8 @@ def build_timeline(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=N
                     e['beat'] += amount
         _realize_fermatas(ns, m, m['warnings'])
     order, warnings = musicxml.performance_order([m for m, _ in printed])
+    if fallback_warning:
+        warnings.append(fallback_warning)
     snapshots, state = [], {}
     for m, _ in printed:
         snapshots.append(deepcopy(state))

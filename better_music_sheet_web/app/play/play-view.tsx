@@ -19,10 +19,9 @@ import type { AnnotationJob } from "@/lib/api";
 import type { Timeline, TimelineNote } from "@/lib/timeline";
 import { notesAtBeat, measureIndexAt } from "@/lib/timeline";
 import { applyCorrections, validCorrection } from "@/lib/corrections";
-import type { Corrections, NoteCorrection } from "@/lib/corrections";
-import NoteCorrections from "./note-corrections";
+import type { Corrections } from "@/lib/corrections";
 import { tempoClock, tempoControl } from "./tempo";
-import { GRACE_SECONDS, SynthEngine } from "./synth";
+import { GRACE_SECONDS, SynthEngine, INSTRUMENTS, isInstrumentId, type InstrumentId } from "./synth";
 import { Playback } from "./playback";
 
 // ssr:false is required, not just an optimization: both touch WebGL/Worker
@@ -241,11 +240,9 @@ function SheetPicker({ onPick }: { onPick: (jobId: string) => void }) {
  * audio graph exists to ask - scrubbing has to work before the first play. */
 function Player({ jobId }: { jobId: string }) {
   const [timeline, setTimeline] = useState<Timeline | null>(null);
-  const originalTimeline = useRef<Timeline | null>(null);
-  const [corrections, setCorrections] = useState<Corrections>({});
   const [baseBpm, setBaseBpm] = useState<number | null>(null);
-  const [correctionMessage, setCorrectionMessage] = useState("");
   const [pdfData, setPdfData] = useState<ArrayBuffer | null>(null);
+  const [pdfError, setPdfError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const [playing, setPlaying] = useState(false);
@@ -263,6 +260,11 @@ function Player({ jobId }: { jobId: string }) {
   );
   const [showKeyNames, setShowKeyNames] = useState(false);
   const [soundOn, setSoundOn] = useState(true);
+  const [instrument, setInstrument] = useState<InstrumentId>("grand");
+  const [audioLoading, setAudioLoading] = useState(false);
+  const [audioProgress, setAudioProgress] = useState(0);
+  const [audioError, setAudioError] = useState("");
+  const audioRequest = useRef(0);
   const [activeNotes, setActiveNotes] = useState<TimelineNote[]>([]);
   const [beat, setBeat] = useState(0);
   // A ref, not state: the progress callback is created once and must see the
@@ -320,30 +322,41 @@ function Player({ jobId }: { jobId: string }) {
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([
-      clientApiFetch(`/api/sheets/${jobId}/timeline`),
-      clientApiFetch(`/api/sheets/${jobId}/download?inline=1`),
-    ])
-      .then(async ([tlRes, pdfRes]) => {
-        if (cancelled) return;
+    void (async () => {
+      try {
+        const tlRes = await clientApiFetch(`/api/sheets/${jobId}/timeline`);
         if (tlRes.status === 404) throw new Error("Playback isn't available for this sheet.");
         if (!tlRes.ok) throw new Error(`couldn't load playback data (${tlRes.status})`);
-        if (!pdfRes.ok) throw new Error(`couldn't load the sheet (${pdfRes.status})`);
-        const [tl, pdf] = await Promise.all([tlRes.json(), pdfRes.arrayBuffer()]);
+        const tl = await tlRes.json();
         if (cancelled) return;
-        originalTimeline.current = tl;
+        try {
+          const savedInstrument = localStorage.getItem("sheet-instrument");
+          if (savedInstrument && isInstrumentId(savedInstrument)) setInstrument(savedInstrument);
+        } catch { /* Storage is optional. */ }
         let saved: Corrections = {};
         try {
           const raw = JSON.parse(localStorage.getItem(`sheet-corrections:${jobId}`) ?? "{}");
           saved = Object.fromEntries(Object.entries(raw).filter(([, value]) => validCorrection(value))) as Corrections;
         } catch { /* Browser storage may be unavailable. */ }
-        setCorrections(saved);
         setTimeline(applyCorrections(tl, saved));
-        setPdfData(pdf);
-      })
-      .catch((err) => {
+      } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
-      });
+      }
+    })();
+
+    // The annotated PDF is a visual aid. Playback is driven entirely by the
+    // timeline and remains usable when the preview request or renderer fails.
+    void (async () => {
+      try {
+        const pdfRes = await clientApiFetch(`/api/sheets/${jobId}/download?inline=1`);
+        if (!pdfRes.ok) throw new Error(`request failed (${pdfRes.status})`);
+        const pdf = await pdfRes.arrayBuffer();
+        if (!cancelled) setPdfData(pdf);
+      } catch (err) {
+        if (!cancelled) setPdfError(err instanceof Error ? err.message : String(err));
+      }
+    })();
+
     return () => {
       cancelled = true;
     };
@@ -352,8 +365,10 @@ function Player({ jobId }: { jobId: string }) {
   // Tear down audio and timers on unmount - otherwise an AudioContext and a
   // rAF loop keep running after navigating away.
   useEffect(() => {
+    const request = audioRequest;
     return () => {
       playbackRef.current?.dispose();
+      request.current++;
       synthRef.current?.dispose();
       ctxRef.current?.close().catch(() => {});
       playbackRef.current = null;
@@ -365,7 +380,8 @@ function Player({ jobId }: { jobId: string }) {
   /** Lazily build the audio graph. Must happen inside a click: browsers only
    * let an AudioContext start from a user gesture. */
   const ensurePlayback = useCallback(
-    (tl: Timeline) => {
+    async (tl: Timeline, chosen: InstrumentId = instrument) => {
+      const request = ++audioRequest.current;
       if (!ctxRef.current) {
         const Ctor =
           window.AudioContext ||
@@ -375,6 +391,24 @@ function Player({ jobId }: { jobId: string }) {
         synthRef.current.setMuted(!soundOn);
       }
       ctxRef.current.resume().catch(() => {});
+      setAudioError("");
+      setAudioLoading(true);
+      setAudioProgress(0);
+      if (synthRef.current!.instrumentId !== chosen) {
+        playbackRef.current?.pause();
+        setPlaying(false);
+      }
+      try {
+        await synthRef.current!.load(chosen, [...tl.notes, ...(tl.audio_notes ?? [])].map((n) => n.midi), setAudioProgress);
+      } catch {
+        if (request === audioRequest.current) {
+          setAudioError("Could not load this instrument. Try again or choose Basic synth (offline).");
+          setAudioLoading(false);
+        }
+        return null;
+      }
+      if (request !== audioRequest.current || !ctxRef.current) return null;
+      setAudioLoading(false);
       if (!playbackRef.current) {
         playbackRef.current = new Playback(tl, synthRef.current!, ctxRef.current, {
           onHighlight: setActiveNotes,
@@ -396,7 +430,7 @@ function Player({ jobId }: { jobId: string }) {
       playbackRef.current.setTempo(baseBpm);
       return playbackRef.current;
     },
-    [openSignIn, soundOn, baseBpm],
+    [openSignIn, soundOn, baseBpm, instrument],
   );
 
   // Applies mid-playback too, not just at the next press.
@@ -405,9 +439,10 @@ function Player({ jobId }: { jobId: string }) {
   }, [soundOn]);
 
   const playWholePiece = useCallback(
-    (fromBeat?: number) => {
+    async (fromBeat?: number) => {
       if (!timeline) return;
-      const pb = ensurePlayback(timeline);
+      const pb = await ensurePlayback(timeline);
+      if (!pb) return;
       // Bound the window rather than stopping once it overruns: notes past
       // the limit are then never scheduled, so nothing audible leaks out.
       previewRef.current = !user;
@@ -437,6 +472,11 @@ function Player({ jobId }: { jobId: string }) {
 
   const handlePlayPause = useCallback(() => {
     if (!timeline) return;
+    if (audioLoading) {
+      audioRequest.current++;
+      setAudioLoading(false);
+      return;
+    }
     if (playbackRef.current?.isPlaying) {
       playbackRef.current.pause();
       setPlaying(false);
@@ -445,7 +485,7 @@ function Player({ jobId }: { jobId: string }) {
     // No argument: playback picks up from the beat it was paused at, rather
     // than restarting the measure that was underway.
     playWholePiece();
-  }, [timeline, playWholePiece]);
+  }, [timeline, playWholePiece, audioLoading]);
 
   const [sheetOpen, setSheetOpen] = useState(true);
   const [rollOpen, setRollOpen] = useState(true);
@@ -496,11 +536,12 @@ function Player({ jobId }: { jobId: string }) {
 
   /** Move one onset and stop there. Nothing runs on afterwards - this is for
    * walking a passage a note at a time. */
-  const step = useCallback((direction: 1 | -1) => {
+  const step = useCallback(async (direction: 1 | -1) => {
     if (!timeline) return;
     // Must happen inside the click: this may be the first gesture on the
     // page, and the AudioContext can only start from one.
-    const pb = ensurePlayback(timeline);
+    const pb = await ensurePlayback(timeline);
+    if (!pb) return;
     // Stepping is a deliberate stop-and-look, so a running playback gives way
     // rather than the two fighting over the position.
     if (pb.isPlaying) {
@@ -601,27 +642,6 @@ function Player({ jobId }: { jobId: string }) {
     [playFromMeasure],
   );
 
-  const saveCorrections = (next: Corrections) => {
-    if (!originalTimeline.current) return;
-    playbackRef.current?.dispose();
-    playbackRef.current = null;
-    setPlaying(false);
-    setActiveNotes([]);
-    const updated = applyCorrections(originalTimeline.current, next);
-    setTimeline(updated);
-    setCorrections(next);
-    try {
-      localStorage.setItem(`sheet-corrections:${jobId}`, JSON.stringify(next));
-      setCorrectionMessage("Correction saved for this browser.");
-    } catch {
-      setCorrectionMessage("Correction applied for this session; browser storage is unavailable.");
-    }
-  };
-
-  const saveNote = (id: string, correction: NoteCorrection) => {
-    if (validCorrection(correction)) saveCorrections({ ...corrections, [id]: correction });
-  };
-
   if (error) {
     return (
       <div className="wrap" style={{ textAlign: "center" }}>
@@ -632,22 +652,28 @@ function Player({ jobId }: { jobId: string }) {
       </div>
     );
   }
-  if (!timeline || !pdfData) {
+  if (!timeline) {
     return <p className="wrap" style={{ color: "var(--ink-soft)" }}>Loading…</p>;
   }
 
   return (
     <div className="play-view">
       <Panel title="Sheet" open={sheetOpen} onToggle={() => setSheetOpen((v) => !v)} grow={1}>
-        <SheetCanvas
-          pdfData={pdfData}
-          measures={timeline.measures}
-          playingIndex={playingMeasure}
-          lockedFromIndex={lockedFrom}
-          notes={timeline.notes}
-          beat={beat}
-          onMeasureClick={handleMeasureClick}
-        />
+        {pdfData ? (
+          <SheetCanvas
+            pdfData={pdfData}
+            measures={timeline.measures}
+            playingIndex={playingMeasure}
+            lockedFromIndex={lockedFrom}
+            notes={timeline.notes}
+            beat={beat}
+            onMeasureClick={handleMeasureClick}
+          />
+        ) : (
+          <p className="play-hint">
+            {pdfError ? "Sheet preview is unavailable, but playback is ready." : "Loading the sheet preview…"}
+          </p>
+        )}
       </Panel>
 
       <div className="play-scrub">
@@ -676,10 +702,10 @@ function Player({ jobId }: { jobId: string }) {
         <button
           className="btn-pill icon"
           onClick={handlePlayPause}
-          title={playing ? "Pause" : "Play"}
-          aria-label={playing ? "Pause" : "Play"}
+          title={audioLoading ? "Cancel loading playback" : playing ? "Pause" : "Play"}
+          aria-label={audioLoading ? "Cancel loading playback" : playing ? "Pause" : "Play"}
         >
-          {playing ? <PauseIcon /> : <PlayIcon />}
+          {playing || audioLoading ? <PauseIcon /> : <PlayIcon />}
         </button>
         <button
           className="btn-pill icon"
@@ -719,8 +745,32 @@ function Player({ jobId }: { jobId: string }) {
             {effectiveSpeed.toFixed(1)}x
           </span>
         </label>
+        <button
+          type="button"
+          className={`icon-toggle${showKeyNames ? " on" : ""}`}
+          aria-pressed={showKeyNames}
+          title={showKeyNames ? "Hide key names" : "Show key names"}
+          aria-label={showKeyNames ? "Hide key names" : "Show key names"}
+          onClick={() => setShowKeyNames((v) => !v)}
+        >
+          <KeyNamesIcon />
+        </button>
+
+        <button
+          type="button"
+          className={`icon-toggle${soundOn ? " on" : ""}`}
+          aria-pressed={soundOn}
+          title={soundOn ? "Mute" : "Unmute"}
+          aria-label={soundOn ? "Mute" : "Unmute"}
+          onClick={() => setSoundOn((v) => !v)}
+        >
+          {/* The glyph itself carries the state, so it stays readable even
+              where the pressed styling is subtle. */}
+          {soundOn ? <SpeakerOnIcon /> : <SpeakerOffIcon />}
+        </button>
+
         <label className="play-speed">
-          BPM ({tempoControl(timeline).unit})
+          BPM
           <input
             type="number"
             min={20}
@@ -746,36 +796,21 @@ function Player({ jobId }: { jobId: string }) {
           />
         </label>
 
-        <button
-          type="button"
-          className={`icon-toggle${showKeyNames ? " on" : ""}`}
-          aria-pressed={showKeyNames}
-          title={showKeyNames ? "Hide key names" : "Show key names"}
-          aria-label={showKeyNames ? "Hide key names" : "Show key names"}
-          onClick={() => setShowKeyNames((v) => !v)}
-        >
-          <KeyNamesIcon />
-        </button>
-
-        <button
-          type="button"
-          className={`icon-toggle${soundOn ? " on" : ""}`}
-          aria-pressed={soundOn}
-          title={soundOn ? "Mute" : "Unmute"}
-          aria-label={soundOn ? "Mute" : "Unmute"}
-          onClick={() => setSoundOn((v) => !v)}
-        >
-          {/* The glyph itself carries the state, so it stays readable even
-              where the pressed styling is subtle. */}
-          {soundOn ? <SpeakerOnIcon /> : <SpeakerOffIcon />}
-        </button>
-
+        <div className="play-instrument">
+          <label>Instrument <select value={instrument} onChange={(e) => {
+            const value = e.target.value;
+            if (!isInstrumentId(value)) return;
+            setInstrument(value);
+            try { localStorage.setItem("sheet-instrument", value); } catch { /* Optional. */ }
+            void ensurePlayback(timeline, value);
+          }}>{INSTRUMENTS.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}</select></label>
+          <a href="/instrument-credits.txt" target="_blank" rel="noreferrer">Credits</a>
+        </div>
 
       </div>
 
-      <NoteCorrections timeline={timeline} measureIndex={playingMeasure ?? measureIndexAt(timeline, beat)} corrections={corrections}
-        onSave={saveNote} onReset={(id) => { const next = { ...corrections }; delete next[id]; saveCorrections(next); }} />
-      {correctionMessage && <p className="play-hint" role="status">{correctionMessage}</p>}
+      {audioLoading && <p className="play-hint" role="status">Loading samples… {audioProgress}%</p>}
+      {audioError && <p className="play-hint" role="alert">{audioError}</p>}
 
       <Panel
         label="Falling notes"

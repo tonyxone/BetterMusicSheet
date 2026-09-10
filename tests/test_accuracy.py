@@ -292,6 +292,22 @@ class AccuracyTests(unittest.TestCase):
         self.assertEqual(t['notes'][0]['midi'], 89)
         self.assertEqual(annotate.records_from_resolved(p['resolved'], octave=True)[0]['labels'], ['F6'])
 
+    def test_octave_shift_unison_matches_both_written_positions(self):
+        common = {'staff': 1, 'voice': '1', 'start_beat_in_measure': 1.5,
+                  'clef': {'sign': 'G', 'line': 2, 'octave': 0},
+                  'octave_shift': 1}
+        low = dict(common, step='A', octave=4)
+        high = dict(common, step='A', octave=5)
+        candidates = [
+            {'source_id': 'low', 'role': 0, 'voice': '1', 'onset': 1.5, 'pitch': 1},
+            {'source_id': 'high', 'role': 0, 'voice': '1', 'onset': 1.5, 'pitch': -6},
+        ]
+        used = set()
+        low_head = timeline._match_head(low, candidates, used)
+        used.add(low_head['source_id'])
+        high_head = timeline._match_head(high, candidates, used)
+        self.assertEqual((low_head['source_id'], high_head['source_id']), ('low', 'high'))
+
     def test_missing_page_geometry_does_not_shift_music(self):
         pages = [[[(6, 0, 1, None)]], [[(5, 0, 1, None)]]]
         resolved = self.resolved(pages)
@@ -359,6 +375,22 @@ class AccuracyTests(unittest.TestCase):
     def test_repeated_notes_without_ties_restrike(self):
         _, t = self.build([[[ (6, 0, 1, None), (6, 1, 1, None)]]], measure(ATTR + note() + note()))
         self.assertEqual(len(t['audio_notes']), 2)
+
+    def test_omr_repeat_missing_from_musicxml_is_recovered_for_playback(self):
+        _, t = self.build([[[ (6, 0, 1, None), (6, 1, 1, None)]]],
+                          measure(ATTR + note(duration=2)))
+        self.assertEqual([(n['midi'], n['start_beat']) for n in t['notes']],
+                         [(60, 0), (60, 1)])
+        self.assertEqual([(n['midi'], n['start_beat']) for n in t['audio_notes']],
+                         [(60, 0), (60, 1)])
+
+    def test_playback_falls_back_to_musicxml_when_pdf_matching_fails(self):
+        source = mxl(self.path / 'score.mxl', measure(ATTR + note() + note('D')))
+        t = timeline.build_timeline(self.path / 'missing.pdf', source,
+                                    self.path / 'missing.omr', 1)
+        self.assertEqual([(n['midi'], n['start_beat']) for n in t['notes']],
+                         [(60, 0), (62, 1)])
+        self.assertTrue(any('MusicXML-only' in warning for warning in t['warnings']))
 
     def test_fermata_extends_note_and_measure(self):
         notation = '<notations><fermata/></notations>'

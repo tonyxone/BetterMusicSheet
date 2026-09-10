@@ -61,9 +61,17 @@ export class Playback {
     this.windowStart = from >= this.windowEnd ? 0 : from;
     this.startSeconds = this.clock.secondsAt(this.windowStart);
     this.windowSeconds = this.clock.secondsAt(this.windowEnd) - this.startSeconds;
-    const events: AudioNote[] = this.timeline.audio_notes ?? this.timeline.notes.map((n) => ({
+    let events: AudioNote[] = this.timeline.audio_notes ?? this.timeline.notes.map((n) => ({
       ...n, duration_beats: n.duration_beats > 0 ? n.duration_beats : n.is_grace ? GRACE_SECONDS / .625 : 0,
     }));
+    if (this.synth.usesPianoPedal === false) {
+      const written = new Map(this.timeline.notes.map((n) => [n.source_id, n]));
+      events = events.map((n) => {
+        const segments = (n.segment_ids ?? [n.source_id]).map((id) => written.get(id)).filter((s) => s !== undefined);
+        const end = Math.max(n.start_beat, ...segments.map((s) => s.start_beat + (s.key_duration_beats ?? s.duration_beats)));
+        return segments.length ? { ...n, duration_beats: Math.min(n.duration_beats, end - n.start_beat) } : n;
+      });
+    }
     this.schedule = events
       .filter((n) => n.start_beat < this.windowEnd - 1e-9 && n.start_beat + n.duration_beats > this.windowStart + 1e-9)
       .map((n) => ({

@@ -198,6 +198,13 @@ marks what is sounding, and the lit keys are coloured by hand.*
   follows recognized tempo changes, dynamics, articulation, pedal, ties,
   repeats/endings, common ornaments, arpeggios, octave lines, grace notes, and
   fermatas. The BPM field can override the detected or assumed opening tempo.
+- Instrument selects sampled Grand Piano (default), Wurlitzer, CP80 electric
+  grand, or Church Organ through smplr. Switching pauses playback at its current
+  position; press Play after loading to continue. Downloads are cached when
+  browser storage is available. Basic synth (offline) remains available when
+  sample hosting cannot be reached. Credits and sample licenses are linked
+  beside the selector. Organ follows held notes and ties without piano pedal
+  extensions; piano presets use the existing recognized sustain durations.
 - The Review notes panel shows recognition notices and lets you correct pitch,
   beat, duration, and hand. Corrections apply to repeated occurrences and are
   saved in that browser.
