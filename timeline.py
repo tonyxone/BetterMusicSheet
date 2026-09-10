@@ -334,6 +334,88 @@ def _recover_known_onsets(measure, notes, candidates, used):
     return len(recovered)
 
 
+def _recover_uniform_vector_run(measure, notes, candidates, used):
+    """Restore a missed note in an otherwise uniform monophonic run.
+
+    This handles the narrow case where MusicXML and OMR both omit a note but
+    the original vector PDF still exposes its black-notehead glyph.  Existing
+    matched heads establish order, duration, voice and pitch context.  The
+    routine refuses chords, rests, ties, irregular spacing and incomplete
+    measures so it cannot manufacture notes from weak visual evidence.
+    """
+    recovered = []
+    for role in {h['role'] for h in candidates}:
+        role_notes = [n for n in notes if n['staff'] - 1 == role]
+        role_heads = [h for h in candidates if h['role'] == role]
+        missing_heads = [h for h in role_heads if h['source_id'] not in used]
+        if (len(role_notes) < 3 or not missing_heads
+                or any(not h.get('vector_pdf') for h in missing_heads)
+                or any(n['is_grace'] or n['chord'] or n['tie_start'] or n['tie_stop']
+                       or n.get('head_id') is None for n in role_notes)
+                or any(r['staff'] - 1 == role for r in measure.get('rests', []))):
+            continue
+        voices = {n['voice'] for n in role_notes}
+        durations = {round(float(n['duration_beats']), 8) for n in role_notes}
+        if len(voices) != 1 or len(durations) != 1:
+            continue
+        duration = durations.pop()
+        expected = round(measure['length_beats'] / duration) if duration > 0 else 0
+        if (expected <= 0 or abs(expected * duration - measure['length_beats']) > 1e-6
+                or len(role_heads) != expected
+                or len(role_notes) + len(missing_heads) != expected
+                or any(h.get('confidence', 0) < .8 or h.get('pitch_uncertain')
+                       or h['shape'] != 'NOTEHEAD_BLACK' for h in role_heads)):
+            continue
+
+        ordered_heads = sorted(role_heads, key=lambda h: (h['cx'], h['source_id']))
+        spacings = [b['cx'] - a['cx'] for a, b in zip(ordered_heads, ordered_heads[1:])]
+        median_spacing = sorted(spacings)[len(spacings) // 2]
+        if median_spacing <= 0 or any(abs(gap - median_spacing) > median_spacing * .18
+                                      for gap in spacings):
+            continue
+        positions = {h['source_id']: index for index, h in enumerate(ordered_heads)}
+        ordered_notes = sorted(role_notes, key=lambda n: n['start_beat_in_measure'])
+        note_positions = [positions.get(n['head_id']) for n in ordered_notes]
+        if (any(index is None for index in note_positions)
+                or note_positions != sorted(note_positions)
+                or any(abs(n['start_beat_in_measure'] - i * duration) > 1e-6
+                       for i, n in enumerate(ordered_notes))):
+            continue
+
+        # Correct the compressed MusicXML timing after the missing attack.
+        by_head = {n['head_id']: n for n in role_notes}
+        for index, head in enumerate(ordered_heads):
+            if head['source_id'] in by_head:
+                by_head[head['source_id']]['start_beat_in_measure'] = index * duration
+                continue
+            prototype = min(role_notes,
+                            key=lambda n: abs(positions[n['head_id']] - index))
+            diatonic = head.get('label_diatonic', head['diatonic'])
+            transpose = prototype.get('transpose', 0)
+            midi = midi_of(diatonic, head['alter']) + transpose
+            source_id = f'recovered:{head["source_id"]}'
+            new_note = dict(prototype)
+            new_note.update(identity=(measure['identity'], source_id), label=measure['label'],
+                            step=step_of(diatonic), octave=octave_of(diatonic),
+                            alter=head['alter'], start_beat_in_measure=index * duration,
+                            duration_beats=duration, source_id=source_id,
+                            printed_id=source_id, default_x=head['cx'], midi=midi,
+                            xml_midi=midi, bbox_pt=head['bbox_pt'],
+                            confidence=head.get('confidence'), head_id=head['source_id'],
+                            pitch_source='pdf-vector-recovered',
+                            timing_source='inferred-uniform-run', articulations=[],
+                            ornaments=[], fermata=False, arpeggiate=False,
+                            fingering=None, chord=False)
+            recovered.append(new_note)
+            used.add(head['source_id'])
+        measure['content_length_beats'] = max(measure['content_length_beats'],
+                                              measure['length_beats'])
+        measure['warnings'].append(
+            'Recovered a missed notehead from the vector PDF; timing follows the uniform rhythm.')
+    notes.extend(recovered)
+    return len(recovered)
+
+
 def _prepare_musicxml_only(mxl_path, num_pages, page_omr_overrides=None):
     """Prepare playable notes when PDF/OMR geometry cannot be reconciled."""
     printed = _printed_sources(mxl_path, num_pages, page_omr_overrides)
@@ -440,9 +522,12 @@ def prepare_score(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=No
                 pending_ties[tie_key] = (absolute + n['duration_beats'], n['midi'],
                                          h['alter'] if h else n['alter'],
                                          h.get('label_diatonic', h['diatonic']) if h else 34 - (n['octave'] * 7 + 'CDEFGAB'.index(n['step'])))
+        vector_count = _recover_uniform_vector_run(m, notes, candidates, used)
         onset_count = _recover_known_onsets(m, notes, candidates, used)
         tail_count = _recover_measure_tail(m, notes, candidates, used)
-        stats['notes_recovered'] = stats.get('notes_recovered', 0) + onset_count + tail_count
+        stats['notes_recovered'] = stats.get('notes_recovered', 0) + vector_count + onset_count + tail_count
+        stats['notes_recovered_from_vector_pdf'] = (
+            stats.get('notes_recovered_from_vector_pdf', 0) + vector_count)
         stats['notes_recovered_from_omr_onsets'] = (
             stats.get('notes_recovered_from_omr_onsets', 0) + onset_count)
         if any(n['bbox_pt'] is None for n in notes):

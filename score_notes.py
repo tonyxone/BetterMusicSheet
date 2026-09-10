@@ -16,6 +16,7 @@ from pdf_marks import octave_intervals, metronome_marks
 
 STEP = {'C': 0, 'D': 2, 'E': 4, 'F': 5, 'G': 7, 'A': 9, 'B': 11}
 ALTER = {'SHARP': 1, 'FLAT': -1, 'NATURAL': 0, 'DOUBLE_SHARP': 2, 'DOUBLE_FLAT': -2}
+PDF_BLACK_NOTEHEAD = 0xE0A4
 
 
 def midi_of(diatonic, alter=0):
@@ -42,6 +43,83 @@ def _at(events, x, default):
             break
         default = value
     return default
+
+
+def vector_pdf_noteheads(page, staff_lines):
+    """Read black noteheads from a vector PDF using OMR staff geometry.
+
+    MuseScore-compatible PDFs retain the standard SMuFL ``noteheadBlack``
+    glyph even when Audiveris misses that glyph.  Staff geometry is still
+    supplied by Audiveris, so this is deliberately a gap filler rather than a
+    second score-recognition engine.  Scans and PDFs with outlined glyphs
+    simply return no candidates.
+    """
+    geometry = []
+    for staff, ys in staff_lines.items():
+        if len(ys) != 5:
+            continue
+        ys = tuple(sorted(float(y) for y in ys))
+        gaps = sorted(b - a for a, b in zip(ys, ys[1:]))
+        interline = (gaps[1] + gaps[2]) / 2
+        if interline > 0:
+            geometry.append((staff, ys[2], interline))
+    if not geometry:
+        return []
+
+    result = []
+    for block in page.get_text('rawdict')['blocks']:
+        for line in block.get('lines', []):
+            for span in line.get('spans', []):
+                for char in span.get('chars', []):
+                    if ord(char['c']) != PDF_BLACK_NOTEHEAD:
+                        continue
+                    x, y = map(float, char['origin'])
+                    bbox = char.get('bbox', (x, y, x, y))
+                    width = max(1.0, float(bbox[2]) - float(bbox[0]))
+                    ranked = sorted((abs(y - middle) / interline, staff, middle, interline)
+                                    for staff, middle, interline in geometry)
+                    distance, staff, middle, interline = ranked[0]
+                    # Four staff spaces covers normal ledger-note writing while
+                    # rejecting unrelated music glyphs far from every staff.
+                    if distance > 4.25:
+                        continue
+                    pitch = round((y - middle) / (interline / 2))
+                    expected_y = middle + pitch * interline / 2
+                    if abs(y - expected_y) > interline * .24:
+                        continue
+                    result.append({'staff': staff, 'shape': 'NOTEHEAD_BLACK',
+                                   'pitch': pitch, 'confidence': 1.0,
+                                   'x_pt': float(bbox[0]), 'y_pt': y - interline / 2,
+                                   'w_pt': width, 'h_pt': interline,
+                                   'cx_pt': float(bbox[0]) + width / 2, 'cy_pt': y,
+                                   'vector_pdf': True})
+    return result
+
+
+def merge_vector_pdf_noteheads(page, heads, staff_lines, sx, sy, page_number):
+    """Append only vector-PDF heads that have no matching OMR head."""
+    lines_pt = {staff: tuple(y * sy for y in ys) for staff, ys in staff_lines.items()}
+    added = 0
+    for index, candidate in enumerate(vector_pdf_noteheads(page, lines_pt)):
+        nearby = any(
+            head['staff'] == candidate['staff']
+            and abs(head['cx'] * sx - candidate['cx_pt']) <= max(2.0, candidate['w_pt'] * .55)
+            and abs(head['cy'] * sy - candidate['cy_pt']) <= candidate['h_pt'] * .55
+            for head in heads
+        )
+        if nearby:
+            continue
+        heads.append({
+            'staff': candidate['staff'], 'shape': candidate['shape'],
+            'id': f'pdf-head-{page_number}-{index}', 'pitch': candidate['pitch'],
+            'confidence': candidate['confidence'],
+            'x': candidate['x_pt'] / sx, 'y': candidate['y_pt'] / sy,
+            'w': candidate['w_pt'] / sx, 'h': candidate['h_pt'] / sy,
+            'cx': candidate['cx_pt'] / sx, 'cy': candidate['cy_pt'] / sy,
+            'vector_pdf': True,
+        })
+        added += 1
+    return added
 
 
 def page_structure(root, staff_lines):
@@ -94,6 +172,7 @@ def resolve_score_notes(pdf_path, omr_path, num_pages, page_omr_overrides=None):
             staff_lines = load_staff_lines(src, page)
             pic_w, pic_h = get_picture_size(src, page)
             sx, sy = doc[page - 1].rect.width / pic_w, doc[page - 1].rect.height / pic_h
+            merge_vector_pdf_noteheads(doc[page - 1], heads, staff_lines, sx, sy, page)
             regions, chord_meta = page_structure(root, staff_lines)
             for r in regions:
                 box = r['bbox_px']
@@ -131,11 +210,15 @@ def resolve_score_notes(pdf_path, omr_path, num_pages, page_omr_overrides=None):
                 for h in staff_heads:
                     meta = chord_meta.get(chords.get(h['id']), {})
                     local = meta.get('system_measure')
+                    region = None
                     if local is None:
-                        r = next((r for r in regions if r['system'] == system and r['bbox_px']
-                                  and r['bbox_px'][0] <= h['cx'] < r['bbox_px'][2]), None)
-                        local = r['system_measure'] if r else None
-                    h['_meta'] = dict(meta, system=system, system_measure=local)
+                        region = next((r for r in regions if r['system'] == system and r['bbox_px']
+                                       and r['bbox_px'][0] <= h['cx'] < r['bbox_px'][2]), None)
+                        local = region['system_measure'] if region else None
+                    defaults = {'measure_label': region['label'] if region else None,
+                                'part': 0, 'onset': None, 'voice': None}
+                    h['_meta'] = {**defaults, **meta, 'system': system,
+                                  'system_measure': local}
                     time = meta.get('onset')
                     batches[(local if local is not None else -1, time if time is not None else h['cx'])].append(h)
                 for _, batch in sorted(batches.items()):
