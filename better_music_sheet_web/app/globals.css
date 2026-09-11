@@ -132,6 +132,21 @@ details.options[open] summary::before { content: "▾ "; }
   font-family: inherit; background: var(--card); color: var(--ink);
 }
 .opt-row.checkbox { gap: 8px; }
+.option-help {
+  flex: none; width: 22px; height: 22px; padding: 0; border-radius: 50%;
+  border: 1px solid var(--ink-soft); background: transparent; color: var(--ink-soft);
+  font-family: inherit; font-size: 12px; font-weight: 700; line-height: 20px; cursor: pointer;
+}
+.option-help:hover, .option-help[aria-expanded="true"] {
+  border-color: var(--accent); background: var(--paper-deep); color: var(--accent-deep);
+}
+.option-help:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.option-explanation {
+  margin: -5px 0 14px; padding: 10px 12px; border-left: 3px solid var(--accent);
+  border-radius: 0 8px 8px 0; background: rgba(217, 164, 65, 0.08);
+  color: var(--ink-soft); font-size: 13px; line-height: 1.45;
+  animation: bms-fadein .15s ease-out;
+}
 
 .btn-block {
   width: 100%; margin-top: 32px; padding: 16px; border: none; border-radius: 14px; font-size: 16px;
@@ -218,6 +233,16 @@ details.options[open] summary::before { content: "▾ "; }
 .history-badge.done { background: var(--success-bg); color: var(--success); }
 .history-badge.processing, .history-badge.queued { background: var(--paper-deep); color: var(--ink-soft); }
 .history-badge.failed { background: var(--danger-bg); color: var(--danger); }
+.history-delete {
+  width: 34px; height: 34px; flex: none; display: inline-flex; align-items: center; justify-content: center;
+  padding: 0; border: 0; border-radius: 999px; background: transparent; color: var(--ink-soft); cursor: pointer;
+}
+.history-delete svg, .modal-close svg {
+  width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.history-delete:hover:not(:disabled) { background: var(--danger-bg); color: var(--danger); }
+.history-delete:disabled { opacity: 0.35; cursor: not-allowed; }
 .history-empty {
   border: 2px dashed var(--paper-deep); border-radius: 16px; padding: 40px; text-align: center;
   color: var(--ink-soft); font-size: 14.5px;
@@ -277,6 +302,12 @@ details.options[open] summary::before { content: "▾ "; }
   color: var(--accent); text-decoration: underline; cursor: pointer;
 }
 .modal-links button:hover { color: var(--accent-deep); }
+.delete-modal { max-width: 440px; }
+.delete-modal .modal-sub { line-height: 1.5; margin-top: 14px; }
+.delete-modal .modal-sub strong { color: var(--ink); word-break: break-word; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+.btn-pill.danger { background: var(--danger); color: #fff; }
+.btn-pill.danger:hover:not(:disabled) { background: var(--accent-deep); }
 
 /* ---- Play page (sheet + keyboard) ---- */
 .play-view {

@@ -4,6 +4,16 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { clientApiFetch } from "@/lib/client-api";
 
+type UploadOption = "style" | "fontSize" | "dpi" | "octave" | "autoRetry";
+
+const OPTION_HELP: Record<UploadOption, string> = {
+  style: "Unicode uses musical accidental symbols such as B♭ and C♯. ASCII uses plain-text Bb and C#, which can be easier to copy into older software.",
+  fontSize: "Controls the printed note-label size. Larger labels are easier to read but have less room around dense chords.",
+  dpi: "Controls the scan resolution used for recognition. Leave it on auto for most sheets; 300 DPI can help a blurry scan but takes longer to process.",
+  octave: "Adds the scientific octave number to every label, such as B♭4. This identifies the exact piano key but makes each label longer.",
+  autoRetry: "Automatically scans a page again at higher resolution when unusually few notes are found. It can improve difficult pages but increases processing time.",
+};
+
 export function UploadForm() {
   const router = useRouter();
   const [file, setFile] = useState<File | null>(null);
@@ -12,6 +22,7 @@ export function UploadForm() {
   const [fontSize, setFontSize] = useState(6.5);
   const [dpi, setDpi] = useState("");
   const [autoRetry, setAutoRetry] = useState(true);
+  const [openHelp, setOpenHelp] = useState<UploadOption | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -73,13 +84,16 @@ export function UploadForm() {
           <div>
             <div className="opt-row">
               <label htmlFor="style" className="main">Label style</label>
+              <OptionHelp option="style" label="Label style" open={openHelp} onToggle={setOpenHelp} />
               <select id="style" value={style} onChange={(e) => setStyle(e.target.value as "unicode" | "ascii")}>
                 <option value="unicode">Unicode (B♭, C♯)</option>
                 <option value="ascii">ASCII (Bb, C#)</option>
               </select>
             </div>
+            {openHelp === "style" && <OptionExplanation option="style" />}
             <div className="opt-row">
               <label htmlFor="fontSize" className="main">Font size</label>
+              <OptionHelp option="fontSize" label="Font size" open={openHelp} onToggle={setOpenHelp} />
               <input
                 id="fontSize"
                 type="number"
@@ -90,8 +104,10 @@ export function UploadForm() {
                 onChange={(e) => setFontSize(Number(e.target.value))}
               />
             </div>
+            {openHelp === "fontSize" && <OptionExplanation option="fontSize" />}
             <div className="opt-row">
               <label htmlFor="dpi" className="main">Force DPI</label>
+              <OptionHelp option="dpi" label="Force DPI" open={openHelp} onToggle={setOpenHelp} />
               <input
                 id="dpi"
                 type="number"
@@ -103,10 +119,13 @@ export function UploadForm() {
                 onChange={(e) => setDpi(e.target.value)}
               />
             </div>
+            {openHelp === "dpi" && <OptionExplanation option="dpi" />}
             <div className="opt-row checkbox">
               <input id="octave" type="checkbox" checked={octave} onChange={(e) => setOctave(e.target.checked)} />
               <label htmlFor="octave">Show octave number (B♭4)</label>
+              <OptionHelp option="octave" label="Show octave number" open={openHelp} onToggle={setOpenHelp} />
             </div>
+            {openHelp === "octave" && <OptionExplanation option="octave" />}
             <div className="opt-row checkbox">
               <input
                 id="autoRetry"
@@ -115,16 +134,53 @@ export function UploadForm() {
                 onChange={(e) => setAutoRetry(e.target.checked)}
               />
               <label htmlFor="autoRetry">Auto re-scan under-recognized pages at higher DPI</label>
+              <OptionHelp option="autoRetry" label="Auto re-scan" open={openHelp} onToggle={setOpenHelp} />
             </div>
+            {openHelp === "autoRetry" && <OptionExplanation option="autoRetry" />}
           </div>
         </details>
 
         {error && <p style={{ color: "var(--danger)", marginTop: 16, fontSize: 14 }}>{error}</p>}
 
-        <button type="submit" className={`btn-block${ready ? " ready" : ""}`} disabled={!file || submitting}>
+        <button
+          type="submit"
+          className={`btn-block${ready ? " ready" : ""}`}
+          disabled={!file || submitting}
+          title={!file ? "Choose a PDF or photo first" : submitting ? "Your sheet is being uploaded" : "Upload and annotate this sheet"}
+        >
           {submitting ? "Uploading…" : "Upload"}
         </button>
       </form>
     </div>
+  );
+}
+
+function OptionHelp({ option, label, open, onToggle }: {
+  option: UploadOption;
+  label: string;
+  open: UploadOption | null;
+  onToggle: (option: UploadOption | null) => void;
+}) {
+  const expanded = open === option;
+  return (
+    <button
+      type="button"
+      className="option-help"
+      title={OPTION_HELP[option]}
+      aria-label={`About ${label}`}
+      aria-expanded={expanded}
+      aria-controls={`option-explanation-${option}`}
+      onClick={() => onToggle(expanded ? null : option)}
+    >
+      ?
+    </button>
+  );
+}
+
+function OptionExplanation({ option }: { option: UploadOption }) {
+  return (
+    <p id={`option-explanation-${option}`} className="option-explanation" role="status">
+      {OPTION_HELP[option]}
+    </p>
   );
 }

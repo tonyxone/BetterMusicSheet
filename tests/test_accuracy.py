@@ -137,6 +137,35 @@ class AccuracyTests(unittest.TestCase):
                 return {'blocks': [{'lines': [{'spans': [{'chars': chars}]}]}]}
         self.assertEqual(sorted(m['beats'] for m in pdf_marks.time_signatures(Page())), [4, 6])
 
+    @staticmethod
+    def _page(*spans):
+        class Page:
+            def get_text(self, kind):
+                return {'blocks': [{'lines': [{'spans': list(spans)}]}]}
+        return Page()
+
+    def test_pdf_meter_reads_ascii_digits_only_from_a_music_font(self):
+        # MuseScore's own font maps time digits to plain ASCII rather than the
+        # SMuFL private-use range. A font that also draws private-use music
+        # glyphs is a notation font, so its digits count; prose digits do not.
+        music = {'font': 'MScore', 'chars': [
+            {'c': chr(0xE12D), 'origin': (40, 60)},
+            {'c': '3', 'origin': (10, 20)},
+            {'c': '4', 'origin': (10, 30)}]}
+        prose = {'font': 'FreeSerif', 'chars': [
+            {'c': '3', 'origin': (200, 20)},
+            {'c': '4', 'origin': (200, 30)}]}
+        self.assertEqual([m['beats'] for m in pdf_marks.time_signatures(self._page(music, prose))], [3])
+
+    def test_pdf_meter_rejects_stacked_fingerings(self):
+        # Two fingerings on a chord stack exactly like a time signature. "5
+        # over 1" is a plausible fingering and an implausible meter.
+        music = {'font': 'MScore', 'chars': [
+            {'c': chr(0xE12D), 'origin': (40, 60)},
+            {'c': '5', 'origin': (10, 20)},
+            {'c': '1', 'origin': (10, 30)}]}
+        self.assertEqual(pdf_marks.time_signatures(self._page(music)), [])
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.path = Path(self.tmp.name)
@@ -170,15 +199,27 @@ class AccuracyTests(unittest.TestCase):
         with patch.object(audiveris_heads, '_parse_sheet', return_value=root):
             self.assertEqual(audiveris_heads.load_key_timeline('unused', 1), {1: [(0, 1), (70, 2), (140, 0)]})
 
-    def test_repeated_chords_default_full_coverage_and_octave_identity(self):
+    def test_repeated_chords_suppressed_from_two_notes_up(self):
         r = self.resolved([[[ (3, 0, 1, None), (1, 0, 1, None), (3, 1, 1, None), (1, 1, 1, None)]]])
         for i, n in enumerate(r['notes']):
             n['chord_id'] = str(i // 2)
-        self.assertEqual(len(annotate.records_from_resolved(r)), 2)
-        self.assertEqual(len(annotate.records_from_resolved(r, suppress_repeated_chords=True)), 1)
+        self.assertEqual(len(annotate.records_from_resolved(r)), 1)
+        self.assertEqual(len(annotate.records_from_resolved(r, suppress_repeated_chords=False)), 2)
         for n in r['notes'][2:]:
             n['diatonic'] -= 7
-        self.assertEqual(len(annotate.records_from_resolved(r, suppress_repeated_chords=True)), 2)
+        self.assertEqual(len(annotate.records_from_resolved(r)), 2)
+
+        r = self.resolved([[[
+            (3, 0, 1, None), (1, 0, 1, None), (-1, 0, 1, None),
+            (3, 1, 1, None), (1, 1, 1, None), (-1, 1, 1, None),
+        ]]])
+        for i, n in enumerate(r['notes']):
+            n['chord_id'] = str(i // 3)
+        self.assertEqual(len(annotate.records_from_resolved(r)), 1)
+        self.assertEqual(len(annotate.records_from_resolved(r, suppress_repeated_chords=False)), 2)
+        for n in r['notes'][3:]:
+            n['diatonic'] -= 7
+        self.assertEqual(len(annotate.records_from_resolved(r)), 2)
 
     def test_divisions_change_preserves_cursor(self):
         ns, ms = self.parse(measure(ATTR + note(duration=1) + '<attributes><divisions>2</divisions></attributes>' + note('D', duration=2)))

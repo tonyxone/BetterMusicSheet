@@ -67,6 +67,15 @@ test('sample loading waits for readiness and gives repeated pitches distinct voi
   engine.dispose(); assert.equal(instruments[0].disposed,true);
 });
 
+test('fractional recognition velocity is normalized across piano sample-layer boundaries', async () => {
+  const {engine,instruments}=sampleEngine();
+  const ready=engine.load('grand',[42]); await new Promise(setImmediate);
+  instruments[0].resolve(); await ready;
+  engine.noteOn(42,1,2,100.666666666667);
+  assert.equal(instruments[0].calls[0].velocity,101);
+  engine.dispose();
+});
+
 test('a stale instrument load cannot replace a newer selection', async () => {
   const {engine,instruments} = sampleEngine();
   const first=engine.load('grand',[60]); await new Promise(setImmediate);

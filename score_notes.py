@@ -299,6 +299,7 @@ def resolve_score_notes(pdf_path, omr_path, num_pages, page_omr_overrides=None):
                                          'beat': onset, 'kind': 'tempo', 'value': mark['bpm'],
                                          'beat_unit_quarters': mark['beat_unit_quarters'],
                                          'part': 0, 'staff': 1, 'source': 'pdf'})
-            pages[page] = {'regions': regions, 'notes': page_notes, 'tempo_events': tempo_events}
+            pages[page] = {'regions': regions, 'notes': page_notes, 'tempo_events': tempo_events,
+                           'staff_lines_pt': {s: [y * sy for y in ys] for s, ys in staff_lines.items()}}
             all_notes.extend(page_notes)
     return {'pages': pages, 'notes': all_notes}

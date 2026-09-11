@@ -32,6 +32,7 @@ Endpoints:
     POST   /api/sheets                     upload a PDF or image, kick off annotation (one at a time per user)
     GET    /api/sheets                     this user's job history, newest first
     GET    /api/sheets/{job_id}            poll one job's status
+    DELETE /api/sheets/{job_id}            delete a finished/failed job and its stored files
     GET    /api/sheets/{job_id}/download   the annotated PDF, streamed through this backend either way
                                             (from S3 in production, from disk in local dev)
                                             (?inline=1 for in-browser preview instead of a forced download)
@@ -70,7 +71,7 @@ from urllib.parse import quote
 import pymupdf
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -131,7 +132,7 @@ _allowed = os.environ.get("ALLOWED_ORIGINS", "*")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"] if _allowed == "*" else [o.strip() for o in _allowed.split(",")],
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -306,6 +307,50 @@ def job_status(job_id: str, user_id: str = Depends(get_current_user_id)):
     job = _owned_job_or_404(job_id, user_id)
     sheet = db.get_music_sheet(job["music_sheet_id"])
     return {**job, "sheet_name": sheet["sheet_name"] if sheet else None}
+
+
+@app.delete("/api/sheets/{job_id}", status_code=204)
+def delete_job(job_id: str, user_id: str = Depends(get_current_user_id)):
+    """Delete one history item and, when no other row shares them, its files.
+
+    Queued/processing jobs cannot be deleted because the in-process worker
+    may still be reading or recreating their artifacts.  Same-named uploads
+    share storage keys by design, so those files are retained while another
+    history item still needs them.
+    """
+    job = _owned_job_or_404(job_id, user_id)
+    if job["status"] in ("queued", "processing"):
+        raise HTTPException(409, "Wait for this sheet to finish processing before deleting it.")
+
+    jobs = db.list_annotation_jobs(user_id)
+    other_jobs = [candidate for candidate in jobs if candidate["job_id"] != job_id]
+    sheet_id = job["music_sheet_id"]
+    sheet = db.get_music_sheet(sheet_id)
+
+    # A future reprocess flow may create more than one job for one sheet row.
+    # In that case only this history entry belongs to this delete operation.
+    sheet_is_still_used = any(candidate["music_sheet_id"] == sheet_id for candidate in other_jobs)
+    if not sheet_is_still_used and sheet is not None:
+        sheet_name = sheet["sheet_name"]
+        selected_identity = storage.storage_identity(sheet_name)
+        other_sheets = [
+            candidate for candidate in db.list_music_sheets(user_id)
+            if candidate["music_sheet_id"] != sheet_id
+        ]
+        files_are_shared = any(
+            storage.storage_identity(candidate["sheet_name"]) == selected_identity
+            for candidate in other_sheets
+        )
+        if not files_are_shared:
+            # Delete storage first.  If S3 is unavailable the database rows
+            # stay visible, allowing the user to retry rather than leaving
+            # inaccessible orphaned objects behind.
+            storage.delete_sheet_files(user_id, sheet_name)
+        db.delete_music_sheet(sheet_id)
+
+    db.delete_annotation_job(job_id)
+    shutil.rmtree(JOBS_DIR / job_id, ignore_errors=True)
+    return Response(status_code=204)
 
 
 def _ascii_stem(stem):

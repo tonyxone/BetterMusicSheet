@@ -20,33 +20,54 @@ def text_spans(page):
 
 
 def time_signatures(page):
-    """Read stacked SMuFL time digits using baselines, not font bounding boxes."""
+    """Read stacked time digits using baselines, not font bounding boxes.
+
+    Two encodings occur in practice. SMuFL fonts put the digits in the
+    private-use range (U+E080-E089), which is unambiguous. MuseScore's own
+    font instead maps them to plain ASCII digits, and those cannot be trusted
+    on sight - a page number, a rehearsal mark and a fingering are all ASCII
+    digits too. A font that draws private-use music glyphs somewhere on this
+    page is a notation font, so its digits are notation digits; that is what
+    separates the two cases without hard-coding font names.
+    """
+    chars = [(ord(c['c']), c['origin'], span.get('font', ''))
+             for block in page.get_text('rawdict')['blocks']
+             for line in block.get('lines', [])
+             for span in line['spans']
+             for c in span.get('chars', [])]
+    music_fonts = {font for code, _, font in chars if 0xE000 <= code <= 0xF8FF}
+
     rows, marks = {}, []
-    for block in page.get_text('rawdict')['blocks']:
-        for line in block.get('lines', []):
-            for span in line['spans']:
-                for char in span['chars']:
-                    code = ord(char['c'])
-                    if code in (0xE08A, 0xE08B):
-                        x, y = char['origin']
-                        marks.append(dict(x=x, y=y, beats=4.0))
-                    if 0xE080 <= code <= 0xE089:
-                        x, y = char['origin']
-                        rows.setdefault(round(y, 1), []).append((x, str(code - 0xE080)))
+    for code, (x, y), font in chars:
+        if code in (0xE08A, 0xE08B):
+            marks.append(dict(x=x, y=y, beats=4.0))
+            continue
+        if 0xE080 <= code <= 0xE089:
+            digit, ascii_source = str(code - 0xE080), False
+        elif 0x30 <= code <= 0x39 and font in music_fonts:
+            digit, ascii_source = chr(code), True
+        else:
+            continue
+        rows.setdefault(round(y, 1), []).append((x, digit, ascii_source))
     groups = []
     for y, digits in rows.items():
-        for x, digit in sorted(digits):
+        for x, digit, ascii_source in sorted(digits):
             if groups and groups[-1]['y'] == y and x - groups[-1]['right'] < 12:
                 groups[-1]['text'] += digit
                 groups[-1]['right'] = x
             else:
-                groups.append(dict(x=x, right=x, y=y, text=digit))
+                groups.append(dict(x=x, right=x, y=y, text=digit, ascii=ascii_source))
     for upper in groups:
         lower = [g for g in groups if 4 < g['y'] - upper['y'] < 20
                  and abs((g['x'] + g['right'] - upper['x'] - upper['right']) / 2) < 5]
         if len(lower) == 1:
             num, den = int(upper['text']), int(lower[0]['text'])
-            if 1 <= num <= 32 and den in (1, 2, 4, 8, 16, 32):
+            # A stacked pair of ASCII digits is far weaker evidence than a
+            # private-use one - two fingerings on a chord stack the same way -
+            # so only conventional lower numerals are accepted there. "5 over
+            # 1" is a plausible fingering and an implausible meter.
+            denominators = (2, 4, 8, 16) if upper['ascii'] else (1, 2, 4, 8, 16, 32)
+            if 1 <= num <= 32 and den in denominators:
                 marks.append(dict(x=upper['x'], y=(upper['y'] + lower[0]['y']) / 2,
                                   beats=num * 4 / den))
     return marks

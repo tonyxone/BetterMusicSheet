@@ -46,6 +46,16 @@ def _timeline_key(user_id, sheet_name):
     return f"{user_id}/output/{_safe_stem(sheet_name)} (timeline).json"
 
 
+def storage_identity(sheet_name):
+    """Return the part of a filename that identifies its shared artifacts.
+
+    Same-named uploads intentionally overwrite the same S3 keys.  Callers
+    use this when deleting history so removing one row cannot break another
+    row that still points at those shared files.
+    """
+    return _safe_stem(sheet_name)
+
+
 if IS_PRODUCTION:
     import os
 
@@ -62,6 +72,19 @@ if IS_PRODUCTION:
 
     def upload_output_timeline(user_id, local_path, sheet_name):
         _s3.upload_file(str(local_path), _BUCKET, _timeline_key(user_id, sheet_name))
+
+    def delete_sheet_files(user_id, sheet_name):
+        """Delete every stored artifact for a sheet.
+
+        S3 deletion is idempotent, so an older sheet without a timeline (or
+        an already-partially-deleted sheet) can still be removed cleanly.
+        """
+        for key in (
+            _input_key(user_id, sheet_name),
+            _output_key(user_id, sheet_name),
+            _timeline_key(user_id, sheet_name),
+        ):
+            _s3.delete_object(Bucket=_BUCKET, Key=key)
 
     def download_output_timeline(user_id, sheet_name):
         """(body, content_length) for the timeline JSON, streamed back through
@@ -100,6 +123,15 @@ else:
 
     def upload_output_timeline(user_id, local_path, sheet_name):
         shutil.copyfile(local_path, _local_path(_timeline_key(user_id, sheet_name)))
+
+    def delete_sheet_files(user_id, sheet_name):
+        """Local equivalent of the production S3 artifact deletion."""
+        for key in (
+            _input_key(user_id, sheet_name),
+            _output_key(user_id, sheet_name),
+            _timeline_key(user_id, sheet_name),
+        ):
+            (_LOCAL_DIR / key).unlink(missing_ok=True)
 
     def local_output_timeline_path(user_id, sheet_name):
         return _local_path(_timeline_key(user_id, sheet_name))

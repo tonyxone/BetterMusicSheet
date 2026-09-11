@@ -18,6 +18,8 @@ import sys
 
 import pymupdf as fitz
 
+from label_layout import layout_page_records as _layout_page_records
+
 from audiveris_heads import (
     load_sheet_heads, group_heads_by_staff, load_chord_id_groups,
     cluster_chords_by_relation, load_staff_lines, load_staff_barlines,
@@ -130,7 +132,7 @@ def _clef_at(timeline, x, default=None):
 
 
 def build_records(pdf_path, omr_path, num_pages, style='unicode', octave=False, verbose=True,
-                   page_omr_overrides=None, resolved_notes=None, suppress_repeated_chords=False):
+                   page_omr_overrides=None, resolved_notes=None, suppress_repeated_chords=True):
     """Return list of label records: {page, part, anchor_x_pt, top_y_pt, bottom_y_pt, labels}.
 
     One record per simultaneous-note group (Audiveris's own head-chord grouping),
@@ -155,7 +157,7 @@ def build_records(pdf_path, omr_path, num_pages, style='unicode', octave=False, 
     return records
 
 
-def records_from_resolved(resolved, style='unicode', octave=False, suppress_repeated_chords=False):
+def records_from_resolved(resolved, style='unicode', octave=False, suppress_repeated_chords=True):
     """Render every recognized written note, including tied continuations.
 
     Optional compact labeling compares full pitches, never display strings.
@@ -184,6 +186,10 @@ def records_from_resolved(resolved, style='unicode', octave=False, suppress_repe
                   + ('?' if n.get('pitch_uncertain') else '') for n in group]
         boxes = [n['bbox_pt'] for n in group]
         width = sum(n['w'] for n in group) / len(group)
+        staff_lines = resolved.get('pages', {}).get(first['page'], {}).get('staff_lines_pt', {})
+        staff_ys = staff_lines.get(first['staff'], [])
+        staff_top = min(staff_ys) if staff_ys else min(b[1] for b in boxes)
+        staff_bottom = max(staff_ys) if staff_ys else max(b[3] for b in boxes)
         records.append({
             'page': first['page'], 'part': first['role'], 'system': first['system'],
             'anchor_x_pt': sum((b[0] + b[2]) / 2 for b in boxes) / len(boxes),
@@ -192,6 +198,10 @@ def records_from_resolved(resolved, style='unicode', octave=False, suppress_repe
             'labels': labels, 'measure': (first['system_measure'] or 0) + 1,
             'scale': max(.65, min(1, width / medians[first['page']])) if medians[first['page']] else 1,
             'notehead_w_pt': sum(b[2] - b[0] for b in boxes) / len(boxes),
+            'note_boxes_pt': boxes, 'staff_lines_pt': staff_ys,
+            'staff_top_pt': staff_top, 'staff_bottom_pt': staff_bottom,
+            'space_top_pt': max((max(ys) for ys in staff_lines.values() if max(ys) < staff_top), default=0),
+            'space_bottom_pt': min((min(ys) for ys in staff_lines.values() if min(ys) > staff_bottom), default=float('inf')),
         })
     return records
 
@@ -201,131 +211,6 @@ _DEFAULT_FONT_PATH = (
     else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 )
 ARIAL_PATH = os.environ.get("LABEL_FONT_PATH", _DEFAULT_FONT_PATH)
-
-
-def _layout_page_records(page_records, font_size, measure_font, margin_pt):
-    """Compute each record's draw positions.
-
-    Each multi-note stack (dyad or bigger chord) picks one of two placements:
-
-    - "beside": vertically centered on the note, offset right by the note's
-      own half-width (so it clears the physical notehead - a whole note's open
-      "O" glyph is much wider than the label's own half-width, which used to
-      be the only clearance applied, letting labels sit on top of the note)
-      plus a visual gap. Preferred whenever there's room for it before the
-      next event on the same system - tucking the stack next to the chord it
-      belongs to reads better than dropping it into empty space below/above.
-    - "below"/"above" (RH above, LH below): the fallback when beside doesn't
-      fit - stacked directly under/over the note, growing away from the staff.
-
-    Single notes always use below/above - there's no stack to tuck sideways,
-    and a single label rarely conflicts with anything.
-
-    Two DIFFERENT beats on the same staff landing close together (same
-    placement, overlapping label footprints) still get nudged apart
-    horizontally afterward, regardless of which placement each ended up with.
-    """
-    min_gap = 0.6  # pt
-    side_gap = margin_pt  # horizontal clearance from the notehead
-
-    blocks = []
-    for rec in page_records:
-        labels = rec['labels']
-        n = len(labels)
-        part = rec['part']
-        # cue/ornament-sized noteheads (rec['scale'] < 1) get a proportionally
-        # smaller label instead of a full-size one dwarfing a miniature notehead.
-        fs = font_size * rec.get('scale', 1.0)
-        line_h = fs * 1.05
-        if part == 0:  # RH / treble -> stack ABOVE, highest pitch furthest up
-            base_y = rec['top_y_pt'] - margin_pt
-            below_ys = [base_y - (n - 1 - i) * line_h for i in range(n)]
-        else:  # LH / bass -> stack BELOW, highest pitch closest to the staff
-            base_y = rec['bottom_y_pt'] + margin_pt + fs
-            below_ys = [base_y + i * line_h for i in range(n)]
-        widths = [measure_font.text_length(lbl, fontsize=fs) for lbl in labels]
-        half_w = max(widths) / 2.0
-        note_mid_y = (rec['top_y_pt'] + rec['bottom_y_pt']) / 2.0
-        notehead_half_w = rec.get('notehead_w_pt', 0.0) / 2.0
-        beside_x = rec['anchor_x_pt'] + notehead_half_w + side_gap + half_w
-        beside_ys = [note_mid_y - (n - 1) / 2.0 * line_h + i * line_h for i in range(n)]
-        blocks.append({
-            'x': rec['anchor_x_pt'], 'labels': labels, 'widths': widths, 'part': part,
-            'below_ys': below_ys, 'ys': below_ys, 'mode': 'below',
-            'beside_ys': beside_ys, 'beside_x': beside_x,
-            'system': (rec['page'], rec['system']), 'note_mid_y': note_mid_y,
-            'fs': fs, 'line_h': line_h, 'half_w': half_w,
-        })
-
-    def vertical_bbox(ys, fs):
-        return min(ys) - fs * 0.85, max(ys) + fs * 0.3
-
-    def use_beside(b):
-        b['ys'] = b['beside_ys']
-        b['x'] = b['beside_x']
-        b['mode'] = 'beside'
-
-    # forced beside: below/above would collide with content from a DIFFERENT
-    # system/line (identified by system index, not x-distance - a neighboring
-    # note in the SAME system can easily be >20pt away too, so x-distance alone
-    # can't tell "next note" apart from "line above/below")
-    for b in blocks:
-        if len(b['labels']) < 2:
-            continue
-        y_top, y_bottom = vertical_bbox(b['below_ys'], b['fs'])
-        for other in blocks:
-            if other is b or other['system'] == b['system']:
-                continue
-            oy_top, oy_bottom = vertical_bbox(other['ys'], other['fs'])
-            if y_top < oy_bottom and y_bottom > oy_top:
-                use_beside(b)
-                break
-
-    # preferred beside: even without a collision, tuck the stack beside the
-    # note whenever there's ample horizontal room before the next event on
-    # THIS staff (same system AND same hand - a close note on the other
-    # staff/hand doesn't share this stack's vertical band, so it's irrelevant
-    # to whether beside placement would visually crowd anything)
-    by_staff = {}
-    for b in blocks:
-        by_staff.setdefault((b['system'], b['part']), []).append(b)
-    for staff_blocks in by_staff.values():
-        xs = sorted(set(b['x'] for b in staff_blocks))
-        for b in staff_blocks:
-            if b['mode'] == 'beside' or len(b['labels']) < 2:
-                continue
-            later = [x for x in xs if x > b['x'] + 0.01]
-            next_x = min(later) if later else None
-            # a comfortable margin, not just the bare minimum that avoids
-            # overlap - "plenty of room" should look plenty, and this leaves
-            # slack for whatever the next event's own label ends up needing
-            needed_right = b['beside_x'] + b['half_w'] + min_gap + b['half_w']
-            if next_x is None or next_x >= needed_right:
-                use_beside(b)
-
-    for b in blocks:
-        b['label_x_offsets'] = [0.0] * len(b['labels'])
-        y_top, y_bottom = vertical_bbox(b['ys'], b['fs'])
-        b['y_top'], b['y_bottom'] = y_top, y_bottom
-
-    # greedy left-to-right sweep for same-system neighbors: each block only
-    # needs to clear earlier (already-placed) blocks it vertically overlaps, and
-    # only ever moves right, so a single pass is enough - it can never re-collide
-    # with something already resolved to its left.
-    blocks.sort(key=lambda b: b['x'])
-    placed = []
-    for b in blocks:
-        shift = 0.0
-        for p in placed:
-            if b['y_top'] >= p['y_bottom'] or b['y_bottom'] <= p['y_top']:
-                continue  # different vertical band - can't visually collide
-            needed_x = p['x'] + p['half_w'] + min_gap + b['half_w']
-            if b['x'] + shift < needed_x:
-                shift = needed_x - b['x']
-        b['x'] += shift
-        placed.append(b)
-
-    return placed
 
 
 def render(input_pdf, output_pdf, records, font_size=6.5, margin_pt=3.2):
@@ -346,7 +231,7 @@ def render(input_pdf, output_pdf, records, font_size=6.5, margin_pt=3.2):
 
     for page_num, page_records in by_page.items():
         shape = shapes[page_num - 1]
-        blocks = _layout_page_records(page_records, font_size, measure_font, margin_pt)
+        blocks = _layout_page_records(page_records, font_size, measure_font, margin_pt, doc[page_num - 1])
         for b in blocks:
             fs = b['fs']
             for label, y, x_off, w in zip(b['labels'], b['ys'], b['label_x_offsets'], b['widths']):

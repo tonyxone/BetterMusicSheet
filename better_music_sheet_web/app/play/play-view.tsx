@@ -118,6 +118,7 @@ function Panel({
         type="button"
         className="play-panel-head"
         onClick={onToggle}
+        title={`${open ? "Collapse" : "Expand"} ${title ?? label}`}
         aria-expanded={open}
         aria-label={title ?? label}
       >
@@ -221,7 +222,12 @@ function SheetPicker({ onPick }: { onPick: (jobId: string) => void }) {
       ) : (
         <div>
           {jobs.map((job) => (
-            <button key={job.job_id} className="history-row" onClick={() => onPick(job.job_id)}>
+            <button
+              key={job.job_id}
+              className="history-row"
+              title={`Play ${job.sheet_name || "this sheet"}`}
+              onClick={() => onPick(job.job_id)}
+            >
               <div className="history-icon">🎹</div>
               <div className="history-info">
                 <div className="history-title">{job.sheet_name}</div>
@@ -804,7 +810,6 @@ function Player({ jobId }: { jobId: string }) {
             try { localStorage.setItem("sheet-instrument", value); } catch { /* Optional. */ }
             void ensurePlayback(timeline, value);
           }}>{INSTRUMENTS.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}</select></label>
-          <a href="/instrument-credits.txt" target="_blank" rel="noreferrer">Credits</a>
         </div>
 
       </div>

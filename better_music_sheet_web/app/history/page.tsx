@@ -16,6 +16,9 @@ const STATUS_LABEL: Record<AnnotationJob["status"], string> = {
 
 export default function HistoryPage() {
   const [jobs, setJobs] = useState<AnnotationJob[] | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<AnnotationJob | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
     clientApiFetch("/api/sheets")
@@ -30,6 +33,38 @@ export default function HistoryPage() {
     setAdsPaused(!jobs || jobs.length === 0);
     return () => setAdsPaused(false);
   }, [jobs]);
+
+  function openDelete(job: AnnotationJob) {
+    setDeleteError(null);
+    setDeleteTarget(job);
+  }
+
+  function closeDelete() {
+    if (deleting) return;
+    setDeleteTarget(null);
+    setDeleteError(null);
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget || deleting) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const res = await clientApiFetch(`/api/sheets/${deleteTarget.job_id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null) as { detail?: string } | null;
+        throw new Error(body?.detail || `Could not delete this sheet (${res.status}).`);
+      }
+      setJobs((current) => current?.filter((job) => job.job_id !== deleteTarget.job_id) ?? current);
+      setDeleteTarget(null);
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : "Could not delete this sheet.");
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   return (
     <div className="wrap medium">
@@ -65,8 +100,59 @@ export default function HistoryPage() {
                 </Link>
               )}
               <span className={`history-badge ${job.status}`}>{STATUS_LABEL[job.status]}</span>
+              <button
+                type="button"
+                className="history-delete"
+                onClick={() => openDelete(job)}
+                disabled={job.status === "queued" || job.status === "processing"}
+                title={
+                  job.status === "queued" || job.status === "processing"
+                    ? "Wait for processing to finish before deleting"
+                    : `Delete ${job.sheet_name || "sheet"}`
+                }
+                aria-label={`Delete ${job.sheet_name || "sheet"}`}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5m4-5v5" />
+                </svg>
+              </button>
             </div>
           ))}
+        </div>
+      )}
+
+      {deleteTarget && (
+        <div className="modal-backdrop" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) closeDelete();
+        }}>
+          <div className="modal-card delete-modal" role="alertdialog" aria-modal="true" aria-labelledby="delete-title">
+            <button
+              type="button"
+              className="modal-close"
+              onClick={closeDelete}
+              disabled={deleting}
+              title="Close"
+              aria-label="Close"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m6 6 12 12M18 6 6 18" />
+              </svg>
+            </button>
+            <h2 id="delete-title" className="modal-title">Delete this sheet?</h2>
+            <p className="modal-sub">
+              <strong>{deleteTarget.sheet_name || "Untitled sheet"}</strong> and its uploaded PDF,
+              annotated PDF, and playback data will be permanently deleted.
+            </p>
+            {deleteError && <div className="modal-error">{deleteError}</div>}
+            <div className="modal-actions">
+              <button type="button" className="btn-pill ghost" title="Keep this sheet" onClick={closeDelete} disabled={deleting}>
+                Cancel
+              </button>
+              <button type="button" className="btn-pill danger" title="Permanently delete this sheet and its files" onClick={confirmDelete} disabled={deleting}>
+                {deleting ? "Deleting…" : "Delete"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

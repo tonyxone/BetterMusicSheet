@@ -94,8 +94,13 @@ export class SynthEngine {
     if (this.disposed || until <= at) return -1;
     if (!this.instrument) return this.basic.noteOn(midi, at, until, velocity);
     const id = ++this.nextId;
+    // MIDI velocity is an integer from 1 to 127. Recognition can interpolate
+    // dynamics to fractional values; leaving one between adjacent sampler
+    // layers (for example 100.67 between 85-100 and 101-127) makes smplr
+    // match no layer and silently drop the note.
+    const midiVelocity = Math.round(Math.max(1, Math.min(127, velocity)));
     this.instrument.start({ note: midi, time: at, duration: until - at,
-      velocity: Math.max(1, Math.min(127, velocity)), stopId: id });
+      velocity: midiVelocity, stopId: id });
     return id;
   }
   setMuted(muted: boolean) {

@@ -193,7 +193,7 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
       }}
     >
       <div className="modal-card" role="dialog" aria-modal="true" aria-label={TITLES[view]} ref={dialogRef}>
-        <button type="button" className="modal-close" aria-label="Close" onClick={onClose}>
+        <button type="button" className="modal-close" title="Close" aria-label="Close" onClick={onClose}>
           <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
             <path d="M4 4l8 8M12 4l-8 8" />
           </svg>
@@ -271,7 +271,7 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
             </label>
           )}
 
-          <button type="submit" className="btn-block ready" disabled={busy}>
+          <button type="submit" className="btn-block ready" disabled={busy} title={submitLabel[view]}>
             {submitLabel[view]}
           </button>
         </form>
@@ -279,16 +279,17 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
         <div className="modal-links">
           {view === "signin" && (
             <>
-              <button type="button" onClick={() => go("forgot")}>Forgot password?</button>
-              <button type="button" onClick={() => go("signup")}>Create an account</button>
+              <button type="button" title="Reset a forgotten password" onClick={() => go("forgot")}>Forgot password?</button>
+              <button type="button" title="Register a new account" onClick={() => go("signup")}>Create an account</button>
             </>
           )}
           {(view === "signup" || view === "forgot") && (
-            <button type="button" onClick={() => go("signin")}>Back to sign in</button>
+            <button type="button" title="Return to the sign-in form" onClick={() => go("signin")}>Back to sign in</button>
           )}
           {view === "confirm" && (
             <button
               type="button"
+              title="Send another confirmation code"
               onClick={() => run(async () => {
                 await resendConfirmationCode(email);
                 setNotice("Sent - check your email again.");
@@ -298,7 +299,7 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
             </button>
           )}
           {view === "reset" && (
-            <button type="button" onClick={() => go("signin")}>Back to sign in</button>
+            <button type="button" title="Return to the sign-in form" onClick={() => go("signin")}>Back to sign in</button>
           )}
         </div>
       </div>

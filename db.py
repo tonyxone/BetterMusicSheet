@@ -76,6 +76,9 @@ if IS_PRODUCTION:
         )
         return _clean(resp["Items"])
 
+    def delete_music_sheet(music_sheet_id):
+        _music_sheet_table.delete_item(Key={"music_sheet_id": music_sheet_id})
+
     # ---- annotation_job ----
 
     def create_annotation_job(job_id, user_id, music_sheet_id, style, octave, font_size, dpi, auto_retry):
@@ -126,6 +129,9 @@ if IS_PRODUCTION:
         )
         return _clean(resp["Items"])
 
+    def delete_annotation_job(job_id):
+        _annotation_job_table.delete_item(Key={"job_id": job_id})
+
 else:
     # No AWS dependency at all: plain dicts guarded by a lock, since the
     # background job worker thread and request-handling threads both touch
@@ -165,6 +171,10 @@ else:
         with _lock:
             return [dict(s) for s in _music_sheets.values() if s["user_id"] == user_id]
 
+    def delete_music_sheet(music_sheet_id):
+        with _lock:
+            _music_sheets.pop(music_sheet_id, None)
+
     # ---- annotation_job ----
 
     def create_annotation_job(job_id, user_id, music_sheet_id, style, octave, font_size, dpi, auto_retry):
@@ -202,3 +212,7 @@ else:
         with _lock:
             jobs = [dict(j) for j in _annotation_jobs.values() if j["user_id"] == user_id]
         return sorted(jobs, key=lambda j: j["created_at"], reverse=True)
+
+    def delete_annotation_job(job_id):
+        with _lock:
+            _annotation_jobs.pop(job_id, None)

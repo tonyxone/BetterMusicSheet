@@ -150,14 +150,19 @@ function DownloadButton({ jobId, sheetName }: { jobId: string; sheetName?: strin
 
   if (error) {
     return (
-      <button onClick={handleDownload} className="btn-pill" title={error} style={{ background: "var(--danger)" }}>
+      <button onClick={handleDownload} className="btn-pill" title={`${error}. Try the download again.`} style={{ background: "var(--danger)" }}>
         Retry download
       </button>
     );
   }
 
   return (
-    <button onClick={handleDownload} disabled={downloading} className="btn-pill">
+    <button
+      onClick={handleDownload}
+      disabled={downloading}
+      className="btn-pill"
+      title={downloading ? "Preparing the annotated PDF" : "Download the annotated PDF"}
+    >
       {downloading ? "Downloading…" : "Download"}
     </button>
   );

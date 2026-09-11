@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Logo } from "./logo";
 import { KeyboardIcon } from "./keyboard-icon";
+import { HistoryIcon } from "./history-icon";
+import { SignInIcon } from "./sign-in-icon";
 import { useAuth } from "./auth-context";
 import { isAuthConfigured } from "@/lib/auth";
 
@@ -26,8 +28,13 @@ export function Header() {
         >
           <KeyboardIcon size={44} />
         </Link>
-        <Link href="/history" className="nav-btn ghost">
-          History
+        <Link
+          href="/history"
+          className="icon-link"
+          title="History"
+          aria-label="History"
+        >
+          <HistoryIcon />
         </Link>
         {/* Nothing until the session check settles, so someone who is already
             signed in never sees "Sign in" flash first. Sign-in is optional -
@@ -42,8 +49,14 @@ export function Header() {
             onSignOut={signOut}
           />
         ) : isAuthConfigured ? (
-          <button type="button" className="nav-btn primary" onClick={openSignIn}>
-            Sign in
+          <button
+            type="button"
+            className="icon-link"
+            title="Sign in"
+            aria-label="Sign in"
+            onClick={openSignIn}
+          >
+            <SignInIcon />
           </button>
         ) : null}
       </nav>
@@ -76,7 +89,7 @@ function UserMenu({ name, email, onSignOut }: { name: string; email: string | nu
       <button
         type="button"
         className="nav-btn ghost nav-user-btn"
-        title={email ?? undefined}
+        title={email ? `Open account menu for ${email}` : "Open account menu"}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
@@ -92,6 +105,7 @@ function UserMenu({ name, email, onSignOut }: { name: string; email: string | nu
             type="button"
             className="nav-menu-item"
             role="menuitem"
+            title="Sign out of this account"
             onClick={() => {
               setOpen(false);
               onSignOut();

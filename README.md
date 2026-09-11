@@ -202,9 +202,10 @@ marks what is sounding, and the lit keys are coloured by hand.*
   grand, or Church Organ through smplr. Switching pauses playback at its current
   position; press Play after loading to continue. Downloads are cached when
   browser storage is available. Basic synth (offline) remains available when
-  sample hosting cannot be reached. Credits and sample licenses are linked
-  beside the selector. Organ follows held notes and ties without piano pedal
-  extensions; piano presets use the existing recognized sustain durations.
+  sample hosting cannot be reached. Attribution and sample licenses are
+  documented in `better_music_sheet_web/public/instrument-credits.txt`. Organ
+  follows held notes and ties without piano pedal extensions; piano presets use
+  the existing recognized sustain durations.
 - The Review notes panel shows recognition notices and lets you correct pitch,
   beat, duration, and hand. Corrections apply to repeated occurrences and are
   saved in that browser.
@@ -284,8 +285,8 @@ server_jobs/       Web UI's uploaded/output files and job state (not committed, 
   to bass clef mid-piece). The pipeline compensates by reading the clef from the
   PDF's own clef glyphs; for PDFs with no readable text layer (scanned sheets),
   it falls back to Audiveris's clef reading and such passages can be wrong.
-- Every detected chord occurrence is labeled. Compact repeated-chord suppression
-  remains available internally and compares full pitches including octave.
+- Repeated chords of two or more notes are labeled once per measure. Single notes
+  remain fully labeled; repetition compares full pitches including octave.
 - Staff and hand are kept separate. Initial colors follow staff position because
   OMR cannot infer hands reliably in cross-staff writing; the Play page allows a
   hand correction.

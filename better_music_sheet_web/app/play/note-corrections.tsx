@@ -43,8 +43,8 @@ export default function NoteCorrections({ timeline, measureIndex, corrections, o
         <label>Hand <select name="hand" defaultValue={note.hand ?? "unknown"}><option value="unknown">Use staff color</option><option value="right">Right</option><option value="left">Left</option></select></label>
         <label>Beat <input name="beat" type="number" min={1} max={m.length_beats + .999} step="any" defaultValue={note.start_beat - m.start_beat + 1} required /></label>
         <label>Duration (quarter notes) <input name="duration" type="number" min={.001} max={128} step="any" defaultValue={note.duration_beats || .125} required /></label>
-        <button type="submit">Save correction</button>
-        <button type="button" disabled={!corrections[id]} onClick={() => onReset(id)}>Reset note</button>
+        <button type="submit" title="Save this note correction in this browser">Save correction</button>
+        <button type="button" title="Remove the saved correction for this note" disabled={!corrections[id]} onClick={() => onReset(id)}>Reset note</button>
       </form>
       {note.fingering && <p>Printed fingering: {note.fingering}</p>}
     </> : <p>Choose a measure containing notes to review it.</p>}
