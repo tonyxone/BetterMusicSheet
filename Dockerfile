@@ -11,7 +11,12 @@ FROM eclipse-temurin:25-jre-jammy
 # libgtk-3-0 is needed too: Audiveris's WellKnowns class unconditionally probes
 # GTK for HiDPI-scaling info at startup on Linux (unused in headless -batch
 # mode, but the JNA lookup still fails without the library present at all).
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN sed -i \
+        -e 's|http://archive.ubuntu.com|https://archive.ubuntu.com|g' \
+        -e 's|http://security.ubuntu.com|https://security.ubuntu.com|g' \
+        /etc/apt/sources.list \
+    && apt-get -o Acquire::Retries=3 update \
+    && apt-get install -y --no-install-recommends \
         python3 python3-pip \
         fonts-dejavu-core \
         libgtk-3-0 \
