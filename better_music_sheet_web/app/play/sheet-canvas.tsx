@@ -71,6 +71,11 @@ export function SheetCanvas({
 
     (async () => {
       try {
+        // Must land before pdf.js: it reaches for the Uint8Array base64/hex
+        // methods Safari only shipped in 18.2, and throws "toHex is not a
+        // function" without them. The worker gets the same polyfill prepended
+        // at build time (scripts/copy-pdf-worker.mjs).
+        await import("@/lib/binary-polyfill.js");
         const pdfjs = await import("pdfjs-dist");
         // Served from the site root, copied out of node_modules at build time
         // by scripts/copy-pdf-worker.mjs. Resolving it through the bundler
