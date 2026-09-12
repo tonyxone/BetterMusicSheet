@@ -79,3 +79,6 @@ resource "aws_iam_role_policy" "execution" {
     Resource = "arn:aws:ecr:${var.region}:${data.aws_caller_identity.current.account_id}:repository/*" }
   ] })
 }
+
+output "worker_role_arn" { value = aws_iam_role.worker.arn }
+output "execution_role_arn" { value = aws_iam_role.execution.arn }
