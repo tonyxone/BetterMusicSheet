@@ -179,10 +179,33 @@ terraform -chdir=infra apply -var-file=serverless.tfvars -var serverless_api_cut
 This repoints the `api.bettermusicsheet.com` A record from the ALB to the API
 Gateway custom domain. The ALB and the old ECS service stay up, untouched.
 
-The frontend needs no rebuild to cross this line, in either direction: it tries
-`/api/uploads` and falls back to the legacy multipart `POST /api/sheets` on a
-404, and tries `/api/sheets/{id}/assets` and falls back to the streaming
-download on a 404 (see `lib/sheet-files.ts`).
+### Deploy the frontend in the same change window
+
+**The compatibility only runs one way, and getting this wrong takes uploads
+down.** The new bundle tolerates an old backend - it tries `/api/uploads` and
+falls back to the legacy multipart `POST /api/sheets` on a 404, and falls back
+from `/api/sheets/{id}/assets` to the streaming download the same way (see
+`lib/sheet-files.ts`). The **old** bundle has no such fallback: it only knows
+the legacy endpoint, which the new backend answers with a 409 telling the user
+to refresh the page. Refreshing does not help - a static export is cached by
+CloudFront, so the browser just fetches the same old JavaScript again.
+
+So the static site must be rebuilt and deployed, not merely left alone:
+
+```bash
+cd better_music_sheet_web
+NEXT_PUBLIC_API_BASE=https://api.bettermusicsheet.com NEXT_PUBLIC_COGNITO_REGION=us-west-1 NEXT_PUBLIC_COGNITO_CLIENT_ID=<cognito_app_client_id> npm run build
+aws s3 sync out/ s3://better-music-sheet-web/ --delete
+aws cloudfront create-invalidation --distribution-id <id> --paths '/*'
+```
+
+Check the build before shipping it: `grep -rl localhost out/` must find nothing,
+since `.env.local` points at a dev server and a stray hit means the production
+bundle is calling localhost.
+
+A release does this automatically in `deploy-ui`. Cutting DNS over without one
+does not, which is the failure worth remembering: every API-level smoke test
+passes while the browser is broken, because curl never loads the bundle.
 
 ## 7. Watch, and how to roll back
 
