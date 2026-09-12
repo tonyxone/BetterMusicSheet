@@ -21,7 +21,7 @@ data "aws_iam_policy_document" "github_deploy" {
     sid = "PushImages"
     actions = ["ecr:BatchCheckLayerAvailability", "ecr:PutImage", "ecr:InitiateLayerUpload",
     "ecr:UploadLayerPart", "ecr:CompleteLayerUpload"]
-    resources = ["arn:aws:ecr:${var.aws_region}:${var.account_id}:repository/better-music-sheet"]
+    resources = ["arn:aws:ecr:${var.aws_region}:${var.account_id}:repository/${var.existing_ecr_repository_name}"]
   }
   statement {
     sid       = "ReadAudiverisBundle"
