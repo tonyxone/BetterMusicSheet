@@ -161,8 +161,14 @@ if IS_PRODUCTION:
     import os
 
     import boto3
+    from botocore.config import Config
 
-    _s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-west-1"))
+    # region_name alone still signs against the global s3.amazonaws.com host, so
+    # every presigned upload and download answers 307 and the browser repeats the
+    # request - a redirected POST re-sends the whole file, doubling the bytes a
+    # user uploads. Pin the regional virtual-hosted endpoint instead.
+    _s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-west-1"),
+                       config=Config(s3={"addressing_style": "virtual"}, signature_version="s3v4"))
     _BUCKET = os.environ["JOB_FILES_BUCKET"]
 
     def upload_input_pdf(user_id, local_path, sheet_name):

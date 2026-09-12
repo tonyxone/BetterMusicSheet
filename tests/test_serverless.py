@@ -212,6 +212,17 @@ class ServerlessTests(unittest.TestCase):
         job_id = response.json()["job_id"]
         self.assertEqual(self.client.post(f"/api/uploads/{job_id}/complete", headers=self.headers).status_code, 409)
 
+    def test_presigned_urls_use_the_regional_endpoint(self):
+        # A global-endpoint presign answers 307 and the client repeats the
+        # request. For an upload that means sending the whole file twice, so
+        # this costs a user's bandwidth rather than just a round trip.
+        job = self.upload()
+        self.assertIn("s3.us-west-1.amazonaws.com", storage.create_upload(job, "application/pdf")["url"])
+        self.assertTrue(worker.process_job(job["job_id"], runner=fake_runner))
+        done = db.get_annotation_job(job["job_id"])
+        for kind in ("output", "timeline"):
+            self.assertIn("s3.us-west-1.amazonaws.com", storage.presign_artifact(done, kind))
+
     def test_lambda_gateway_adapter_and_cors(self):
         from mangum import Mangum
         handler = Mangum(server.app, lifespan="off")
