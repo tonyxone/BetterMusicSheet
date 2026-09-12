@@ -148,6 +148,21 @@ so a release cannot land in a half-provisioned stack. Both images are built on
 every release regardless of the target, which is why the API image is already in
 ECR when you provision.
 
+### Merge the migration branch here, not earlier
+
+**This is the step to merge to `master`, immediately after flipping the switch.**
+
+The migration's backend requires `JOB_CONTROL_TABLE` and `NEW_JOB_FILES_BUCKET`,
+which the long-running ECS API's task definition does not set. Merge before this
+point and the next release deploys that code onto the ECS API, where every
+upload fails with `KeyError: 'JOB_CONTROL_TABLE'` at the reservation step - while
+DNS is still pointing at it.
+
+With `SERVERLESS_READY` already `true`, `deploy-legacy` is skipped, so the ECS
+API keeps serving its current image untouched until DNS moves in step 6. It
+stops receiving new releases from that moment, which is the intended direction of
+travel and is why this step comes before the cutover rather than after it.
+
 ## 6. Cut DNS over
 
 ```bash
