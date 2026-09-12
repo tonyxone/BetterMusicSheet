@@ -100,6 +100,13 @@ aws sns list-subscriptions-by-topic --topic-arn "$(terraform -chdir=infra output
 
 `SubscriptionArn` must be a real ARN, not the literal `PendingConfirmation`.
 
+The mail is from `no-reply@sns.amazonaws.com`, subject "AWS Notification -
+Subscription Confirmation", and the link is plain blue link text reading
+"Confirm subscription" rather than a button. **It lands in Gmail's spam folder** -
+search `from:no-reply@sns.amazonaws.com` rather than assuming it never arrived.
+The token expires after three days; SNS console -> the topic -> Subscriptions ->
+the pending row -> "Request confirmation" sends a fresh one.
+
 ## 4. Smoke-test the temporary URL
 
 `terraform output serverless_api_url` gives an `execute-api` URL that is live
