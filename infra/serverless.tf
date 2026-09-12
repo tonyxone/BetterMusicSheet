@@ -14,15 +14,6 @@ variable "serverless_worker_image" {
   default = ""
 }
 
-variable "serverless_api_cutover" {
-  type    = bool
-  default = false
-  validation {
-    condition     = !var.serverless_api_cutover || var.enable_serverless
-    error_message = "Enable and verify serverless resources before switching DNS."
-  }
-}
-
 variable "serverless_max_workers" {
   type    = number
   default = 4

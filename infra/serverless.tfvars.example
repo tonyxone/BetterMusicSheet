@@ -2,7 +2,6 @@
 enable_serverless       = true
 serverless_api_image    = "ACCOUNT.dkr.ecr.us-west-1.amazonaws.com/better-music-sheet:api-RELEASE"
 serverless_worker_image = "ACCOUNT.dkr.ecr.us-west-1.amazonaws.com/better-music-sheet:RELEASE"
-serverless_api_cutover  = false
 serverless_max_workers  = 4
 serverless_spot_burst   = false
 # Where CloudWatch alarms go. Without it the alarms have no subscriber.

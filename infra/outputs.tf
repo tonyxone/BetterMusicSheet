@@ -1,16 +1,3 @@
-output "job_files_bucket" {
-  value = aws_s3_bucket.job_files.bucket
-}
-
-output "ecs_task_role_arn" {
-  value = aws_iam_role.ecs_task.arn
-}
-
-output "alb_target_group_arn" {
-  description = "Set this as the ECS service's load balancer target group when recreating it in Phase 1"
-  value       = aws_lb_target_group.backend.arn
-}
-
 output "api_url" {
   value = "https://${var.api_subdomain}"
 }

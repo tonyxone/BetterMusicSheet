@@ -17,9 +17,12 @@ resource "aws_route53_record" "api" {
   type    = "A"
 
   alias {
-    name                   = var.serverless_api_cutover ? module.serverless[0].domain_target : aws_lb.backend.dns_name
-    zone_id                = var.serverless_api_cutover ? module.serverless[0].domain_zone : aws_lb.backend.zone_id
-    evaluate_target_health = !var.serverless_api_cutover
+    name    = module.serverless[0].domain_target
+    zone_id = module.serverless[0].domain_zone
+    # The ALB this used to point at is gone (see the migration runbook's
+    # decommission step). API Gateway custom domains are not health-checkable
+    # the way a load balancer is, so there is nothing to evaluate.
+    evaluate_target_health = false
   }
 }
 
