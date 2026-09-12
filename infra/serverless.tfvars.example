@@ -1,4 +1,9 @@
 # Build these images from the migration branch first. Use immutable release tags.
+#
+# AFTER EVERY RELEASE, set these two to the tags the release pushed. The release
+# summary prints the exact lines. Terraform can ignore the Lambda images but not
+# the worker's - ECS keeps image and environment in one attribute - so a stale
+# value here means the next apply reverts the worker to an older build.
 enable_serverless       = true
 serverless_api_image    = "ACCOUNT.dkr.ecr.us-west-1.amazonaws.com/better-music-sheet:api-RELEASE"
 serverless_worker_image = "ACCOUNT.dkr.ecr.us-west-1.amazonaws.com/better-music-sheet:RELEASE"

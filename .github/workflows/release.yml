@@ -208,6 +208,29 @@ jobs:
           cluster: ${{ vars.ECS_CLUSTER }}
           wait-for-service-stability: true
 
+      # Terraform cannot ignore the worker image the way it ignores the Lambda
+      # ones: ECS keeps image, command and every environment variable in a
+      # single container_definitions attribute, and ignore_changes is per
+      # attribute. So an apply run with a stale var file reverts the worker.
+      # Print the replacement lines here, where they are easy to act on.
+      - name: Say what infra/serverless.tfvars should now hold
+        env:
+          WORKER_IMAGE: ${{ needs.push-image.outputs.image }}
+          API_IMAGE: ${{ needs.push-image.outputs.api-image }}
+        run: |
+          {
+            echo '## Update `infra/serverless.tfvars`'
+            echo ''
+            echo 'Terraform still believes the previous images are wanted. Until these'
+            echo 'lines are updated, the next apply - for any reason - rolls the worker'
+            echo 'back. The daily drift check reports it if this is missed.'
+            echo ''
+            echo '```hcl'
+            echo "serverless_api_image    = \"$API_IMAGE\""
+            echo "serverless_worker_image = \"$WORKER_IMAGE\""
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   deploy-ui:
     name: Build and deploy the web UI
     runs-on: ubuntu-latest

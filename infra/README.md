@@ -97,6 +97,25 @@ matches exactly and which is what `trailingSlash` in
   `backend.hcl.example` into place and
   `terraform init -backend-config=backend.hcl -migrate-state`.
 
+## After every release
+
+Set `serverless_api_image` and `serverless_worker_image` in your
+`serverless.tfvars` to the tags the release pushed. The release job's summary
+prints the two lines ready to paste.
+
+This is not bookkeeping. The Lambda functions declare `ignore_changes` on their
+image, so the release owns their code and Terraform leaves it alone. The ECS
+worker cannot do the same: ECS keeps the image, the command and every
+environment variable in one `container_definitions` attribute, and
+`ignore_changes` works per attribute - excluding the image would also stop
+Terraform managing the environment, which is worse than the problem. So
+Terraform still believes whatever the tfvars say, and an apply run for an
+entirely unrelated reason will quietly revert the worker to an older image.
+Nothing fails; jobs simply start running last release's code.
+
+The scheduled drift check (`.github/workflows/drift.yml`) reports this within a
+day if it is missed, which is the backstop rather than the plan.
+
 ## Migrating to the serverless backend
 
 `serverless.tf` and `modules/serverless/` provision the Lambda API, SQS queue,
