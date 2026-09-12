@@ -1,0 +1,5 @@
+# Terraform heredocs carry their line endings into the API call. With
+# core.autocrlf on Windows, cognito.tf's hosted-UI CSS checked out as CRLF and
+# every plan showed a change that was only line endings, which trains you to
+# skim plans - the opposite of what a plan is for.
+*.tf text eol=lf
