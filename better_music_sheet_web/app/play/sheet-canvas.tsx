@@ -13,8 +13,19 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TimelineMeasure, TimelineNote } from "@/lib/timeline";
+import { isMissingBrowserFeature } from "@/lib/browser-support";
 
 const RENDER_SCALE = 2; // rasterize above CSS size so the sheet stays sharp
+
+/** A failure to show, and whether the reader can do anything about it. */
+type ViewerError = { detail: string; unsupported: boolean };
+
+function describe(err: unknown): ViewerError {
+  return {
+    detail: err instanceof Error ? err.message : String(err),
+    unsupported: isMissingBrowserFeature(err),
+  };
+}
 
 type PageInfo = {
   pageNumber: number;
@@ -61,7 +72,7 @@ export function SheetCanvas({
   onMeasureClick: (index: number) => void;
 }) {
   const [pages, setPages] = useState<PageInfo[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ViewerError | null>(null);
   const canvasRefs = useRef<Map<number, HTMLCanvasElement>>(new Map());
   // A pdf.js handle, not something the UI renders - hence a ref, not state.
   const docRef = useRef<PdfDoc | null>(null);
@@ -106,7 +117,7 @@ export function SheetCanvas({
         }
         if (!cancelled) setPages(infos);
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        if (!cancelled) setError(describe(err));
       }
     })();
 
@@ -138,7 +149,7 @@ export function SheetCanvas({
           await task.promise;
         } catch (err) {
           // A cancelled render rejects on unmount; that is not a failure.
-          if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+          if (!cancelled) setError(describe(err));
           return;
         }
       }
@@ -308,7 +319,23 @@ export function SheetCanvas({
   );
 
   if (error) {
-    return <p className="play-error">Couldn&apos;t render the sheet ({error}).</p>;
+    // An old browser is worth saying out loud: it is the reader's to fix, and
+    // "toHex is not a function" tells them nothing about how.
+    if (error.unsupported) {
+      return (
+        <div className="play-error">
+          <strong>This browser is too old to show the sheet.</strong>
+          <p>
+            The viewer needs features your browser does not have yet. Updating it
+            usually fixes this — on an iPhone or iPad that means updating iOS or
+            iPadOS itself, since Safari comes with the system. Recent Chrome,
+            Edge and Firefox work too.
+          </p>
+          <p className="play-error-detail">{error.detail}</p>
+        </div>
+      );
+    }
+    return <p className="play-error">Couldn&apos;t render the sheet ({error.detail}).</p>;
   }
   if (!pages.length) {
     return <p className="play-hint">Loading the sheet…</p>;
