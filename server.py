@@ -1,60 +1,7 @@
-"""REST API for the sheet-music annotator.
+"""HTTP API shared by local uvicorn and the Lambda adapter.
 
-Wraps the same pipeline as run.py (audiveris_heads.py / annotate.py) behind a
-small job-queue API: upload a PDF (or a JPG/PNG photo/scan - Audiveris reads
-raster images directly, so a non-PDF upload is just converted to a one-page
-PDF up front and the rest of the pipeline never knows the difference), poll
-for completion, download the result. The output is always a PDF, regardless
-of what was uploaded. OMR takes anywhere from seconds to minutes per file, so
-submission is async - there is no synchronous "upload and get the PDF back"
-endpoint.
-
-Run with:
-    .venv\\Scripts\\python.exe server.py
-    (or: .venv\\Scripts\\python.exe -m uvicorn server:app --host 0.0.0.0 --port 8000)
-
-Auth: optional. Signing in is never required - a signed-out visitor is
-identified by their X-Guest-Id header (an anonymous per-browser id the
-frontend generates and persists in its own cookie - see
-better_music_sheet_web/lib/guest-id.ts), or failing that, a single shared
-GUEST_USER_ID. Signing in with Cognito (POST /api/auth/token exchanges a
-Cognito ID token for a short-lived token minted by THIS backend,
-bootstrapping the user's `users` row on first login) swaps that guest id for
-the user's Cognito id, which is what their files are then stored under (see
-storage.py). Sheets uploaded as a guest stay under the guest id and are not
-migrated. See auth.py.
-
-Endpoints:
-    GET    /                               web UI (static/index.html) - local dev convenience only
-    GET    /api/health                     liveness check (no auth - the ALB health check can't send a token)
-    POST   /api/auth/token                 exchange a Cognito ID token for this backend's own token
-    GET    /api/me                         the signed-in user's profile, or 401 for a guest
-    POST   /api/sheets                     upload a PDF or image, kick off annotation (one at a time per user)
-    GET    /api/sheets                     this user's job history, newest first
-    GET    /api/sheets/{job_id}            poll one job's status
-    DELETE /api/sheets/{job_id}            delete a finished/failed job and its stored files
-    GET    /api/sheets/{job_id}/download   the annotated PDF, streamed through this backend either way
-                                            (from S3 in production, from disk in local dev)
-                                            (?inline=1 for in-browser preview instead of a forced download)
-    GET    /api/sheets/{job_id}/timeline   playback timeline JSON for the Play page (404 if none)
-    GET    /api/music-sheets               this user's uploaded sheets, one row per sheet regardless of reprocess count
-
-The UI (static/index.html + static/config.js) is deployment-independent from
-this API: locally it's served from "/" above for convenience, but it's a
-plain static file with no build step that can just as well be copied to
-S3/CloudFront and pointed at this API's real URL by editing config.js's
-API_BASE - no HTML/JS edits needed. Because that makes the UI a different
-origin from the API in that deployment, CORS is enabled below; set
-ALLOWED_ORIGINS to the UI's real origin(s) in production instead of "*".
-
-Jobs run one at a time on a single background worker thread, deliberately -
-Audiveris is CPU/memory-heavy per job. Job/user state and uploaded/output
-files live in DynamoDB/S3 in production, or in-memory/server_jobs/ in local
-dev (see config.py, db.py, storage.py) - not in-process either way in
-production, so multiple backend tasks can share the same job/user data; the
-Audiveris working directory itself is still local/ephemeral per job
-(server_jobs/, not cleaned up automatically - fine for now, see
-infra/README.md).
+New uploads use immutable artifacts and a standalone worker. Legacy routes
+remain available during the staged deployment and for existing history.
 """
 import os
 import queue
@@ -68,12 +15,11 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
-import pymupdf
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import db
 import storage
@@ -84,11 +30,12 @@ from auth import (
     mint_backend_token,
     verify_cognito_id_token,
 )
-from config import IS_PRODUCTION
-from run import annotate_pdf, count_pages
+from config import IS_PRODUCTION, SERVERLESS, MAX_UPLOAD_BYTES
+import job_state
 
 JOBS_DIR = Path(__file__).parent / "server_jobs"
-JOBS_DIR.mkdir(exist_ok=True)
+if not SERVERLESS:
+    JOBS_DIR.mkdir(exist_ok=True)
 STATIC_DIR = Path(__file__).parent / "static"
 
 ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
@@ -141,33 +88,8 @@ job_queue = queue.Queue()
 
 
 def _process(job_id):
-    job = db.get_annotation_job(job_id)
-    job_dir = JOBS_DIR / job_id
-    db.update_annotation_job(job_id, status="processing")
-
-    def log(msg, _jid=job_id):
-        print(f"[{_jid[:8]}] {msg}")
-        db.update_annotation_job(_jid, stage=msg)
-
-    try:
-        timeline_file = job_dir / "timeline.json"
-        n = annotate_pdf(
-            job_dir / "input.pdf", job_dir / "annotated.pdf", job_dir / "work",
-            style=job["style"], octave=job["octave"], font_size=job["font_size"],
-            dpi=job["dpi"], auto_retry=job["auto_retry"], log=log,
-            timeline_path=timeline_file,
-        )
-        sheet = db.get_music_sheet(job["music_sheet_id"])
-        sheet_name = sheet["sheet_name"] if sheet else job["music_sheet_id"]
-        storage.upload_output_pdf(job["user_id"], job_dir / "annotated.pdf", sheet_name)
-        # Best-effort, like its build: no timeline just means no Play mode for
-        # this sheet (GET /timeline 404s), never a failed job.
-        if timeline_file.exists():
-            storage.upload_output_timeline(job["user_id"], timeline_file, sheet_name)
-        db.update_annotation_job(job_id, status="done", labeled_groups=n)
-    except Exception as e:
-        log(f"FAILED: {e}")
-        db.update_annotation_job(job_id, status="failed", error=str(e))
+    from worker import process_job
+    return process_job(job_id)
 
 
 def _worker():
@@ -175,11 +97,25 @@ def _worker():
         job_id = job_queue.get()
         try:
             _process(job_id)
+        except Exception:
+            traceback.print_exc()
         finally:
             job_queue.task_done()
 
 
-threading.Thread(target=_worker, daemon=True).start()
+# Start lazily for local/legacy multipart submissions. Importing the Lambda
+# application never starts a thread or loads the Java/PDF runtime.
+_worker_started = False
+_worker_lock = threading.Lock()
+
+
+def enqueue_local(job_id):
+    global _worker_started
+    with _worker_lock:
+        if not _worker_started:
+            threading.Thread(target=_worker, daemon=True).start()
+            _worker_started = True
+    job_queue.put(job_id)
 
 
 @app.get("/api/health")
@@ -226,78 +162,117 @@ def me(user_id: str = Depends(get_signed_in_user_id)):
     return user
 
 
+class UploadRequest(BaseModel):
+    filename: str = Field(min_length=1, max_length=255)
+    size: int = Field(gt=0, le=MAX_UPLOAD_BYTES)
+    content_type: str = "application/octet-stream"
+    style: str = "unicode"
+    octave: bool = False
+    font_size: float = Field(default=6.5, ge=3, le=20, allow_inf_nan=False)
+    dpi: Optional[int] = Field(default=None, ge=MIN_DPI, le=MAX_DPI)
+    auto_retry: bool = True
+
+
+def reserve_upload(body, user_id):
+    if Path(body.filename).suffix.lower() not in ALLOWED_EXTENSIONS:
+        raise HTTPException(400, "Only PDF, JPG and PNG files are supported.")
+    if body.style not in ("unicode", "ascii"):
+        raise HTTPException(400, "style must be unicode or ascii")
+    # Covers pre-migration active jobs; the atomic reservation below handles
+    # concurrent new uploads without relying on an eventually consistent GSI.
+    if db.get_in_progress_job(user_id):
+        raise HTTPException(409, "You already have a sheet processing. Wait for it to finish.")
+    try:
+        return job_state.create(uuid.uuid4().hex, user_id, body.filename,
+                                body.model_dump(include={"style", "octave", "font_size", "dpi", "auto_retry"}),
+                                body.size)
+    except job_state.Busy as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/uploads", status_code=201)
+def create_upload(body: UploadRequest, user_id: str = Depends(get_current_user_id)):
+    if not SERVERLESS:
+        raise HTTPException(404, "Direct uploads are not enabled on this server.")
+    job = reserve_upload(body, user_id)
+    try:
+        upload = storage.create_upload(job, {
+            ".pdf": "application/pdf", ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg", ".png": "image/png",
+        }[Path(body.filename).suffix.lower()])
+    except Exception:
+        # A reservation that cannot return a URL must not block future uploads.
+        job_state.change(job["job_id"], {"status": "uploading"}, status="failed", error="Could not prepare upload.")
+        job_state.release(job)
+        raise
+    return {"job_id": job["job_id"], "upload": upload}
+
+
+@app.post("/api/uploads/{job_id}/complete", status_code=202)
+def complete_upload(job_id: str, user_id: str = Depends(get_current_user_id)):
+    from worker import accept_input
+    job = _owned_job_or_404(job_id, user_id)
+    if job.get("storage_version") != 2:
+        raise HTTPException(409, "This upload uses the legacy submission flow.")
+    job = accept_input(job_id)
+    if job["status"] == "uploading":
+        raise HTTPException(409, "Upload is not complete yet. Please retry.")
+    # S3 notifications own enqueueing. The scheduled reconciler repairs a
+    # missing notification. Browser retries cannot launch duplicate tasks.
+    return {"job_id": job_id, "status": job["status"]}
+
+
 @app.post("/api/sheets", status_code=202)
 async def submit_sheet(
-    file: UploadFile = File(..., description="Piano sheet-music PDF, or a photo/scan (JPG/PNG)"),
-    style: str = Form("unicode", description="'unicode' (B♭) or 'ascii' (Bb)"),
-    octave: bool = Form(False, description="Append octave number, e.g. B♭4"),
-    font_size: float = Form(6.5),
-    dpi: Optional[int] = Form(None, description=f"Force Audiveris's rasterization DPI ({MIN_DPI}-{MAX_DPI})"),
-    auto_retry: bool = Form(True, description="Auto re-scan under-recognized pages at higher DPI"),
+    file: UploadFile = File(...), style: str = Form("unicode"),
+    octave: bool = Form(False), font_size: float = Form(6.5),
+    dpi: Optional[int] = Form(None), auto_retry: bool = Form(True),
     user_id: str = Depends(get_current_user_id),
 ):
-    if style not in ("unicode", "ascii"):
-        raise HTTPException(400, "style must be 'unicode' or 'ascii'")
-    # The form caps this too, but that's advisory - this is the real limit.
-    if dpi is not None and not (MIN_DPI <= dpi <= MAX_DPI):
-        raise HTTPException(400, f"dpi must be between {MIN_DPI} and {MAX_DPI}")
-    ext = Path(file.filename).suffix.lower()
-    if ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(400, "only PDF or image (JPG/PNG) uploads are supported")
-
-    if db.get_in_progress_job(user_id):
-        raise HTTPException(409, "You already have a music sheet processing. Please wait for it to finish before uploading another.")
-
-    music_sheet_id = uuid.uuid4().hex
-    job_id = uuid.uuid4().hex
-    job_dir = JOBS_DIR / job_id
-    job_dir.mkdir(parents=True)
-    raw_path = job_dir / f"upload{ext}"
-    with raw_path.open("wb") as f:
-        shutil.copyfileobj(file.file, f)
-
-    # Normalize to a PDF regardless of what was uploaded, so the rest of the
-    # pipeline (and the download, which is always a PDF) never has to care
-    # whether the original was a document or a photo. This also validates the
-    # file's actual content instead of trusting the extension - a renamed
-    # non-PDF/non-image (or a corrupt upload) fails cleanly here rather than
-    # confusingly partway through the Audiveris subprocess.
-    input_path = job_dir / "input.pdf"
-    try:
-        with pymupdf.open(raw_path) as doc:
-            is_pdf = doc.is_pdf
-            if not is_pdf:
-                pdf_bytes = doc.convert_to_pdf()
-        if is_pdf:
-            raw_path.rename(input_path)
-        else:
-            with pymupdf.open("pdf", pdf_bytes) as pdf_doc:
-                pdf_doc.save(input_path)
-            raw_path.unlink(missing_ok=True)
-        num_pages = count_pages(input_path)
-        if num_pages < 1:
-            raise ValueError("no pages")
-    except Exception:
-        shutil.rmtree(job_dir, ignore_errors=True)
-        raise HTTPException(400, "the uploaded file isn't a valid PDF or image")
-
-    storage.upload_input_pdf(user_id, input_path, file.filename)
-    db.create_music_sheet(music_sheet_id, user_id, file.filename)
-    db.create_annotation_job(job_id, user_id, music_sheet_id, style, octave, font_size, dpi, auto_retry)
-    job_queue.put(job_id)
-    return {"job_id": job_id, "music_sheet_id": music_sheet_id, "status": "queued"}
+    if SERVERLESS:
+        raise HTTPException(409, "Please refresh the page to use the updated upload form.")
+    # Compatibility endpoint for local development and the transitional ECS API.
+    size = 0
+    with __import__("tempfile").TemporaryDirectory(prefix="sheet-upload-") as temporary:
+        raw = Path(temporary) / "source"
+        with raw.open("wb") as target:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(413, f"File must be at most {MAX_UPLOAD_BYTES // 1024 // 1024} MB.")
+                target.write(chunk)
+        try:
+            body = UploadRequest(filename=file.filename or "", size=size, style=style,
+                                 octave=octave, font_size=font_size, dpi=dpi, auto_retry=auto_retry)
+        except ValueError:
+            raise HTTPException(400, "Invalid file or annotation options.")
+        job = reserve_upload(body, user_id)
+        try:
+            if IS_PRODUCTION:
+                storage._s3.upload_file(str(raw), storage.job_bucket(job), job["input_key"])
+                version = storage.input_info(job)["VersionId"]
+            else:
+                shutil.copyfile(raw, storage._local_path(job["input_key"]))
+                version = "local"
+            job_state.ready(job["job_id"], version)
+            enqueue_local(job["job_id"])
+        except Exception:
+            job_state.change(job["job_id"], {"status": "uploading"}, status="failed", error="Upload failed.")
+            job_state.release(job)
+            raise
+    return {"job_id": job["job_id"], "music_sheet_id": job["music_sheet_id"], "status": "queued"}
 
 
 def _owned_job_or_404(job_id, user_id):
     job = db.get_annotation_job(job_id)
-    if job is None or job["user_id"] != user_id:
+    if job is None or job["user_id"] != user_id or job["status"] == "deleted":
         raise HTTPException(404, "no such job")
     return job
 
 
 @app.get("/api/sheets")
 def job_history(user_id: str = Depends(get_current_user_id)):
-    jobs = db.list_annotation_jobs(user_id)
+    jobs = [j for j in db.list_annotation_jobs(user_id) if j["status"] not in ("deleting", "deleted")]
     sheets = {s["music_sheet_id"]: s["sheet_name"] for s in db.list_music_sheets(user_id)}
     return [{**job, "sheet_name": sheets.get(job["music_sheet_id"])} for job in jobs]
 
@@ -319,8 +294,20 @@ def delete_job(job_id: str, user_id: str = Depends(get_current_user_id)):
     history item still needs them.
     """
     job = _owned_job_or_404(job_id, user_id)
-    if job["status"] in ("queued", "processing"):
+    if job["status"] in ("uploading", "queued", "processing"):
         raise HTTPException(409, "Wait for this sheet to finish processing before deleting it.")
+
+    if job.get("storage_version") == 2:
+        # Tombstones survive until outstanding upload URLs expire. The reconciler
+        # removes late uploads too, so a reused presigned URL cannot resurrect files.
+        if not job_state.change(job_id, {"status": job["status"]}, status="deleting", next_check_at=int(time.time())):
+            raise HTTPException(409, "This sheet changed; refresh and try again.")
+        storage.delete_job_files(job)
+        db.delete_music_sheet(job["music_sheet_id"])
+        job_state.release(job)
+        job_state.change(job_id, {"status": "deleting"}, status="deleted",
+                         next_check_at=max(int(time.time()) + 60, job["upload_expires_at"] + 60))
+        return Response(status_code=204)
 
     jobs = db.list_annotation_jobs(user_id)
     other_jobs = [candidate for candidate in jobs if candidate["job_id"] != job_id]
@@ -377,6 +364,43 @@ def _content_disposition(disposition, filename, ascii_filename):
     return f"{disposition}; filename=\"{ascii_filename}\"; filename*=utf-8''{quote(filename)}"
 
 
+def with_sheet_name(job):
+    sheet = db.get_music_sheet(job["music_sheet_id"])
+    return {**job, "sheet_name": sheet["sheet_name"] if sheet else job.get("sheet_name", job["music_sheet_id"])}
+
+
+@app.get("/api/sheets/{job_id}/assets")
+def job_assets(job_id: str, user_id: str = Depends(get_current_user_id)):
+    job = with_sheet_name(_owned_job_or_404(job_id, user_id))
+    if job["status"] != "done":
+        raise HTTPException(409, "The sheet is not ready yet.")
+    if not IS_PRODUCTION:
+        return {"direct": False, "pdf": f"/api/sheets/{job_id}/download",
+                "timeline": f"/api/sheets/{job_id}/timeline"}
+    stem = Path(job["sheet_name"]).stem
+    disposition = _content_disposition("attachment", f"{stem} (annotated).pdf", f"{_ascii_stem(stem)} (annotated).pdf")
+    return JSONResponse({"direct": True,
+                         "pdf": storage.presign_artifact(job, "output", disposition),
+                         "timeline": storage.presign_artifact(job, "timeline")},
+                        headers={"Cache-Control": "no-store"})
+
+
+def new_artifact_response(job, kind, disposition=None):
+    try:
+        result = storage.read_artifact(job, kind)
+    except FileNotFoundError:
+        raise HTTPException(404, "No playback timeline for this sheet.")
+    if IS_PRODUCTION:
+        return StreamingResponse(result["Body"].iter_chunks(chunk_size=65536),
+            media_type="application/pdf" if kind == "output" else "application/json",
+            headers={"Content-Length": str(result["ContentLength"]),
+                     **({"Content-Disposition": disposition} if disposition else {})})
+    if not result.exists():
+        raise HTTPException(404, "No artifact for this sheet.")
+    return FileResponse(result, media_type="application/pdf" if kind == "output" else "application/json",
+                        headers={"Content-Disposition": disposition} if disposition else None)
+
+
 @app.get("/api/sheets/{job_id}/download")
 def job_download(job_id: str, inline: bool = False, user_id: str = Depends(get_current_user_id)):
     job = _owned_job_or_404(job_id, user_id)
@@ -388,6 +412,10 @@ def job_download(job_id: str, inline: bool = False, user_id: str = Depends(get_c
     stem = Path(sheet_name).stem
     filename = f"{stem} (annotated).pdf"
     ascii_filename = f"{_ascii_stem(stem)} (annotated).pdf"
+    if SERVERLESS:
+        raise HTTPException(409, "Please refresh the page to use direct downloads.")
+    if job.get("storage_version") == 2:
+        return new_artifact_response(job, "output", _content_disposition(disposition, filename, ascii_filename))
     if IS_PRODUCTION:
         # Streamed through this backend rather than redirecting to a
         # presigned S3 URL - see storage.download_output_pdf for why.
@@ -420,6 +448,10 @@ def job_timeline(job_id: str, user_id: str = Depends(get_current_user_id)):
         raise HTTPException(409, f"job is '{job['status']}', not done yet")
     sheet = db.get_music_sheet(job["music_sheet_id"])
     sheet_name = sheet["sheet_name"] if sheet else job["music_sheet_id"]
+    if SERVERLESS:
+        raise HTTPException(409, "Please refresh the page to load playback data.")
+    if job.get("storage_version") == 2:
+        return new_artifact_response(job, "timeline")
     if IS_PRODUCTION:
         try:
             body, content_length = storage.download_output_timeline(job["user_id"], sheet_name)
@@ -445,7 +477,8 @@ def music_sheet_library(user_id: str = Depends(get_current_user_id)):
 # alongside it. Registered last so it doesn't shadow the /api/* routes above -
 # a real deployment skips this entirely and serves static/ from S3/CloudFront
 # instead (see the module docstring).
-app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+if not SERVERLESS:
+    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 
 
 if __name__ == "__main__":

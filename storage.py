@@ -17,9 +17,110 @@ sheets they uploaded as a guest stay where they are.
 """
 import re
 import shutil
+import os
 from pathlib import Path
 
 from config import IS_PRODUCTION
+
+
+def job_bucket(job):
+    return os.environ["NEW_JOB_FILES_BUCKET"] if job.get("storage_version") == 2 else os.environ["JOB_FILES_BUCKET"]
+
+
+def artifact_key(job, kind):
+    if job.get("storage_version") == 2:
+        return job.get(f"{kind}_key")
+    name = job.get("sheet_name") or job["music_sheet_id"]
+    return {"output": _output_key, "timeline": _timeline_key, "input": _input_key}[kind](job["user_id"], name)
+
+
+def create_upload(job, content_type):
+    from config import UPLOAD_SECONDS
+    return _s3.generate_presigned_post(
+        Bucket=job_bucket(job), Key=job["input_key"],
+        Fields={"Content-Type": content_type},
+        Conditions=[{"Content-Type": content_type}, ["content-length-range", job["size"], job["size"]]],
+        ExpiresIn=UPLOAD_SECONDS,
+    )
+
+
+def input_info(job, version=None):
+    if IS_PRODUCTION:
+        try:
+            return _s3.head_object(Bucket=job_bucket(job), Key=job["input_key"],
+                                   **({"VersionId": version} if version else {}))
+        except _s3.exceptions.ClientError as exc:
+            if exc.response["Error"]["Code"] in ("404", "NoSuchKey", "NoSuchVersion"):
+                return None
+            raise
+    path = _local_path(job["input_key"])
+    return {"ContentLength": path.stat().st_size, "VersionId": "local"} if path.exists() else None
+
+
+def download_input(job, destination):
+    key = artifact_key(job, "input")
+    if IS_PRODUCTION:
+        extra = {"VersionId": job["input_version"]} if job.get("input_version") else {}
+        _s3.download_file(job_bucket(job), key, str(destination), ExtraArgs=extra)
+    else:
+        shutil.copyfile(_local_path(key), destination)
+
+
+def publish(job, kind, path):
+    # An attempt never overwrites another attempt's objects. Only the winner's
+    # keys become visible through the conditional job completion update.
+    key = f"jobs/{job['user_id']}/{job['job_id']}/attempts/{job['lease_owner']}/{kind}"
+    if IS_PRODUCTION:
+        _s3.upload_file(str(path), job_bucket(job), key,
+                        ExtraArgs={"ContentType": "application/pdf" if kind == "output" else "application/json"})
+    else:
+        shutil.copyfile(path, _local_path(key))
+    return key
+
+
+def read_artifact(job, kind):
+    key = artifact_key(job, kind)
+    if not key:
+        raise FileNotFoundError(kind)
+    if IS_PRODUCTION:
+        return _s3.get_object(Bucket=job_bucket(job), Key=key)
+    return _local_path(key)
+
+
+def presign_artifact(job, kind, disposition=None):
+    key = artifact_key(job, kind)
+    if not key:
+        return None
+    params = {"Bucket": job_bucket(job), "Key": key}
+    try:
+        _s3.head_object(**params)
+    except _s3.exceptions.ClientError as exc:
+        if exc.response["Error"]["Code"] in ("404", "NoSuchKey"):
+            return None
+        raise
+    if disposition:
+        params["ResponseContentDisposition"] = disposition
+    return _s3.generate_presigned_url("get_object", Params=params, ExpiresIn=300)
+
+
+def delete_job_files(job):
+    """Delete all attempts AND all upload versions, including failed attempts."""
+    prefix = f"jobs/{job['user_id']}/{job['job_id']}/"
+    if IS_PRODUCTION:
+        bucket = job_bucket(job)
+        for page in _s3.get_paginator("list_object_versions").paginate(Bucket=bucket, Prefix=prefix):
+            objects = [{"Key": v["Key"], "VersionId": v["VersionId"]}
+                       for v in page.get("Versions", []) + page.get("DeleteMarkers", [])]
+            for offset in range(0, len(objects), 1000):
+                result = _s3.delete_objects(Bucket=bucket, Delete={"Objects": objects[offset:offset + 1000]})
+                if result.get("Errors"):
+                    raise RuntimeError("Some sheet files could not be deleted. Please retry.")
+    else:
+        root = _LOCAL_DIR.resolve()
+        target = (root / prefix).resolve()
+        if not target.is_relative_to(root) or target == root:
+            raise ValueError("Invalid job directory")
+        shutil.rmtree(target, ignore_errors=True)
 
 
 def _safe_stem(sheet_name):

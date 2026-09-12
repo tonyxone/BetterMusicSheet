@@ -41,3 +41,12 @@ _load_dotenv()
 
 APP_ENV = os.environ.get("APP_ENV", "local")
 IS_PRODUCTION = APP_ENV == "production"
+
+# Explicit opt-in: the existing production service can still run during rollout.
+SERVERLESS = os.environ.get("JOB_BACKEND", "local") == "sqs"
+MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+MAX_PAGES = int(os.environ.get("MAX_PAGES", "50"))
+MAX_JOB_SECONDS = int(os.environ.get("MAX_JOB_SECONDS", "1800"))
+MAX_ATTEMPTS = 3
+LEASE_SECONDS = 180
+UPLOAD_SECONDS = 900

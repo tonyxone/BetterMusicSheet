@@ -66,7 +66,7 @@ if IS_PRODUCTION:
         })
 
     def get_music_sheet(music_sheet_id):
-        item = _music_sheet_table.get_item(Key={"music_sheet_id": music_sheet_id}).get("Item")
+        item = _music_sheet_table.get_item(Key={"music_sheet_id": music_sheet_id}, ConsistentRead=True).get("Item")
         return _clean(item) if item else None
 
     def list_music_sheets(user_id):
@@ -92,7 +92,7 @@ if IS_PRODUCTION:
         })
 
     def get_annotation_job(job_id):
-        item = _annotation_job_table.get_item(Key={"job_id": job_id}).get("Item")
+        item = _annotation_job_table.get_item(Key={"job_id": job_id}, ConsistentRead=True).get("Item")
         return _clean(item) if item else None
 
     def update_annotation_job(job_id, **fields):
