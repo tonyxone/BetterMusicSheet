@@ -93,7 +93,7 @@ export default function AboutPage() {
       <h2>Getting in touch</h2>
       <p>
         Corrections, bug reports, and sheets it read badly are all welcome at{" "}
-        <a href="mailto:hello@bettermusicsheet.com">hello@bettermusicsheet.com</a>.
+        <a href="mailto:bettermusicsheet@gmail.com">bettermusicsheet@gmail.com</a>.
         A sheet that comes out wrong is genuinely useful to see.
       </p>
     </div>

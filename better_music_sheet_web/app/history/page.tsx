@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { clientApiFetch } from "@/lib/client-api";
-import { setAdsPaused } from "@/lib/ads";
 import { KeyboardIcon } from "../keyboard-icon";
 import type { AnnotationJob } from "@/lib/api";
 
@@ -27,13 +26,6 @@ export default function HistoryPage() {
       .then(setJobs)
       .catch(() => setJobs([]));
   }, []);
-
-  // No AdSense ads while this screen is just a loading state or the
-  // "nothing here yet" empty state - only once there's a real list.
-  useEffect(() => {
-    setAdsPaused(!jobs || jobs.length === 0);
-    return () => setAdsPaused(false);
-  }, [jobs]);
 
   function openDelete(job: AnnotationJob) {
     setDeleteError(null);
