@@ -24,11 +24,6 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           href="https://fonts.googleapis.com/css2?family=Spectral:wght@400;500;600;700&family=Work+Sans:wght@400;500;600&family=Caveat:wght@600&display=swap"
           rel="stylesheet"
         />
-        <script
-          async
-          src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-3606656264491246"
-          crossOrigin="anonymous"
-        />
         <script async src="https://www.googletagmanager.com/gtag/js?id=G-RDB4K5MC4D" />
         <script>{`
           window.dataLayer = window.dataLayer || [];
