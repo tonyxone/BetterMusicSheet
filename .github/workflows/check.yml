@@ -1,0 +1,49 @@
+name: Check migration
+on:
+  pull_request:
+  push:
+    branches: ['codex/**', master]
+permissions:
+  contents: read
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt -r requirements-test.txt
+      - run: python -m unittest discover -s tests -v
+      - name: Build and verify lightweight API container
+        run: |
+          docker build -f Dockerfile.api -t sheet-api:test .
+          docker run --rm --entrypoint python -e JOB_BACKEND=sqs sheet-api:test -c 'import server, controller, sys; assert "pymupdf" not in sys.modules; assert "run" not in sys.modules'
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: better_music_sheet_web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: better_music_sheet_web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+        env:
+          NEXT_PUBLIC_API_BASE: https://api.example.com
+  infrastructure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.14.6
+      - run: terraform -chdir=infra fmt -check -recursive
+      - run: terraform -chdir=infra init -backend=false
+      - run: terraform -chdir=infra validate

@@ -3,17 +3,50 @@ name: Release
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Deploy to the provisioned serverless API and worker (false builds bootstrap images only)
+        type: boolean
+        default: false
+
+concurrency:
+  group: production-release
+  cancel-in-progress: false
 
 permissions:
   id-token: write   # required for OIDC -> AWS
   contents: read
 
 jobs:
-  push-image:
-    name: Build and push backend image to ECR
+  preflight:
     runs-on: ubuntu-latest
     outputs:
+      deploy: ${{ steps.mode.outputs.deploy }}
+    steps:
+      - id: mode
+        env:
+          DEPLOY: ${{ github.event_name == 'release' || inputs.deploy }}
+          READY: ${{ vars.SERVERLESS_READY }}
+          API: ${{ vars.API_LAMBDA_FUNCTION }}
+          CONTROLLER: ${{ vars.CONTROLLER_LAMBDA_FUNCTION }}
+          WORKER: ${{ vars.WORKER_ECS_SERVICE }}
+        run: |
+          if [ "$DEPLOY" = true ]; then
+            test "$READY" = true && test -n "$API" && test -n "$CONTROLLER" && test -n "$WORKER" || {
+              echo 'Provision and smoke-test the serverless stack first. See docs/serverless-migration.md.'
+              exit 1
+            }
+          fi
+          echo "deploy=$DEPLOY" >> "$GITHUB_OUTPUT"
+
+  push-image:
+    name: Build and push API and worker images
+    runs-on: ubuntu-latest
+    needs: preflight
+    outputs:
       image: ${{ steps.image.outputs.image }}
+      api-image: ${{ steps.image.outputs.api-image }}
     steps:
       - uses: actions/checkout@v4
 
@@ -38,17 +71,23 @@ jobs:
         env:
           REGISTRY: ${{ steps.ecr-login.outputs.registry }}
           REPOSITORY: ${{ vars.ECR_REPOSITORY }}
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ github.event.release.tag_name || format('migration-{0}', github.sha) }}
         run: |
-          docker build -t "$REGISTRY/$REPOSITORY:$TAG" -t "$REGISTRY/$REPOSITORY:latest" .
+          docker build -t "$REGISTRY/$REPOSITORY:$TAG" .
+          docker build -f Dockerfile.api -t "$REGISTRY/$REPOSITORY:api-$TAG" .
+          docker run --rm --entrypoint python -e JOB_BACKEND=sqs "$REGISTRY/$REPOSITORY:api-$TAG" -c 'import server, controller, sys; assert "pymupdf" not in sys.modules; assert "run" not in sys.modules'
           docker push "$REGISTRY/$REPOSITORY:$TAG"
-          docker push "$REGISTRY/$REPOSITORY:latest"
+          docker push "$REGISTRY/$REPOSITORY:api-$TAG"
           echo "image=$REGISTRY/$REPOSITORY:$TAG" >> "$GITHUB_OUTPUT"
+          echo "api-image=$REGISTRY/$REPOSITORY:api-$TAG" >> "$GITHUB_OUTPUT"
+          echo "Worker: $REGISTRY/$REPOSITORY:$TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo "API: $REGISTRY/$REPOSITORY:api-$TAG" >> "$GITHUB_STEP_SUMMARY"
 
   deploy-backend:
-    name: Deploy backend to ECS
+    name: Deploy Lambda API and ECS worker
     runs-on: ubuntu-latest
-    needs: push-image
+    needs: [preflight, push-image]
+    if: needs.preflight.outputs.deploy == 'true'
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -57,10 +96,25 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
           role-skip-session-tagging: true
 
-      - name: Fetch the running task definition
+      - name: Deploy Lambda code
+        env:
+          API_IMAGE: ${{ needs.push-image.outputs.api-image }}
+          API_FUNCTION: ${{ vars.API_LAMBDA_FUNCTION }}
+          CONTROLLER_FUNCTION: ${{ vars.CONTROLLER_LAMBDA_FUNCTION }}
         run: |
+          for FUNCTION in "$API_FUNCTION" "$CONTROLLER_FUNCTION"; do
+            aws lambda update-function-code --function-name "$FUNCTION" --image-uri "$API_IMAGE" --query 'FunctionName'
+            aws lambda wait function-updated --function-name "$FUNCTION"
+          done
+
+      - name: Fetch the worker task definition
+        env:
+          CLUSTER: ${{ vars.ECS_CLUSTER }}
+          SERVICE: ${{ vars.WORKER_ECS_SERVICE }}
+        run: |
+          TASK=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query 'services[0].taskDefinition' --output text)
           aws ecs describe-task-definition \
-            --task-definition "${{ vars.ECS_TASK_FAMILY }}" \
+            --task-definition "$TASK" \
             --query taskDefinition \
             | jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' \
             > task-definition.json
@@ -70,20 +124,22 @@ jobs:
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
           task-definition: task-definition.json
-          container-name: ${{ vars.ECS_CONTAINER_NAME }}
+          container-name: worker
           image: ${{ needs.push-image.outputs.image }}
 
       - name: Register the new revision and deploy it
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.render.outputs.task-definition }}
-          service: ${{ vars.ECS_SERVICE }}
+          service: ${{ vars.WORKER_ECS_SERVICE }}
           cluster: ${{ vars.ECS_CLUSTER }}
           wait-for-service-stability: true
 
   deploy-ui:
     name: Build and deploy the web UI
     runs-on: ubuntu-latest
+    needs: [preflight, deploy-backend]
+    if: needs.preflight.outputs.deploy == 'true'
     steps:
       - uses: actions/checkout@v4
 

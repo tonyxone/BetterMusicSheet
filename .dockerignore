@@ -8,3 +8,10 @@ sheet/
 output/
 server_jobs/
 server.log
+infra/
+.env
+*.log
+_seed*.py
+tmp/
+better_music_sheet_web/node_modules/
+better_music_sheet_web/.next/
