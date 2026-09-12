@@ -504,3 +504,66 @@ button.history-row { width: 100%; font-family: inherit; cursor: pointer; text-al
 .play-instrument { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink-soft); }
 .play-instrument label { display: flex; align-items: center; gap: 8px; }
 .play-instrument select { max-width: 240px; padding: 7px 10px; border: 1px solid #bbb; border-radius: 8px; background: white; color: #222; }
+
+/* ---- Site footer ---- */
+/* Sits below the page rather than pinned: every screen here scrolls, and a
+   fixed footer would cover the sheet preview on short viewports. */
+.site-footer {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 28px 32px 40px;
+  border-top: 1px solid rgba(122, 103, 83, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+  text-align: center;
+}
+.footer-links { display: flex; gap: 22px; flex-wrap: wrap; justify-content: center; }
+.footer-links a {
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+.footer-links a:hover { color: var(--ink); border-bottom-color: var(--ink-soft); }
+.footer-note {
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+  max-width: 46ch;
+  line-height: 1.5;
+  opacity: 0.85;
+}
+
+/* ---- Legal / prose pages ---- */
+.legal h2 {
+  font-size: 1.15rem;
+  margin: 34px 0 10px;
+  color: var(--ink);
+}
+.legal h3 {
+  font-size: 0.98rem;
+  font-weight: 600;
+  margin: 22px 0 6px;
+  color: var(--ink);
+  /* Spectral is only applied to h1/h2 globally, so without this an h3 sits in
+     the body face at the body size and stops reading as a heading at all. */
+  font-family: 'Spectral', serif;
+}
+.legal p, .legal li { color: var(--ink); line-height: 1.7; margin-bottom: 12px; }
+.legal ul { margin: 0 0 12px 1.1rem; list-style: disc; }
+.legal li { margin-bottom: 8px; }
+.legal code {
+  background: var(--paper-deep);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.88em;
+}
+.legal a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+
+/* Prose pages carry their own heading scale. The app screens deliberately keep
+   flat headings, so this is scoped to .legal rather than applied to h1 globally
+   - changing that would restyle History and the results page too. */
+.legal h1 { font-size: 2rem; font-weight: 600; margin: 0 0 4px; line-height: 1.2; }
+.legal > .sub { font-size: 0.9rem; color: var(--ink-soft); margin-bottom: 28px; }
+.legal > p:first-of-type { font-size: 1.05rem; }

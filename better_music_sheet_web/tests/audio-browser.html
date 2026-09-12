@@ -1,0 +1,33 @@
+<!doctype html><meta charset="utf-8"><title>Instrument audio verification</title>
+<h1>Instrument audio verification</h1><button id="test">Test all sampled instruments</button>
+<pre id="result">Ready</pre>
+<script type="module">
+import { SynthEngine } from './synth.mjs';
+document.querySelector('#test').onclick = async () => {
+ const out = document.querySelector('#result'); out.textContent = '';
+ const ctx = new AudioContext(); await ctx.resume();
+ const engine = new SynthEngine(ctx);
+ const analyser = ctx.createAnalyser(); engine.master.connect(analyser); engine.basic.master.connect(analyser);
+ const values = new Float32Array(analyser.fftSize);
+ const pause = ms => new Promise(r => setTimeout(r, ms));
+ try {
+  for (const id of ['grand', 'electric', 'cp80', 'organ', 'basic']) {
+   out.textContent += `Loading ${id}\n`;
+   await engine.load(id, [48,60,64,67,89,94]);
+   for (const note of [48,60,64,67]) engine.noteOn(note,ctx.currentTime+.05,ctx.currentTime+3,90);
+   await pause(500); analyser.getFloatTimeDomainData(values);
+   const peak = Math.max(...values.map(Math.abs));
+   if (peak < .0001) throw Error(`${id}: silent audio`);
+   out.textContent += `${id}: PASS, peak ${peak.toFixed(4)}\n`;
+   if (id === 'organ') {
+    await pause(1800); analyser.getFloatTimeDomainData(values);
+    if (Math.max(...values.map(Math.abs)) < .0001) throw Error('Organ sustain ended early');
+    out.textContent += 'Organ long sustain: PASS\n';
+   }
+   engine.allOff(); await pause(700);
+  }
+  out.textContent += 'ALL INSTRUMENTS PASSED';
+ } catch(e) { out.textContent += `FAIL: ${e.message}`; }
+ finally { engine.dispose(); await ctx.close(); }
+};
+</script>

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 import "./globals.css";
 import { Header } from "./header";
+import { Footer } from "./footer";
 import { Analytics } from "./analytics";
 import { AuthProvider } from "./auth-context";
 
@@ -44,6 +45,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <AuthProvider>
           <Header />
           <main>{children}</main>
+          <Footer />
         </AuthProvider>
       </body>
     </html>
