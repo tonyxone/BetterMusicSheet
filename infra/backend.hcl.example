@@ -1,0 +1,7 @@
+# Create a private, encrypted, versioned state bucket first. Do not use the job
+# files bucket or give application roles permission to read Terraform state.
+bucket       = "YOUR-PRIVATE-TERRAFORM-STATE-BUCKET"
+key          = "better-music-sheet/terraform.tfstate"
+region       = "us-west-1"
+encrypt      = true
+use_lockfile = true

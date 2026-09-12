@@ -1,0 +1,12 @@
+# State files contain secrets in plaintext (e.g. the Cognito client secret) -
+# never commit these. Move to a remote (S3) backend before this matters for
+# more than one machine - see backend.tf.example and docs/serverless-migration.md.
+*.tfstate
+*.tfstate.*
+.terraform/
+tfplan*
+backend.hcl
+*.tfvars
+!*.tfvars.example
+crash.log
+crash.*.log

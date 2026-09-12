@@ -18,6 +18,9 @@ output/
 # same copyright concern as above)
 server_jobs/
 server.log
+# Dev-server and test output captured to files while debugging.
+*.log
+tmp/
 
 # One-off AWS setup files (contain the account ID) - not project code
 .aws-setup/
@@ -27,7 +30,13 @@ server.log
 
 # Claude Code session state (local-only, not meant for the public repo)
 .claude/
-/infra/
+# Terraform source is reviewable; state, saved plans and personal values are not.
+infra/**/.terraform/
+infra/**/*.tfstate*
+infra/**/tfplan*
+infra/**/*.tfvars
+!infra/**/*.tfvars.example
+infra/**/backend.hcl
 
 # Local backend config (Cognito ids for local sign-in) - see .env.example
 .env

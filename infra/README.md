@@ -91,5 +91,19 @@ matches exactly and which is what `trailingSlash` in
 ## Before your first apply
 
 - State is local (`terraform.tfstate` in this directory, gitignored). Fine
-  for one person on one machine; move to an S3 backend (commented out in
-  `versions.tf`) before more than one person/machine touches this.
+  for one person on one machine; move to the S3 backend before more than one
+  person/machine touches this, and before the serverless migration - apply
+  `state-bootstrap/` for the state bucket, then copy `backend.tf.example` and
+  `backend.hcl.example` into place and
+  `terraform init -backend-config=backend.hcl -migrate-state`.
+
+## Migrating to the serverless backend
+
+`serverless.tf` and `modules/serverless/` provision the Lambda API, SQS queue,
+and scale-to-zero Fargate workers that replace the always-on ECS API and its
+ALB. Both switches (`enable_serverless`, `serverless_api_cutover`) default to
+off, so nothing here touches production until you set them.
+
+The step-by-step rollout, smoke tests, alarm meanings and rollback are in
+[`../docs/serverless-migration.md`](../docs/serverless-migration.md). Start
+there rather than applying `serverless.tf` directly.
