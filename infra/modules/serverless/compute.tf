@@ -20,6 +20,10 @@ resource "aws_lambda_function" "api" {
     log_format = "Text"
     log_group  = aws_cloudwatch_log_group.logs["api"].name
   }
+  # The release pipeline owns the deployed code, the same way the controller
+  # owns desired_count. Without this, a terraform apply run with a stale
+  # var_file silently rolls production back to an older image.
+  lifecycle { ignore_changes = [image_uri] }
   depends_on = [aws_iam_role_policy.api]
 }
 
@@ -43,6 +47,10 @@ resource "aws_lambda_function" "controller" {
     log_format = "Text"
     log_group  = aws_cloudwatch_log_group.logs["controller"].name
   }
+  # The release pipeline owns the deployed code, the same way the controller
+  # owns desired_count. Without this, a terraform apply run with a stale
+  # var_file silently rolls production back to an older image.
+  lifecycle { ignore_changes = [image_uri] }
   depends_on = [aws_iam_role_policy.controller]
 }
 

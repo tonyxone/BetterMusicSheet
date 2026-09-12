@@ -153,6 +153,22 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
           role-skip-session-tagging: true
 
+      # Read-only probes first. The deploy role's permissions were still
+      # scoped to the stack the migration deleted, and that only surfaced after
+      # a six-minute image build - fail in seconds instead, with a message that
+      # names the cause.
+      - name: Check the deploy role can reach the stack
+        env:
+          API_FUNCTION: ${{ vars.API_LAMBDA_FUNCTION }}
+          CONTROLLER_FUNCTION: ${{ vars.CONTROLLER_LAMBDA_FUNCTION }}
+          CLUSTER: ${{ vars.ECS_CLUSTER }}
+          WORKER: ${{ vars.WORKER_ECS_SERVICE }}
+        run: |
+          for FUNCTION in "$API_FUNCTION" "$CONTROLLER_FUNCTION"; do
+            aws lambda get-function --function-name "$FUNCTION" --query 'Configuration.FunctionName' --output text
+          done
+          aws ecs describe-services --cluster "$CLUSTER" --services "$WORKER"             --query 'services[0].serviceName' --output text
+
       - name: Deploy Lambda code
         env:
           API_IMAGE: ${{ needs.push-image.outputs.api-image }}

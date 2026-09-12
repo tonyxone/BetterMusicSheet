@@ -77,3 +77,31 @@ resource "aws_iam_role_policy" "github_deploy" {
   role   = var.github_deploy_role_name
   policy = data.aws_iam_policy_document.github_deploy.json
 }
+
+# A second CI identity, for the scheduled drift check only. Kept apart from the
+# deploy role so a job whose whole purpose is to observe cannot change anything.
+# The trust relationship is read from the deploy role rather than restated: it
+# uses GitHub's id-based subject claim, which survived the repository rename,
+# and duplicating that by hand is how the two would drift apart.
+data "aws_iam_role" "github_deploy" {
+  name = var.github_deploy_role_name
+}
+
+resource "aws_iam_role" "github_drift" {
+  name        = "${var.project}-github-drift"
+  description = "Read-only: scheduled terraform plan to detect drift"
+  # ReadOnlyAccess includes reading Terraform state, which holds the backend
+  # JWT signing secret in plaintext. That access is inherent to planning, but
+  # it is the reason this role may not write anything.
+  assume_role_policy = data.aws_iam_role.github_deploy.assume_role_policy
+}
+
+resource "aws_iam_role_policy_attachment" "github_drift" {
+  role       = aws_iam_role.github_drift.name
+  policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+}
+
+output "github_drift_role_arn" {
+  description = "Set as the DRIFT_AWS_ROLE_ARN repo variable"
+  value       = aws_iam_role.github_drift.arn
+}

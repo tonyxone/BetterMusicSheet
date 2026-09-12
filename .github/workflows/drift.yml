@@ -1,0 +1,97 @@
+name: Drift check
+
+# CI only ever ran `terraform validate -backend=false`, which never contacts the
+# account and so cannot notice that reality has moved. Three separate times a
+# stale tfvars would have rolled production back to an older image, and each was
+# caught by a human reading a plan rather than by anything automatic.
+#
+# This runs a real plan against real state and fails when they disagree.
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: drift-check
+  cancel-in-progress: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  plan:
+    name: Compare configuration against the account
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.DRIFT_AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-skip-session-tagging: true
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.14.6
+
+      - name: Initialise against the real backend
+        run: |
+          terraform -chdir=infra init -input=false \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="key=better-music-sheet/terraform.tfstate" \
+            -backend-config="region=${{ vars.AWS_REGION }}"
+
+      # Image tags are owned by the release pipeline, not by Terraform, so the
+      # plan is fed whatever is deployed right now. Otherwise every release
+      # would report drift until someone edited tfvars - noise that would train
+      # us to ignore this job, which is exactly how the original problem stayed
+      # invisible.
+      - name: Read the deployed image tags
+        id: images
+        run: |
+          API=$(aws lambda get-function --function-name "${{ vars.API_LAMBDA_FUNCTION }}" \
+                  --query 'Code.ImageUri' --output text)
+          TASK=$(aws ecs describe-services --cluster "${{ vars.ECS_CLUSTER }}" \
+                  --services "${{ vars.WORKER_ECS_SERVICE }}" \
+                  --query 'services[0].taskDefinition' --output text)
+          WORKER=$(aws ecs describe-task-definition --task-definition "$TASK" \
+                  --query 'taskDefinition.containerDefinitions[0].image' --output text)
+          echo "api=$API" >> "$GITHUB_OUTPUT"
+          echo "worker=$WORKER" >> "$GITHUB_OUTPUT"
+          echo "API: $API" >> "$GITHUB_STEP_SUMMARY"
+          echo "Worker: $WORKER" >> "$GITHUB_STEP_SUMMARY"
+
+      # -lock=false keeps this strictly read-only: a plan never persists state,
+      # and taking the lock would let an observer block a real apply.
+      - name: Plan
+        id: plan
+        run: |
+          set +e
+          terraform -chdir=infra plan -input=false -no-color -lock=false -detailed-exitcode \
+            -var "enable_serverless=true" \
+            -var "serverless_api_image=${{ steps.images.outputs.api }}" \
+            -var "serverless_worker_image=${{ steps.images.outputs.worker }}" \
+            -var "alert_email=${{ secrets.ALERT_EMAIL }}" \
+            > plan.txt 2>&1
+          CODE=$?
+          set -e
+          tail -60 plan.txt
+          if [ "$CODE" = 2 ]; then
+            {
+              echo "## Drift detected"
+              echo ''
+              echo 'The account no longer matches `infra/`. Someone changed it outside'
+              echo 'Terraform, or an apply is pending. Review before the next apply -'
+              echo 'applying with stale variables is how production gets rolled back.'
+              echo ''
+              echo '```'
+              grep -E '^  # |^Plan:' plan.txt || tail -30 plan.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          [ "$CODE" = 0 ] || exit "$CODE"
+          echo 'No drift: the account matches the configuration.' >> "$GITHUB_STEP_SUMMARY"
