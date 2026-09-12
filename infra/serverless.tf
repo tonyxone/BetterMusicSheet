@@ -37,7 +37,16 @@ variable "serverless_spot_burst" {
   default = false
 }
 
+# Cost alerts. Leave empty when an account-level budget already covers this.
 variable "budget_email" {
+  type    = string
+  default = ""
+}
+
+# CloudWatch alarm notifications. Deliberately separate from budget_email: an
+# alarm with no subscriber is silent, and whether anyone wants a second budget
+# must not decide whether the queue-stuck and dead-letter alarms reach a person.
+variable "alert_email" {
   type    = string
   default = ""
 }
@@ -65,7 +74,7 @@ module "serverless" {
   origins          = ["https://${var.domain_name}", "https://www.${var.domain_name}", "http://localhost:3000"]
   max_workers      = var.serverless_max_workers
   spot_burst       = var.serverless_spot_burst
-  alert_email      = var.budget_email
+  alert_email      = var.alert_email
 }
 
 resource "aws_budgets_budget" "monthly" {

@@ -5,4 +5,7 @@ serverless_worker_image = "ACCOUNT.dkr.ecr.us-west-1.amazonaws.com/better-music-
 serverless_api_cutover  = false
 serverless_max_workers  = 4
 serverless_spot_burst   = false
+# Where CloudWatch alarms go. Without it the alarms have no subscriber.
+alert_email = "your-address@example.com"
+# An AWS Budget at $25/$50/$100. Leave unset if you already keep your own.
 # budget_email = "your-address@example.com"

@@ -42,9 +42,10 @@ with, and presigned GETs to read results with. That also sidesteps API Gateway's
       `infra/state-bootstrap/`, then copy `backend.tf.example` to `backend.tf`
       and `backend.hcl.example` to `backend.hcl`, then
       `terraform init -backend-config=backend.hcl -migrate-state`.
-- [ ] `budget_email` is set in your tfvars. It feeds both the AWS Budget
-      notifications and the CloudWatch alarm topic; leave it empty and the
-      alarms publish into a topic with no subscriber.
+- [ ] `alert_email` is set in your tfvars. It subscribes a person to the
+      CloudWatch alarm topic; leave it empty and every alarm publishes into a
+      topic nobody is listening to. `budget_email` is separate and optional -
+      set it only if you want Terraform to manage an AWS Budget as well.
 - [ ] Baseline recorded: current job duration, failure rate, and monthly cost.
 
 ## 1. Build and push images, without deploying
@@ -89,7 +90,7 @@ number from here on.
 
 ## 3. Confirm the alarm subscription
 
-AWS emails a confirmation link to `budget_email`. Until someone clicks it, the
+AWS emails a confirmation link to `alert_email`. Until someone clicks it, the
 subscription sits in "pending confirmation" and every alarm is silently dropped.
 Verify it took:
 
@@ -197,7 +198,7 @@ run clean.
 **Knobs** (`infra/serverless.tfvars`): `enable_serverless`,
 `serverless_api_image`, `serverless_worker_image`, `serverless_api_cutover`,
 `serverless_max_workers` (1–16, default 4), `serverless_spot_burst`,
-`budget_email`.
+`alert_email`, `budget_email`.
 
 **Why 4 workers.** The account's regional Fargate quota allows far more, but
 each worker is 2 vCPU / 4 GB, and an unexpected upload burst at a higher cap
