@@ -46,16 +46,16 @@ export default function PrivacyPage() {
         <code>us-west-1</code> region in the United States.
       </p>
 
-      <h3>Analytics and advertising</h3>
+      <h3>Analytics</h3>
       <p>
         The site loads Google Analytics, which records page views and general
-        usage patterns. It also loads Google AdSense&apos;s script. Both are
-        Google products and Google may set its own cookies through them; their
+        usage patterns. Google may set its own cookies through it, and its
         handling is governed by{" "}
         <a href="https://policies.google.com/privacy" target="_blank" rel="noreferrer noopener">
           Google&apos;s privacy policy
         </a>
-        . Neither receives your uploaded files.
+        . It does not receive your uploaded files. There are no adverts on this
+        site and no advertising scripts are loaded.
       </p>
 
       <h2>What is not done</h2>
