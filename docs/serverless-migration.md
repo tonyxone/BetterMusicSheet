@@ -125,17 +125,28 @@ pass is about the live AWS wiring rather than the logic.
 
 ## 5. Point the release workflow at the new stack
 
-Set these GitHub repo **variables** from `terraform output`:
+Publishing a release always deploys - that does not change during the
+migration. `SERVERLESS_READY` decides only *which* stack it deploys to, so a
+release cut before this step still updates the ECS API exactly as it does today.
+
+Set the three addresses from `terraform output` **first**:
 
 | Variable | Value |
 | --- | --- |
 | `API_LAMBDA_FUNCTION` | `serverless_api_function` |
 | `CONTROLLER_LAMBDA_FUNCTION` | `serverless_controller_function` |
 | `WORKER_ECS_SERVICE` | `serverless_worker_service` |
+
+Then flip the switch:
+
+| Variable | Value |
+| --- | --- |
 | `SERVERLESS_READY` | `true` |
 
-The workflow's preflight job refuses to deploy until all four are set, so a
-release cannot land in a half-provisioned stack.
+Preflight fails fast if the switch is on while the three addresses are missing,
+so a release cannot land in a half-provisioned stack. Both images are built on
+every release regardless of the target, which is why the API image is already in
+ECR when you provision.
 
 ## 6. Cut DNS over
 
@@ -161,9 +172,11 @@ aws logs tail /better-music-sheet-v2/controller --follow
 
 It prints one JSON line per minute with `visible`, `inflight`, and `desired`.
 
-**Rollback is a one-line revert**: re-apply with `serverless_api_cutover=false`.
-DNS returns to the ALB, the old service is still running, and no database
-migration has to be undone. Jobs already in SQS finish on the new workers; jobs
+**Rollback has two halves, both one-liners.** Traffic: re-apply with
+`serverless_api_cutover=false`, and DNS returns to the ALB with the old service
+still running and no database migration to undo. Deployments: set
+`SERVERLESS_READY` back to `false`, so the next release updates the ECS API
+again instead of the Lambda and worker. Jobs already in SQS finish on the new workers; jobs
 submitted after the revert take the old path.
 
 What the alarms mean:

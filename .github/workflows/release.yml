@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       deploy:
-        description: Deploy to the provisioned serverless API and worker (false builds bootstrap images only)
+        description: Deploy after building (unchecked builds and pushes images only)
         type: boolean
         default: false
 
@@ -20,9 +20,11 @@ permissions:
 
 jobs:
   preflight:
+    name: Decide what to deploy
     runs-on: ubuntu-latest
     outputs:
       deploy: ${{ steps.mode.outputs.deploy }}
+      target: ${{ steps.mode.outputs.target }}
     steps:
       - id: mode
         env:
@@ -31,14 +33,28 @@ jobs:
           API: ${{ vars.API_LAMBDA_FUNCTION }}
           CONTROLLER: ${{ vars.CONTROLLER_LAMBDA_FUNCTION }}
           WORKER: ${{ vars.WORKER_ECS_SERVICE }}
+          LEGACY: ${{ vars.ECS_SERVICE }}
         run: |
+          # Publishing a release always deploys. SERVERLESS_READY only chooses
+          # WHICH stack, so cutting a tag part-way through the migration never
+          # needs someone to remember to flip something first, and flipping it
+          # back is the deployment half of the cutover rollback.
+          TARGET=legacy
+          if [ "$READY" = true ]; then TARGET=serverless; fi
           if [ "$DEPLOY" = true ]; then
-            test "$READY" = true && test -n "$API" && test -n "$CONTROLLER" && test -n "$WORKER" || {
-              echo 'Provision and smoke-test the serverless stack first. See docs/serverless-migration.md.'
-              exit 1
-            }
+            if [ "$TARGET" = serverless ]; then
+              test -n "$API" && test -n "$CONTROLLER" && test -n "$WORKER" || {
+                echo "SERVERLESS_READY is true but the Lambda/worker variables are not set."
+                echo "Set them from terraform output - see docs/serverless-migration.md step 5."
+                exit 1
+              }
+            else
+              test -n "$LEGACY" || { echo "ECS_SERVICE is unset; there is nothing to deploy."; exit 1; }
+            fi
           fi
           echo "deploy=$DEPLOY" >> "$GITHUB_OUTPUT"
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "Deploy: $DEPLOY, target: $TARGET" >> "$GITHUB_STEP_SUMMARY"
 
   push-image:
     name: Build and push API and worker images
@@ -73,21 +89,62 @@ jobs:
           REPOSITORY: ${{ vars.ECR_REPOSITORY }}
           TAG: ${{ github.event.release.tag_name || format('migration-{0}', github.sha) }}
         run: |
-          docker build -t "$REGISTRY/$REPOSITORY:$TAG" .
+          # Both images are built on every release. The API image is unused
+          # while the legacy stack is live, but having it already in ECR is what
+          # lets the serverless stack be provisioned without a special build.
+          docker build -t "$REGISTRY/$REPOSITORY:$TAG" -t "$REGISTRY/$REPOSITORY:latest" .
           docker build -f Dockerfile.api -t "$REGISTRY/$REPOSITORY:api-$TAG" .
           docker run --rm --entrypoint python -e JOB_BACKEND=sqs "$REGISTRY/$REPOSITORY:api-$TAG" -c 'import server, controller, sys; assert "pymupdf" not in sys.modules; assert "run" not in sys.modules'
           docker push "$REGISTRY/$REPOSITORY:$TAG"
+          docker push "$REGISTRY/$REPOSITORY:latest"
           docker push "$REGISTRY/$REPOSITORY:api-$TAG"
           echo "image=$REGISTRY/$REPOSITORY:$TAG" >> "$GITHUB_OUTPUT"
           echo "api-image=$REGISTRY/$REPOSITORY:api-$TAG" >> "$GITHUB_OUTPUT"
           echo "Worker: $REGISTRY/$REPOSITORY:$TAG" >> "$GITHUB_STEP_SUMMARY"
           echo "API: $REGISTRY/$REPOSITORY:api-$TAG" >> "$GITHUB_STEP_SUMMARY"
 
-  deploy-backend:
+  deploy-legacy:
+    name: Deploy the ECS API service
+    runs-on: ubuntu-latest
+    needs: [preflight, push-image]
+    if: needs.preflight.outputs.deploy == 'true' && needs.preflight.outputs.target == 'legacy'
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-skip-session-tagging: true
+
+      - name: Fetch the running task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition "${{ vars.ECS_TASK_FAMILY }}" \
+            --query taskDefinition \
+            | jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' \
+            > task-definition.json
+
+      - name: Point it at the new image
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ vars.ECS_CONTAINER_NAME }}
+          image: ${{ needs.push-image.outputs.image }}
+
+      - name: Register the new revision and deploy it
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          service: ${{ vars.ECS_SERVICE }}
+          cluster: ${{ vars.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+  deploy-serverless:
     name: Deploy Lambda API and ECS worker
     runs-on: ubuntu-latest
     needs: [preflight, push-image]
-    if: needs.preflight.outputs.deploy == 'true'
+    if: needs.preflight.outputs.deploy == 'true' && needs.preflight.outputs.target == 'serverless'
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -138,8 +195,10 @@ jobs:
   deploy-ui:
     name: Build and deploy the web UI
     runs-on: ubuntu-latest
-    needs: [preflight, deploy-backend]
-    if: needs.preflight.outputs.deploy == 'true'
+    needs: [preflight, deploy-legacy, deploy-serverless]
+    # Exactly one of the deploy jobs runs and the other is skipped, so this
+    # waits on "nothing failed" rather than on either one succeeding.
+    if: ${{ !cancelled() && !failure() && needs.preflight.outputs.deploy == 'true' }}
     steps:
       - uses: actions/checkout@v4
 
