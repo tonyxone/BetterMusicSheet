@@ -57,6 +57,24 @@ def duration_seconds(job):
         return None
 
 
+def daily_costs(days):
+    """Per-day cost, because a monthly total lies about anything that did not
+    run all month. The first baseline for this project read $16.64/month from a
+    month in which the always-on stack ran for four days; the real rate was
+    about seven times that."""
+    from datetime import date, timedelta
+    end = date.today()
+    response = boto3.client("ce", region_name="us-east-1").get_cost_and_usage(
+        TimePeriod={"Start": (end - timedelta(days=days)).isoformat(), "End": end.isoformat()},
+        Granularity="DAILY", Metrics=["UnblendedCost"],
+        GroupBy=[{"Type": "DIMENSION", "Key": "SERVICE"}])
+    out = []
+    for period in response["ResultsByTime"]:
+        rows = {g["Keys"][0]: float(g["Metrics"]["UnblendedCost"]["Amount"]) for g in period["Groups"]}
+        out.append((period["TimePeriod"]["Start"], {k: v for k, v in rows.items() if v >= 0.005}))
+    return out
+
+
 def monthly_costs(months):
     from datetime import date, timedelta
     end = date.today().replace(day=1)
@@ -109,6 +127,25 @@ def main():
     # silently averaging two different pipelines together.
     v2 = sum(1 for j in jobs if int(j.get("storage_version", 0) or 0) >= 2)
     print(f"- Rows on the new storage layout: {v2} of {len(jobs)}")
+
+    print()
+    try:
+        rows = daily_costs(14)
+        print("## Cost per day (the last row is usually incomplete)\n")
+        for day, services in rows:
+            total = sum(services.values())
+            top = ", ".join(f"{name.replace('Amazon ', '')} ${amount:.2f}"
+                            for name, amount in sorted(services.items(), key=lambda x: -x[1])[:3])
+            print(f"- {day}: **${total:.2f}** - {top or 'no charges'}")
+        settled = [sum(s.values()) for _, s in rows[:-1]]
+        if settled:
+            average = sum(settled) / len(settled)
+            print(f"\nSettled days average **${average:.2f}/day** (~${average * 30.44:.2f}/month).")
+        print("\nCost Explorer lags about a day, so today reads $0.00. That is missing")
+        print("data, not a saving.")
+    except Exception as exc:
+        print(f"## Cost\n\nUnavailable ({type(exc).__name__}: {exc}).")
+        print("Needs ce:GetCostAndUsage; read it from the Billing console instead.")
 
     print()
     try:
