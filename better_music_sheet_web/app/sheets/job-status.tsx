@@ -31,7 +31,8 @@ export function JobStatus() {
           timer.current = setTimeout(poll, POLL_INTERVAL_MS);
         }
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        console.error("Checking the sheet's status failed:", err);
+        if (!cancelled) setError("Couldn't check this sheet's status. Reloading the page usually fixes it.");
       }
     }
     poll();
@@ -134,7 +135,8 @@ function DownloadButton({ jobId, sheetName }: { jobId: string; sheetName?: strin
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      console.error("Downloading the annotated sheet failed:", err);
+      setError("failed");
     } finally {
       setDownloading(false);
     }
@@ -142,7 +144,7 @@ function DownloadButton({ jobId, sheetName }: { jobId: string; sheetName?: strin
 
   if (error) {
     return (
-      <button onClick={handleDownload} className="btn-pill" title={`${error}. Try the download again.`} style={{ background: "var(--danger)" }}>
+      <button onClick={handleDownload} className="btn-pill" title="That download didn't finish. Try again." style={{ background: "var(--danger)" }}>
         Retry download
       </button>
     );
@@ -206,7 +208,8 @@ function PreviewFrame({ jobId }: { jobId: string }) {
         }, 400);
       })
       .catch((err) => {
-        if (!revoked) setError(err instanceof Error ? err.message : String(err));
+        console.error("Rendering the sheet preview failed:", err);
+        if (!revoked) setError("unavailable");
       });
     return () => {
       revoked = true;
@@ -250,7 +253,7 @@ function PreviewFrame({ jobId }: { jobId: string }) {
     return (
       <div className="preview-resize" style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
         <p style={{ color: "var(--danger)", textAlign: "center", padding: 24 }}>
-          Couldn&apos;t load the preview ({error}). The Download button still gives you the file.
+          Couldn&apos;t show the preview here. The Download button still gives you the file.
         </p>
       </div>
     );

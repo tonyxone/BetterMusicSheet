@@ -347,7 +347,8 @@ function Player({ jobId }: { jobId: string }) {
         } catch { /* Browser storage may be unavailable. */ }
         setTimeline(applyCorrections(tl, saved));
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        console.error("Loading the sheet for playback failed:", err);
+        if (!cancelled) setError("Couldn't open this sheet for playback.");
       }
     })();
 
@@ -360,7 +361,9 @@ function Player({ jobId }: { jobId: string }) {
         const pdf = await pdfRes.arrayBuffer();
         if (!cancelled) setPdfData(pdf);
       } catch (err) {
-        if (!cancelled) setPdfError(err instanceof Error ? err.message : String(err));
+        // Read as a flag only - playback carries on without the preview.
+        console.error("Loading the sheet preview failed:", err);
+        if (!cancelled) setPdfError("unavailable");
       }
     })();
 

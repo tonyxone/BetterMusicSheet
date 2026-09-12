@@ -572,11 +572,3 @@ button.history-row { width: 100%; font-family: inherit; cursor: pointer; text-al
    so the block form needs readable measure and left-aligned prose. */
 .play-error strong { display: block; margin-bottom: 10px; font-size: 1.05rem; }
 .play-error p { color: var(--ink); max-width: 46ch; margin: 0 auto 10px; line-height: 1.6; text-align: left; }
-/* The underlying error still shows: it is what makes a bug report useful, and
-   it guards against the guess that "old browser" was the wrong diagnosis. */
-.play-error-detail {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.8rem;
-  color: var(--ink-soft);
-  opacity: 0.9;
-}

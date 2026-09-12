@@ -18,13 +18,13 @@ import { isMissingBrowserFeature } from "@/lib/browser-support";
 const RENDER_SCALE = 2; // rasterize above CSS size so the sheet stays sharp
 
 /** A failure to show, and whether the reader can do anything about it. */
-type ViewerError = { detail: string; unsupported: boolean };
+type ViewerError = { unsupported: boolean };
 
 function describe(err: unknown): ViewerError {
-  return {
-    detail: err instanceof Error ? err.message : String(err),
-    unsupported: isMissingBrowserFeature(err),
-  };
+  // The reader gets a sentence they can act on; the console keeps the real
+  // error, which is what a bug report needs and what a musician cannot use.
+  console.error("Sheet viewer failed:", err);
+  return { unsupported: isMissingBrowserFeature(err) };
 }
 
 type PageInfo = {
@@ -331,11 +331,14 @@ export function SheetCanvas({
             iPadOS itself, since Safari comes with the system. Recent Chrome,
             Edge and Firefox work too.
           </p>
-          <p className="play-error-detail">{error.detail}</p>
         </div>
       );
     }
-    return <p className="play-error">Couldn&apos;t render the sheet ({error.detail}).</p>;
+    return (
+      <p className="play-error">
+        Couldn&apos;t show the sheet. Reloading the page usually fixes it.
+      </p>
+    );
   }
   if (!pages.length) {
     return <p className="play-hint">Loading the sheet…</p>;
