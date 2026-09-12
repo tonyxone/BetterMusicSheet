@@ -223,6 +223,20 @@ class ServerlessTests(unittest.TestCase):
         for kind in ("output", "timeline"):
             self.assertIn("s3.us-west-1.amazonaws.com", storage.presign_artifact(done, kind))
 
+    def test_presigned_artifacts_declare_their_media_type(self):
+        # Pre-migration objects are stored as binary/octet-stream. The browser
+        # builds a blob from the response, so an octet-stream PDF downloads
+        # instead of rendering in the preview frame.
+        job = self.upload()
+        self.assertTrue(worker.process_job(job["job_id"], runner=fake_runner))
+        done = db.get_annotation_job(job["job_id"])
+        self.s3.put_object(Bucket="new-files", Key=done["output_key"],
+                           Body=b"%PDF-test", ContentType="binary/octet-stream")
+        self.assertIn("response-content-type=application%2Fpdf",
+                      storage.presign_artifact(done, "output"))
+        self.assertIn("response-content-type=application%2Fjson",
+                      storage.presign_artifact(done, "timeline"))
+
     def test_lambda_gateway_adapter_and_cors(self):
         from mangum import Mangum
         handler = Mangum(server.app, lifespan="off")

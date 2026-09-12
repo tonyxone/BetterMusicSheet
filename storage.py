@@ -98,6 +98,13 @@ def presign_artifact(job, kind, disposition=None):
         if exc.response["Error"]["Code"] in ("404", "NoSuchKey"):
             return None
         raise
+    # Sheets annotated before the migration were stored as binary/octet-stream.
+    # That never showed while the API streamed them, because it set the media
+    # type on the response itself. A presigned URL hands the browser whatever
+    # S3 holds, and a PDF labelled octet-stream cannot be rendered in a frame -
+    # it downloads instead, named after the blob. Override the type here so old
+    # and new objects behave the same.
+    params["ResponseContentType"] = "application/pdf" if kind == "output" else "application/json"
     if disposition:
         params["ResponseContentDisposition"] = disposition
     return _s3.generate_presigned_url("get_object", Params=params, ExpiresIn=300)
