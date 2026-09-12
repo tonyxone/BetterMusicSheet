@@ -1,7 +1,16 @@
-// pdfjs-dist 6.x uses the Uint8Array base64/hex methods, which Safari only
-// shipped in 18.2 and older Chrome lacks too. Without them the viewer dies on
-// `hashOriginal.toHex()` while computing a document fingerprint, and the page
-// reports "toHex is not a function" instead of rendering the sheet.
+// Modern globals pdfjs-dist 6.x assumes, for browsers that do not have them.
+//
+// Uint8Array's base64/hex methods arrived in Safari 18.2; without them the
+// viewer dies on `hashOriginal.toHex()` while computing a document
+// fingerprint. The `Iterator` global arrived later still, in Safari 18.4, and
+// pdf.js reaches for it unguarded while installing its own helper:
+//
+//     "function" != typeof Iterator.prototype.join && (Iterator.prototype.join = ...)
+//
+// That tests whether the METHOD exists, not whether `Iterator` does, so on an
+// older WebKit it throws "Can't find variable: Iterator" before any page
+// renders. iPadOS and iOS ship different Safari versions, which is why an
+// iPhone can be fine while an iPad on the same account is not.
 //
 // Two of the three calls are inside pdf.js's Web Worker, which shares nothing
 // with the page, so this file is BOTH imported by sheet-canvas.tsx and
@@ -44,6 +53,21 @@
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
       return bytes;
     };
+  }
+
+  if (typeof globalThis.Iterator === "undefined") {
+    // %IteratorPrototype% is the object every built-in iterator inherits from.
+    // It has no global name of its own, but it is two links up the chain from
+    // any array iterator, so it can be reached without the global that is
+    // missing. Handing pdf.js the real prototype rather than a stand-in means
+    // the helper it installs works for Map and Set iterators too, exactly as
+    // it would on a browser that ships Iterator natively.
+    const prototype = Object.getPrototypeOf(Object.getPrototypeOf([][Symbol.iterator]()));
+    const Iterator = function Iterator() {
+      throw new TypeError("Iterator is abstract and cannot be constructed");
+    };
+    Iterator.prototype = prototype;
+    globalThis.Iterator = Iterator;
   }
 })();
 
