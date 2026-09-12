@@ -8,6 +8,7 @@ import { KeyboardIcon } from "../keyboard-icon";
 import type { AnnotationJob } from "@/lib/api";
 
 const STATUS_LABEL: Record<AnnotationJob["status"], string> = {
+  uploading: "Uploading",
   done: "Annotated",
   failed: "Failed",
   processing: "Processing",
@@ -104,9 +105,9 @@ export default function HistoryPage() {
                 type="button"
                 className="history-delete"
                 onClick={() => openDelete(job)}
-                disabled={job.status === "queued" || job.status === "processing"}
+                disabled={job.status === "uploading" || job.status === "queued" || job.status === "processing"}
                 title={
-                  job.status === "queued" || job.status === "processing"
+                  job.status === "uploading" || job.status === "queued" || job.status === "processing"
                     ? "Wait for processing to finish before deleting"
                     : `Delete ${job.sheet_name || "sheet"}`
                 }

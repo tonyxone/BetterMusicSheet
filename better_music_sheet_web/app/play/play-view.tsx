@@ -14,6 +14,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { clientApiFetch } from "@/lib/client-api";
+import { fetchSheetFile } from "@/lib/sheet-files";
 import { useAuth } from "../auth-context";
 import type { AnnotationJob } from "@/lib/api";
 import type { Timeline, TimelineNote } from "@/lib/timeline";
@@ -330,7 +331,7 @@ function Player({ jobId }: { jobId: string }) {
     let cancelled = false;
     void (async () => {
       try {
-        const tlRes = await clientApiFetch(`/api/sheets/${jobId}/timeline`);
+        const tlRes = await fetchSheetFile(jobId, "timeline");
         if (tlRes.status === 404) throw new Error("Playback isn't available for this sheet.");
         if (!tlRes.ok) throw new Error(`couldn't load playback data (${tlRes.status})`);
         const tl = await tlRes.json();
@@ -354,7 +355,7 @@ function Player({ jobId }: { jobId: string }) {
     // timeline and remains usable when the preview request or renderer fails.
     void (async () => {
       try {
-        const pdfRes = await clientApiFetch(`/api/sheets/${jobId}/download?inline=1`);
+        const pdfRes = await fetchSheetFile(jobId, "pdf");
         if (!pdfRes.ok) throw new Error(`request failed (${pdfRes.status})`);
         const pdf = await pdfRes.arrayBuffer();
         if (!cancelled) setPdfData(pdf);

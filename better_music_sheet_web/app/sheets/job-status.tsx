@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { clientApiFetch } from "@/lib/client-api";
+import { fetchSheetFile } from "@/lib/sheet-files";
 import { setAdsPaused } from "@/lib/ads";
 import { KeyboardIcon } from "../keyboard-icon";
 import type { AnnotationJob } from "@/lib/api";
@@ -35,7 +36,7 @@ export function JobStatus() {
         const data: AnnotationJob = await res.json();
         if (cancelled) return;
         setJob(data);
-        if (data.status === "queued" || data.status === "processing") {
+        if (data.status === "uploading" || data.status === "queued" || data.status === "processing") {
           timer.current = setTimeout(poll, POLL_INTERVAL_MS);
         }
       } catch (err) {
@@ -69,7 +70,7 @@ export function JobStatus() {
     );
   }
 
-  if (job.status === "queued" || job.status === "processing") {
+  if (job.status === "uploading" || job.status === "queued" || job.status === "processing") {
     return (
       <div className="wrap" style={{ maxWidth: 480, padding: "100px 32px", textAlign: "center" }}>
         <div className="note-bounce">
@@ -129,7 +130,7 @@ function DownloadButton({ jobId, sheetName }: { jobId: string; sheetName?: strin
     setDownloading(true);
     setError(null);
     try {
-      const res = await clientApiFetch(`/api/sheets/${jobId}/download`);
+      const res = await fetchSheetFile(jobId, "pdf");
       // Without this check a failed request still "downloads" - the error
       // body gets saved as a .pdf that won't open, which is how a server-side
       // 500 previously reached the user as a silently broken file.
@@ -179,7 +180,7 @@ function PreviewFrame({ jobId }: { jobId: string }) {
   useEffect(() => {
     let revoked = false;
     let objectUrl: string | null = null;
-    clientApiFetch(`/api/sheets/${jobId}/download?inline=1`)
+    fetchSheetFile(jobId, "pdf")
       .then((res) => {
         // A failed request otherwise gets turned into a blob and handed to
         // the PDF viewer, which renders it as an empty frame - indis-

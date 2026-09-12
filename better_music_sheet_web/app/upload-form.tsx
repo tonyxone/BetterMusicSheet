@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { clientApiFetch } from "@/lib/client-api";
+import { uploadSheet } from "@/lib/sheet-files";
 
 type UploadOption = "style" | "fontSize" | "dpi" | "octave" | "autoRetry";
 
@@ -32,21 +32,10 @@ export function UploadForm() {
     setSubmitting(true);
     setError(null);
 
-    const body = new FormData();
-    body.append("file", file);
-    body.append("style", style);
-    body.append("octave", String(octave));
-    body.append("font_size", String(fontSize));
-    body.append("auto_retry", String(autoRetry));
-    if (dpi) body.append("dpi", dpi);
-
     try {
-      const res = await clientApiFetch("/api/sheets", { method: "POST", body });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || `upload failed (${res.status})`);
-      }
-      const { job_id } = await res.json();
+      const job_id = await uploadSheet(file, {
+        style, octave, font_size: fontSize, auto_retry: autoRetry, dpi: dpi ? Number(dpi) : null,
+      });
       router.push(`/sheets?job=${job_id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

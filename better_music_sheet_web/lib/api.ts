@@ -5,7 +5,7 @@ export const API_BASE = process.env.NEXT_PUBLIC_API_BASE!;
 export type AnnotationJob = {
   job_id: string;
   music_sheet_id: string;
-  status: "queued" | "processing" | "done" | "failed";
+  status: "uploading" | "queued" | "processing" | "done" | "failed";
   sheet_name?: string;
   error: string | null;
   stage: string | null;
