@@ -20,7 +20,7 @@ export default function AboutPage() {
       <p>
         BetterMusicSheet does that step for you. Upload a PDF or a photo of
         piano music and you get the same score back with every note labelled,
-        plus a playback mode that lights the notes up on a keyboard as they
+        plus a practice mode that lights the notes up on a keyboard as they
         sound.
       </p>
 

@@ -86,8 +86,8 @@ export default function HistoryPage() {
                 <Link
                   href={`/play?job=${job.job_id}`}
                   className="icon-link"
-                  title="Play with the keyboard"
-                  aria-label="Play with the keyboard"
+                  title="Practice with the keyboard"
+                  aria-label="Practice with the keyboard"
                 >
                   <KeyboardIcon />
                 </Link>

@@ -210,7 +210,7 @@ function SheetPicker({ onPick }: { onPick: (jobId: string) => void }) {
 
   return (
     <div className="wrap medium">
-      <h1 className="serif">Play</h1>
+      <h1 className="serif">Practice</h1>
       <div className="sub" style={{ marginBottom: 30 }}>
         Hear a sheet play back, with the notes lit up on a keyboard.
       </div>
@@ -226,7 +226,7 @@ function SheetPicker({ onPick }: { onPick: (jobId: string) => void }) {
             <button
               key={job.job_id}
               className="history-row"
-              title={`Play ${job.sheet_name || "this sheet"}`}
+              title={`Practice ${job.sheet_name || "this sheet"}`}
               onClick={() => onPick(job.job_id)}
             >
               <div className="history-icon">🎹</div>

@@ -23,8 +23,8 @@ export function Header() {
         <Link
           href="/play"
           className="icon-link"
-          title="Play with the keyboard"
-          aria-label="Play with the keyboard"
+          title="Practice with the keyboard"
+          aria-label="Practice with the keyboard"
         >
           <KeyboardIcon size={44} />
         </Link>
