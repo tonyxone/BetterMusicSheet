@@ -92,40 +92,57 @@ could not host a file on `amazoncognito.com` anyway.
    chance, only issuing a new key. The Key ID (ten characters, also in the
    filename `AuthKey_XXXXXXXXXX.p8`) is `apple_key_id`.
 
-Keep the file out of the repo. `infra/**/*.tfvars` is gitignored but `*.p8` is
-not - store it in a password manager and delete the download.
+Keep the file out of the repo: `infra/**/*.tfvars` is gitignored, but `*.p8` is
+not. It goes into the Secrets Manager secret below; delete the download once it
+is there.
 
 ## Part 2 - Terraform
 
-In `infra/serverless.tfvars` (the block is already stubbed out, commented, at
-the bottom of `serverless.tfvars.example`):
+The four values live in AWS Secrets Manager, as one JSON object whose keys are
+the Terraform variable names from `infra/cognito-idp.tf`:
 
-```hcl
-apple_services_id = "com.bettermusicsheet.signin"
-apple_team_id     = "ABCDE12345"
-apple_key_id      = "KEY1234567"
-apple_private_key = <<-EOT
-  -----BEGIN PRIVATE KEY-----
-  MIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQg...
-  -----END PRIVATE KEY-----
-EOT
+```json
+{
+  "google_client_id": "...",
+  "google_client_secret": "...",
+  "apple_services_id": "com.bettermusicsheet.signin",
+  "apple_team_id": "ABCDE12345",
+  "apple_key_id": "KEY1234567",
+  "apple_private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+}
 ```
 
-Paste the `.p8` verbatim, BEGIN/END lines included. `<<-EOT` strips the leading
-indentation, so indenting the block to match the surrounding file is fine.
+Note the `\n` escapes in the private key. JSON cannot hold a raw newline, and
+Cognito rejects a `.p8` flattened onto one line - so the key must be stored
+escaped and unescaped again on the way out.
 
-To keep the key off disk entirely, drop `apple_private_key` from the file and
-export it instead:
-
-```bash
-export TF_VAR_apple_private_key="$(cat ~/Downloads/AuthKey_KEY1234567.p8)"
-```
-
-Then apply:
+Terraform itself reads none of that: `cognito-idp.tf` takes plain input
+variables, and nothing in `infra/` has a Secrets Manager data source. The
+secret is loaded into `TF_VAR_*` environment variables instead, by sourcing a
+helper next to it:
 
 ```bash
+source infra/social-signin-env.sh
 terraform -chdir=infra apply -var-file=serverless.tfvars
 ```
+
+`source`, not `./` - the exports have to land in your shell, and running it
+would drop them with the subshell. It prints which variables it set (never
+their values), warns if the private key arrives without its newlines or PEM
+header, and names any key in the secret that is not a variable in
+`cognito-idp.tf`, which is how a typo like `apple_service_id` (singular) shows
+up. It reads the project's secret by default; pass an ARN, or set
+`BMS_SOCIAL_SECRET_ARN`, for a different one.
+
+The exports last only as long as that shell. A later `terraform apply` from a
+fresh terminal, without sourcing first, sees empty strings - which reads to
+Terraform as "this provider is disabled" and plans to **destroy** the
+providers. If a plan ever offers to remove `aws_cognito_identity_provider`,
+that is the cause; source the helper and re-plan rather than accepting it.
+
+The alternative is putting the values in `infra/serverless.tfvars` (stubbed out
+at the bottom of `serverless.tfvars.example`; `infra/**/*.tfvars` is
+gitignored). Same result, but then the private key is on disk.
 
 The plan should be exactly two changes - `aws_cognito_identity_provider.apple[0]`
 added, and `aws_cognito_user_pool_client.web` updated so
