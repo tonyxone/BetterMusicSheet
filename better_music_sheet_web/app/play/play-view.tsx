@@ -83,13 +83,18 @@ function ChevronIcon() {
  * proportion to `grow`. Collapsing one gives its room to the other rather
  * than leaving a hole, which is the whole point: the sheet and the falling
  * notes are two ways of reading the same thing, and how much of each you want
- * changes as you practise. */
+ * changes as you practise.
+ *
+ * The two `grow` values must sum to at least 1: flexbox hands out only that
+ * fraction of the free space when they sum to less, so a lone panel left
+ * holding the split's 0.5 would fill half its room and leave a hole. */
 function Panel({
   title,
   label,
   open,
   onToggle,
   grow,
+  nodeRef,
   flush = false,
   dark = false,
   children,
@@ -102,6 +107,8 @@ function Panel({
   open: boolean;
   onToggle: () => void;
   grow: number;
+  /** The section element itself, so a resize can measure the panel. */
+  nodeRef?: React.Ref<HTMLElement>;
   /** Skip the inner padding, for a child that paints to its own edges. */
   flush?: boolean;
   /** Dark surface, for the note roll. */
@@ -110,6 +117,7 @@ function Panel({
 }) {
   return (
     <section
+      ref={nodeRef}
       className={`play-panel${open ? " open" : ""}${dark ? " dark" : ""}`}
       // Only a growing panel needs a basis of 0; a closed one is sized by its
       // header alone, so it must not grow at all.
@@ -240,6 +248,15 @@ function SheetPicker({ onPick }: { onPick: (jobId: string) => void }) {
       )}
     </div>
   );
+}
+
+/** Turn a wanted sheet height into the sheet's share of the space the two
+ * panels divide, keeping each one big enough to show its header and a usable
+ * sliver of content. Without the floor, one drag to the edge would hide a
+ * panel with no obvious way to bring it back. */
+function clampSplit(wantedSheetPx: number, totalPx: number) {
+  const min = Math.min(96, totalPx / 2);
+  return Math.max(min, Math.min(wantedSheetPx, totalPx - min)) / totalPx;
 }
 
 /** What is sounding at a beat, straight from the timeline. Mirrors
@@ -500,6 +517,59 @@ function Player({ jobId }: { jobId: string }) {
   const [sheetOpen, setSheetOpen] = useState(true);
   const [rollOpen, setRollOpen] = useState(true);
 
+  /** How the space the controls and keyboard leave over is divided between the
+   * sheet and the roll: the sheet's share, 0 to 1. Storing a ratio rather than
+   * a pixel height means the division survives a window resize or a phone
+   * turning sideways, instead of pinning one panel and letting the other take
+   * the damage. */
+  const [split, setSplit] = useState(0.5);
+  const sheetRef = useRef<HTMLElement | null>(null);
+  const rollRef = useRef<HTMLElement | null>(null);
+  const dragRef = useRef<{ startY: number; sheetPx: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
+
+  /** Both panels as they are on screen right now. The drag works in pixels so
+   * the separator stays under the pointer, and converts back to a ratio only
+   * once it has a number. */
+  const panelHeights = useCallback(() => {
+    const sheetPx = sheetRef.current?.getBoundingClientRect().height ?? 0;
+    const rollPx = rollRef.current?.getBoundingClientRect().height ?? 0;
+    return { sheetPx, totalPx: sheetPx + rollPx };
+  }, []);
+
+  const startDrag = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    dragRef.current = { startY: e.clientY, sheetPx: panelHeights().sheetPx };
+    setDragging(true);
+    // Capture, so a fast drag that outruns the 14px strip keeps resizing
+    // instead of dropping the gesture over whatever it passed.
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }, [panelHeights]);
+
+  const onDrag = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    // Measured fresh: the total is fixed during a drag, but reading it here
+    // keeps the maths right if a scrollbar or hint line appears mid-gesture.
+    const { totalPx } = panelHeights();
+    if (totalPx <= 0) return;
+    setSplit(clampSplit(drag.sheetPx + (e.clientY - drag.startY), totalPx));
+  }, [panelHeights]);
+
+  const endDrag = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    dragRef.current = null;
+    setDragging(false);
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  }, []);
+
+  /** Arrow keys move the boundary as well, so the split is reachable without a
+   * pointer - and on a trackpad where a 14px target is a fiddly grab. */
+  const nudgeSplit = useCallback((deltaPx: number) => {
+    const { sheetPx, totalPx } = panelHeights();
+    if (totalPx > 0) setSplit(clampSplit(sheetPx + deltaPx, totalPx));
+  }, [panelHeights]);
+
   /** Whether a step has placed the playhead yet - see step(). */
   const steppedRef = useRef(false);
 
@@ -668,7 +738,13 @@ function Player({ jobId }: { jobId: string }) {
 
   return (
     <div className="play-view">
-      <Panel title="Sheet" open={sheetOpen} onToggle={() => setSheetOpen((v) => !v)} grow={1}>
+      <Panel
+        title="Sheet"
+        nodeRef={sheetRef}
+        open={sheetOpen}
+        onToggle={() => setSheetOpen((v) => !v)}
+        grow={rollOpen ? split : 1}
+      >
         {pdfData ? (
           <SheetCanvas
             pdfData={pdfData}
@@ -685,6 +761,31 @@ function Player({ jobId }: { jobId: string }) {
           </p>
         )}
       </Panel>
+
+      {/* Only meaningful with both panels open: collapse either one and a
+          single panel takes the space, leaving no boundary to move. */}
+      {sheetOpen && rollOpen && (
+        <div
+          className={`play-split${dragging ? " dragging" : ""}`}
+          role="separator"
+          tabIndex={0}
+          aria-label="Resize the sheet and the falling notes"
+          aria-orientation="horizontal"
+          aria-valuenow={Math.round(split * 100)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          onPointerDown={startDrag}
+          onPointerMove={onDrag}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+          onDoubleClick={() => setSplit(0.5)}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowUp") { e.preventDefault(); nudgeSplit(-24); }
+            else if (e.key === "ArrowDown") { e.preventDefault(); nudgeSplit(24); }
+            else if (e.key === "Home") { e.preventDefault(); setSplit(0.5); }
+          }}
+        />
+      )}
 
       <div className="play-scrub">
         <input
@@ -823,9 +924,10 @@ function Player({ jobId }: { jobId: string }) {
 
       <Panel
         label="Falling notes"
+        nodeRef={rollRef}
         open={rollOpen}
         onToggle={() => setRollOpen((v) => !v)}
-        grow={1}
+        grow={sheetOpen ? 1 - split : 1}
         flush
         dark
       >
