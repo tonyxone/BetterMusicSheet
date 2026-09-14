@@ -126,6 +126,19 @@ source infra/social-signin-env.sh
 terraform -chdir=infra apply -var-file=serverless.tfvars
 ```
 
+On Windows, run the PowerShell twin from a PowerShell prompt and apply from
+that same window:
+
+```powershell
+.\infra\social-signin-env.ps1
+terraform -chdir=infra apply -var-file=serverless.tfvars
+```
+
+cmd.exe cannot do this at all: `set` has no way to put the newlines of a PEM
+key into a variable. Nor can it be `powershell -File ...` from cmd - that is a
+second process, and the variables die with it. (Git Bash works too, with the
+`.sh` version.)
+
 `source`, not `./` - the exports have to land in your shell, and running it
 would drop them with the subshell. It prints which variables it set (never
 their values), warns if the private key arrives without its newlines or PEM
