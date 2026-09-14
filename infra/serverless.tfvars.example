@@ -32,8 +32,10 @@ alert_email = "your-address@example.com"
 # Google: console.cloud.google.com -> APIs & Services -> Credentials -> OAuth
 # client ID (type "Web application"). Authorised redirect URI must be
 # https://<cognito_hosted_ui_domain>/oauth2/idpresponse
-# google_client_id     = "1234567890-abc.apps.googleusercontent.com"
-# google_client_secret = "GOCSPX-..."
+# This project keeps both values as `google_client_id` and
+# `google_client_secret` keys in the `better_music_sheet_singin_provider`
+# Secrets Manager secret. Run terraform through terraform-with-secrets.ps1;
+# do not add the values to serverless.tfvars.
 
 # Facebook: developers.facebook.com -> your app -> Facebook Login. Valid OAuth
 # redirect URI is the same /oauth2/idpresponse URL as above.
@@ -45,11 +47,6 @@ alert_email = "your-address@example.com"
 # /oauth2/idpresponse URL, plus a Sign in with Apple key (.p8). Apple sends the
 # user's name only on their FIRST authorization, so a mistake here cannot be
 # retried without removing the app from the account's Apple ID settings.
-# apple_services_id = "com.bettermusicsheet.signin"
-# apple_team_id     = "ABCDE12345"
-# apple_key_id      = "KEY1234567"
-# apple_private_key = <<-EOT
-#   -----BEGIN PRIVATE KEY-----
-#   ...
-#   -----END PRIVATE KEY-----
-# EOT
+# Store `apple_team_id`, `apple_services_id`, `apple_key_id`, and
+# `apple_private_key` in the same Secrets Manager secret used for Google. The
+# PowerShell wrapper loads them; do not add the values to serverless.tfvars.

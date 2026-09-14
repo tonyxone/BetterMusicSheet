@@ -104,6 +104,20 @@ resource "aws_cognito_identity_provider" "google" {
     email    = "email"
     name     = "name"
   }
+
+  # Cognito adds these provider endpoints after every create/update. They are
+  # service-owned metadata rather than configuration inputs; ignoring only
+  # these keys prevents a perpetual plan without hiding credential changes.
+  lifecycle {
+    ignore_changes = [
+      provider_details["attributes_url"],
+      provider_details["attributes_url_add_attributes"],
+      provider_details["authorize_url"],
+      provider_details["oidc_issuer"],
+      provider_details["token_request_method"],
+      provider_details["token_url"],
+    ]
+  }
 }
 
 resource "aws_cognito_identity_provider" "facebook" {
@@ -158,9 +172,16 @@ resource "aws_cognito_identity_provider" "apple" {
   }
 
   lifecycle {
-    # Apple's .p8 is write-only as far as the API is concerned: Cognito never
-    # returns it, so every plan would otherwise show a change and re-send it.
-    ignore_changes = [provider_details["private_key"]]
+    # Apple's .p8 is write-only as far as the API is concerned, while the
+    # endpoint fields are service-owned metadata Cognito adds after updates.
+    ignore_changes = [
+      provider_details["attributes_url_add_attributes"],
+      provider_details["authorize_url"],
+      provider_details["oidc_issuer"],
+      provider_details["private_key"],
+      provider_details["token_request_method"],
+      provider_details["token_url"],
+    ]
   }
 }
 

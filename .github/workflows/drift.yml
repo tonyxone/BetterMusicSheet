@@ -33,6 +33,24 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
           role-skip-session-tagging: true
 
+      # cognito-idp.tf switches each social identity provider on the moment
+      # its client id var is non-empty. Without this, that var is empty here
+      # (it's never in tfvars - see social-signin-env.sh), and the plan below
+      # reports the real Google/Apple providers as drift to be destroyed.
+      - name: Load social sign-in secrets
+        run: |
+          source infra/social-signin-env.sh
+          for name in google_client_id google_client_secret facebook_app_id facebook_app_secret \
+                      apple_services_id apple_team_id apple_key_id apple_private_key; do
+            var="TF_VAR_$name"
+            value="${!var:-}"
+            if [ -n "$value" ]; then
+              echo "$var<<BMS_SECRET_EOF" >> "$GITHUB_ENV"
+              echo "$value" >> "$GITHUB_ENV"
+              echo "BMS_SECRET_EOF" >> "$GITHUB_ENV"
+            fi
+          done
+
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.14.6
