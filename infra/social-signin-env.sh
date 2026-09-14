@@ -84,7 +84,15 @@ apple_services_id apple_team_id apple_key_id apple_private_key "
 
     # Values are never echoed - only which variables are now set, and enough
     # shape for the .p8 to be checked at a glance.
-    echo "Exported: ${loaded[*]/#/TF_VAR_}"
+    #
+    # Built with a loop rather than ${loaded[*]/#/TF_VAR_}: that expansion
+    # prefixes only the first element under zsh, which is what macOS starts
+    # you in, and the resulting list is a lie about what was exported.
+    local summary=""
+    for key in "${loaded[@]}"; do
+        summary="$summary TF_VAR_$key"
+    done
+    echo "Exported:$summary"
     if [[ -n "${TF_VAR_apple_private_key:-}" ]]; then
         local lines
         lines=$(printf '%s' "$TF_VAR_apple_private_key" | wc -l)
