@@ -132,6 +132,24 @@ details.options[open] summary::before { content: "▾ "; }
   font-family: inherit; background: var(--card); color: var(--ink);
 }
 .opt-row.checkbox { gap: 8px; }
+.opt-colors { display: flex; align-items: center; gap: 7px; }
+.opt-colors .swatch {
+  width: 22px; height: 22px; padding: 0; border-radius: 50%; cursor: pointer;
+  border: 1px solid var(--paper-deep);
+}
+/* The ring sits outside the swatch rather than inside it, so the selected
+   colour is still shown at full size. */
+.opt-colors .swatch.on {
+  box-shadow: 0 0 0 2px var(--card), 0 0 0 4px var(--accent);
+}
+.opt-colors input[type=color] {
+  width: 30px; height: 24px; padding: 0; cursor: pointer; background: none;
+  border: 1px solid var(--paper-deep); border-radius: 6px;
+}
+/* Chrome and Safari pad the swatch inside the control; without this the
+   colour shows as a small square floating in a grey box. */
+.opt-colors input[type=color]::-webkit-color-swatch-wrapper { padding: 2px; }
+.opt-colors input[type=color]::-webkit-color-swatch { border: 0; border-radius: 4px; }
 .option-help {
   flex: none; width: 22px; height: 22px; padding: 0; border-radius: 50%;
   border: 1px solid var(--ink-soft); background: transparent; color: var(--ink-soft);

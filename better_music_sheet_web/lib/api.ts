@@ -14,6 +14,8 @@ export type AnnotationJob = {
   octave: boolean;
   font_size: number;
   dpi: number | null;
+  /** "#rrggbb". Absent on jobs created before the option existed. */
+  color?: string;
   created_at: number;
   updated_at: number;
 };

@@ -240,7 +240,7 @@ def recognition_quality(omr_path, mxl_path, page, single_page=False):
 
 
 def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font_size=6.5,
-                  dpi=None, auto_retry=True, log=print, timeline_path=None):
+                  dpi=None, auto_retry=True, log=print, timeline_path=None, color="#000000"):
     """Run the full PDF -> Audiveris OMR -> annotated PDF pipeline. Shared by the
     CLI (main(), below) and the web API (server.py) so the two stay in sync.
 
@@ -300,7 +300,7 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
             log(f"[2b/3] Timeline build failed, Play mode unavailable for this sheet: {e}")
 
     log(f"[3/3] Rendering {output} ...")
-    render(str(pdf_path), str(output), records, font_size=font_size)
+    render(str(pdf_path), str(output), records, font_size=font_size, color=color)
     log(f"Done: {output} ({len(records)} labeled beat-groups)")
     return len(records)
 
@@ -312,6 +312,8 @@ def main():
     ap.add_argument("--style", choices=["unicode", "ascii"], default="unicode")
     ap.add_argument("--octave", action="store_true")
     ap.add_argument("--font-size", type=float, default=6.5)
+    ap.add_argument("--color", default="#000000",
+                     help="Note-label colour as #rrggbb (default: black).")
     ap.add_argument("--work-dir", default="output")
     ap.add_argument("--timeline", default=None,
                      help="Also write the playback timeline JSON here (see timeline.py).")
@@ -328,7 +330,7 @@ def main():
 
     annotate_pdf(pdf_path, output, args.work_dir, style=args.style, octave=args.octave,
                  font_size=args.font_size, dpi=args.dpi, auto_retry=not args.no_auto_retry,
-                 timeline_path=args.timeline)
+                 timeline_path=args.timeline, color=args.color)
 
 
 if __name__ == "__main__":

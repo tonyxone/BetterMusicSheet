@@ -4,15 +4,26 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { uploadSheet } from "@/lib/sheet-files";
 
-type UploadOption = "style" | "fontSize" | "dpi" | "octave" | "autoRetry";
+type UploadOption = "style" | "fontSize" | "color" | "dpi" | "octave" | "autoRetry";
 
 const OPTION_HELP: Record<UploadOption, string> = {
   style: "Unicode uses musical accidental symbols such as B♭ and C♯. ASCII uses plain-text Bb and C#, which can be easier to copy into older software.",
   fontSize: "Controls the printed note-label size. Larger labels are easier to read but have less room around dense chords.",
+  color: "Sets the printed colour of every note label. A colour makes the labels easy to tell apart from the printed music, while black keeps the page looking like the original. Pale colours can be hard to read on white paper.",
   dpi: "Controls the scan resolution used for recognition. Leave it on auto for most sheets; 300 DPI can help a blurry scan but takes longer to process.",
   octave: "Adds the scientific octave number to every label, such as B♭4. This identifies the exact piano key but makes each label longer.",
   autoRetry: "Automatically scans a page again at higher resolution when unusually few notes are found. It can improve difficult pages but increases processing time.",
 };
+
+/** Presets worth one click. All dark enough to read against the staff; the
+ * picker beside them still allows anything at all. */
+const LABEL_COLORS = [
+  { value: "#000000", name: "Black" },
+  { value: "#1451c4", name: "Blue" },
+  { value: "#c62828", name: "Red" },
+  { value: "#1b7a3e", name: "Green" },
+  { value: "#6a3fb5", name: "Purple" },
+];
 
 export function UploadForm() {
   const router = useRouter();
@@ -20,6 +31,7 @@ export function UploadForm() {
   const [style, setStyle] = useState<"unicode" | "ascii">("unicode");
   const [octave, setOctave] = useState(false);
   const [fontSize, setFontSize] = useState(6.5);
+  const [color, setColor] = useState("#000000");
   const [dpi, setDpi] = useState("");
   const [autoRetry, setAutoRetry] = useState(true);
   const [openHelp, setOpenHelp] = useState<UploadOption | null>(null);
@@ -35,6 +47,7 @@ export function UploadForm() {
     try {
       const job_id = await uploadSheet(file, {
         style, octave, font_size: fontSize, auto_retry: autoRetry, dpi: dpi ? Number(dpi) : null,
+        color,
       });
       router.push(`/sheets?job=${job_id}`);
     } catch (err) {
@@ -94,6 +107,35 @@ export function UploadForm() {
               />
             </div>
             {openHelp === "fontSize" && <OptionExplanation option="fontSize" />}
+            <div className="opt-row">
+              <label htmlFor="color" className="main">Label colour</label>
+              <OptionHelp option="color" label="Label colour" open={openHelp} onToggle={setOpenHelp} />
+              <div className="opt-colors">
+                {LABEL_COLORS.map((preset) => (
+                  <button
+                    key={preset.value}
+                    type="button"
+                    className={`swatch${color.toLowerCase() === preset.value ? " on" : ""}`}
+                    style={{ background: preset.value }}
+                    title={preset.name}
+                    aria-label={preset.name}
+                    aria-pressed={color.toLowerCase() === preset.value}
+                    onClick={() => setColor(preset.value)}
+                  />
+                ))}
+                {/* The presets are shortcuts, not the whole choice - this is
+                    the control that makes any colour reachable. */}
+                <input
+                  id="color"
+                  type="color"
+                  value={color}
+                  title="Choose any colour"
+                  aria-label="Choose any colour"
+                  onChange={(e) => setColor(e.target.value)}
+                />
+              </div>
+            </div>
+            {openHelp === "color" && <OptionExplanation option="color" />}
             <div className="opt-row">
               <label htmlFor="dpi" className="main">Force DPI</label>
               <OptionHelp option="dpi" label="Force DPI" open={openHelp} onToggle={setOpenHelp} />

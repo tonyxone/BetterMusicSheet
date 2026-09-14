@@ -171,6 +171,9 @@ class UploadRequest(BaseModel):
     font_size: float = Field(default=6.5, ge=3, le=20, allow_inf_nan=False)
     dpi: Optional[int] = Field(default=None, ge=MIN_DPI, le=MAX_DPI)
     auto_retry: bool = True
+    # Validated here rather than at render time, so a bad value is a 422 the
+    # uploader can see instead of a job that fails minutes later.
+    color: str = Field(default="#000000", pattern=r"^#[0-9a-fA-F]{6}$")
 
 
 def reserve_upload(body, user_id):
@@ -184,7 +187,7 @@ def reserve_upload(body, user_id):
         raise HTTPException(409, "You already have a sheet processing. Wait for it to finish.")
     try:
         return job_state.create(uuid.uuid4().hex, user_id, body.filename,
-                                body.model_dump(include={"style", "octave", "font_size", "dpi", "auto_retry"}),
+                                body.model_dump(include={"style", "octave", "font_size", "dpi", "auto_retry", "color"}),
                                 body.size)
     except job_state.Busy as exc:
         raise HTTPException(409, str(exc)) from exc
@@ -227,6 +230,7 @@ async def submit_sheet(
     file: UploadFile = File(...), style: str = Form("unicode"),
     octave: bool = Form(False), font_size: float = Form(6.5),
     dpi: Optional[int] = Form(None), auto_retry: bool = Form(True),
+    color: str = Form("#000000"),
     user_id: str = Depends(get_current_user_id),
 ):
     if SERVERLESS:
@@ -243,7 +247,8 @@ async def submit_sheet(
                 target.write(chunk)
         try:
             body = UploadRequest(filename=file.filename or "", size=size, style=style,
-                                 octave=octave, font_size=font_size, dpi=dpi, auto_retry=auto_retry)
+                                 octave=octave, font_size=font_size, dpi=dpi, auto_retry=auto_retry,
+                                 color=color)
         except ValueError:
             raise HTTPException(400, "Invalid file or annotation options.")
         job = reserve_upload(body, user_id)

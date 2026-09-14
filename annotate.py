@@ -213,10 +213,26 @@ _DEFAULT_FONT_PATH = (
 ARIAL_PATH = os.environ.get("LABEL_FONT_PATH", _DEFAULT_FONT_PATH)
 
 
-def render(input_pdf, output_pdf, records, font_size=6.5, margin_pt=3.2):
+def label_rgb(color):
+    """A "#rrggbb" string as PyMuPDF's 0-1 float triple.
+
+    Anything unparseable falls back to black rather than raising: a stored
+    value from an older job, or one that somehow dodged the API's validation,
+    should still print a readable sheet instead of failing the whole run."""
+    text = str(color or "").strip().lstrip("#")
+    if len(text) != 6:
+        return (0.0, 0.0, 0.0)
+    try:
+        return tuple(int(text[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+    except ValueError:
+        return (0.0, 0.0, 0.0)
+
+
+def render(input_pdf, output_pdf, records, font_size=6.5, margin_pt=3.2, color="#000000"):
     # margin_pt must clear the notehead's own radius (~2.2pt at 300dpi) plus a
     # visible gap - anything smaller guarantees the label overlaps the notehead
     doc = fitz.open(input_pdf)
+    fill = label_rgb(color)
     fontname = "arial-notenames"
     measure_font = fitz.Font(fontfile=ARIAL_PATH)
     for page in doc:
@@ -236,13 +252,15 @@ def render(input_pdf, output_pdf, records, font_size=6.5, margin_pt=3.2):
             fs = b['fs']
             for label, y, x_off, w in zip(b['labels'], b['ys'], b['label_x_offsets'], b['widths']):
                 tx = b['x'] + x_off - w / 2.0
-                # halo first (stroke-only, underneath), then fully-solid black fill
+                # halo first (stroke-only, underneath), then the fully-solid fill
                 # on top - combining fill+stroke in one render_mode=2 pass dilutes
-                # the black at small font sizes, which read as faded/light
+                # the colour at small font sizes, which reads as faded/light.
+                # The halo stays white whatever the label colour: its job is to
+                # separate the text from the staff lines it sits over.
                 shape.insert_text((tx, y), label, fontname=fontname, fontsize=fs,
                                    render_mode=1, color=(1, 1, 1), border_width=0.25)
                 shape.insert_text((tx, y), label, fontname=fontname, fontsize=fs,
-                                   render_mode=0, fill=(0, 0, 0))
+                                   render_mode=0, fill=fill)
 
     for shape in shapes.values():
         shape.commit()
