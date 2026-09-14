@@ -72,9 +72,11 @@ data "aws_iam_policy_document" "github_terraform_apply" {
     ]
     resources = ["arn:aws:cognito-idp:${var.aws_region}:${var.account_id}:userpool/*"]
   }
-  statement {
+  statement { # ListUserPools takes no ARN; DescribeUserPoolDomain is keyed by
+    # domain name, not the pool's ARN, so AWS won't scope it either
+    # (confirmed by an actual AccessDenied)
     sid       = "CognitoAccount"
-    actions   = ["cognito-idp:ListUserPools"]
+    actions   = ["cognito-idp:ListUserPools", "cognito-idp:DescribeUserPoolDomain"]
     resources = ["*"]
   }
 
@@ -91,7 +93,7 @@ data "aws_iam_policy_document" "github_terraform_apply" {
 
   statement { # modules/serverless/compute.tf (api, controller functions)
     sid       = "Lambda"
-    actions   = ["lambda:CreateFunction", "lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:UpdateFunctionConfiguration", "lambda:UpdateFunctionCode", "lambda:DeleteFunction", "lambda:TagResource", "lambda:UntagResource", "lambda:ListTags", "lambda:AddPermission", "lambda:RemovePermission", "lambda:GetPolicy"]
+    actions   = ["lambda:CreateFunction", "lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:UpdateFunctionConfiguration", "lambda:UpdateFunctionCode", "lambda:DeleteFunction", "lambda:TagResource", "lambda:UntagResource", "lambda:ListTags", "lambda:AddPermission", "lambda:RemovePermission", "lambda:GetPolicy", "lambda:ListVersionsByFunction"]
     resources = ["arn:aws:lambda:${var.aws_region}:${var.account_id}:function:better-music-sheet-v2-*"]
   }
 
