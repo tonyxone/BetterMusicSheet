@@ -88,6 +88,27 @@ Callback URLs are registered in `cognito.tf` for the apex domain, `www`, and
 matches exactly and which is what `trailingSlash` in
 `../better_music_sheet_web/next.config.ts` actually produces.
 
+### Running Terraform with social-provider credentials
+
+Google's `google_client_id` and `google_client_secret`, plus Apple's
+`apple_team_id`, `apple_services_id`, `apple_key_id`, and `apple_private_key`,
+are stored as key/value pairs in the `better_music_sheet_singin_provider` AWS
+Secrets Manager secret.
+Use the PowerShell wrapper instead of invoking `terraform plan` or
+`terraform apply` directly, so the values exist only as process environment
+variables while Terraform runs:
+
+```powershell
+.\terraform-with-secrets.ps1 -Command plan
+.\terraform-with-secrets.ps1 -Command apply
+```
+
+The wrapper reads the project's secret ARN by default. `-SecretArn` can
+override it. It deliberately does not save a plan file because Terraform
+plans can contain secret values. Cognito's Terraform resource still stores
+these provider details in the encrypted remote state, so access to the state
+bucket must remain restricted.
+
 ## Before your first apply
 
 - State is local (`terraform.tfstate` in this directory, gitignored). Fine
