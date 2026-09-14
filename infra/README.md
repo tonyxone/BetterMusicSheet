@@ -125,32 +125,44 @@ bucket must remain restricted.
 
 ## After every release
 
-This used to be a manual step (update `serverless_api_image` /
+This used to be entirely manual (update `serverless_api_image` /
 `serverless_worker_image` in `serverless.tfvars`, then `terraform apply`).
-It's now automatic: the release workflow's `sync-infra` job reads whatever
-image is actually running right now (the same `aws lambda get-function` /
-`aws ecs describe-task-definition` calls `drift.yml` uses) and applies with
-those as `-var` overrides, using a dedicated CI role
-(`infra/terraform-apply-role.tf`, assumed via `TF_APPLY_AWS_ROLE_ARN`).
+The release workflow's `plan-infra` job now automates the first half: it
+reads whatever image is actually running right now (the same
+`aws lambda get-function` / `aws ecs describe-task-definition` calls
+`drift.yml` uses) and runs `terraform plan` with those as `-var` overrides,
+using a dedicated CI role (`infra/terraform-apply-role.tf`, assumed via
+`TF_APPLY_AWS_ROLE_ARN`). The plan, plus a ready-to-run `terraform apply`
+command with the correct image tags filled in, lands in that job's step
+summary.
 
-Why this mattered enough to automate: the Lambda functions declare
-`ignore_changes` on their image, so the release owns their code and Terraform
-leaves it alone. The ECS worker cannot do the same: ECS keeps the image, the
-command and every environment variable in one `container_definitions`
-attribute, and `ignore_changes` works per attribute - excluding the image
-would also stop Terraform managing the environment, which is worse than the
-problem. So Terraform believes whatever it was last told, and an apply run
-for an entirely unrelated reason would quietly revert the worker to an older
-image. Nothing fails; jobs simply start running last release's code. That
-happened once, for real (v0.0.26 → v0.0.23) - see the comments in
-`modules/serverless/compute.tf` and `.github/workflows/drift.yml`.
+**It deliberately does not apply.** A hand-crafted least-privilege IAM
+policy is exactly the kind of thing that can be missing one read-only
+permission the AWS provider needs to *confirm a resource still exists* -
+get that wrong and `apply` reads AccessDenied as "this was deleted outside
+Terraform" and recreates it for real. That happened once already: a missing
+`s3:ListBucket`/`s3:HeadBucket` grant made the v2 files bucket look gone,
+and Terraform actually deleted its CORS, notification and
+public-access-block configuration before recreating them - silently
+breaking uploads until it was caught and fixed by hand (see the git history
+on `infra/terraform-apply-role.tf` for the exact permissions that were
+missing). So for now, review the plan, then run the apply yourself.
 
-**This changes what a local apply should do.** `serverless.tfvars`'s two
-image lines are no longer kept fresh by habit - CI is now the one updating
-the account, so your local copy of those two lines can be stale by the time
-you next touch Terraform for something unrelated (a Cognito tweak, an alarm
-threshold). Don't trust them: pull the current tags the same way the
-workflow does, and pass them as `-var` instead of relying on the file -
+Why the image sync matters at all: the Lambda functions declare
+`ignore_changes` on their image, so the release owns their code and
+Terraform leaves it alone. The ECS worker cannot do the same: ECS keeps the
+image, the command and every environment variable in one
+`container_definitions` attribute, and `ignore_changes` works per attribute -
+excluding the image would also stop Terraform managing the environment,
+which is worse than the problem. So Terraform believes whatever it was last
+told, and an apply run for an entirely unrelated reason would quietly revert
+the worker to an older image. That happened once too (v0.0.26 → v0.0.23) -
+see the comments in `modules/serverless/compute.tf`.
+
+**This changes what `serverless.tfvars` is for.** Its two image lines are no
+longer kept fresh by habit, so treat them as stale by default. Before any
+apply - the CI-posted one or an unrelated local change - pull the current
+tags the same way the workflow does, and pass them as `-var`:
 
 ```bash
 aws lambda get-function --function-name <API_LAMBDA_FUNCTION> --query 'Code.ImageUri' --output text
@@ -158,8 +170,7 @@ aws ecs describe-task-definition --task-definition <the worker service's current
 ```
 
 then e.g. `terraform apply -var-file=serverless.tfvars -var serverless_api_image=<api> -var serverless_worker_image=<worker>`,
-which overrides whatever the file says. Otherwise the exact bug this section
-used to describe just moves from "CI forgot" to "your local file was stale."
+which overrides whatever the file says.
 
 The scheduled drift check (`.github/workflows/drift.yml`) still reports any
 mismatch within a day, as a backstop - not as the plan.
