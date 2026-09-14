@@ -101,6 +101,24 @@ resource "aws_iam_role_policy_attachment" "github_drift" {
   policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
 }
 
+# ReadOnlyAccess does not cover Secrets Manager's GetSecretValue (reading a
+# secret's value is deliberately excluded from that managed policy). Without
+# this, the drift check's plan sees empty google/apple/facebook variables and
+# reports the social sign-in identity providers as drift to be destroyed.
+data "aws_iam_policy_document" "github_drift_social_signin_secret" {
+  statement {
+    sid       = "SocialSignInSecret"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = ["arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:better_music_sheet_singin_provider-*"]
+  }
+}
+
+resource "aws_iam_role_policy" "github_drift_social_signin_secret" {
+  name   = "social-signin-secret"
+  role   = aws_iam_role.github_drift.name
+  policy = data.aws_iam_policy_document.github_drift_social_signin_secret.json
+}
+
 output "github_drift_role_arn" {
   description = "Set as the DRIFT_AWS_ROLE_ARN repo variable"
   value       = aws_iam_role.github_drift.arn

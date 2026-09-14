@@ -62,6 +62,11 @@ apple_services_id apple_team_id apple_key_id apple_private_key "
 
     local loaded=() skipped=() key value
     while IFS= read -r key; do
+        # A Windows-native jq.exe run under Git Bash text-mode-translates its
+        # stdout, so every line - including key NAMES, not just the PEM value
+        # below - comes back with a trailing CR that never matches $known.
+        # Left unstripped, every key looks unrecognized and nothing exports.
+        key="${key//$'\r'/}"
         if [[ "$known" != *" $key "* ]]; then
             skipped+=("$key")
             continue

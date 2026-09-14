@@ -94,7 +94,7 @@ Google's `google_client_id` and `google_client_secret`, plus Apple's
 `apple_team_id`, `apple_services_id`, `apple_key_id`, and `apple_private_key`,
 are stored as key/value pairs in the `better_music_sheet_singin_provider` AWS
 Secrets Manager secret.
-Use the PowerShell wrapper instead of invoking `terraform plan` or
+Use the wrapper for your platform instead of invoking `terraform plan` or
 `terraform apply` directly, so the values exist only as process environment
 variables while Terraform runs:
 
@@ -103,39 +103,66 @@ variables while Terraform runs:
 .\terraform-with-secrets.ps1 -Command apply
 ```
 
-The wrapper reads the project's secret ARN by default. `-SecretArn` can
-override it. It deliberately does not save a plan file because Terraform
-plans can contain secret values. Cognito's Terraform resource still stores
-these provider details in the encrypted remote state, so access to the state
+```bash
+./terraform-with-secrets.sh plan
+./terraform-with-secrets.sh apply
+```
+
+Both read the project's secret ARN by default (`-SecretArn` / `BMS_SOCIAL_SECRET_ARN`
+to override) and neither saves a plan file, because Terraform plans can
+contain secret values. Cognito's Terraform resource still stores these
+provider details in the encrypted remote state, so access to the state
 bucket must remain restricted.
 
 ## Before your first apply
 
-- State is local (`terraform.tfstate` in this directory, gitignored). Fine
-  for one person on one machine; move to the S3 backend before more than one
-  person/machine touches this, and before the serverless migration - apply
-  `state-bootstrap/` for the state bucket, then copy `backend.tf.example` and
-  `backend.hcl.example` into place and
-  `terraform init -backend-config=backend.hcl -migrate-state`.
+- State already lives in the private S3 backend (see `backend.tf` /
+  `backend.hcl`, from `state-bootstrap/`), so a Mac and a Windows machine (or
+  CI - see "After every release" below) can all apply against the same
+  state. `backend.hcl` is gitignored; a fresh checkout needs its own copy
+  (bucket/key/region only, no secrets - see `backend.hcl.example`) before
+  `terraform init`.
 
 ## After every release
 
-Set `serverless_api_image` and `serverless_worker_image` in your
-`serverless.tfvars` to the tags the release pushed. The release job's summary
-prints the two lines ready to paste.
+This used to be a manual step (update `serverless_api_image` /
+`serverless_worker_image` in `serverless.tfvars`, then `terraform apply`).
+It's now automatic: the release workflow's `sync-infra` job reads whatever
+image is actually running right now (the same `aws lambda get-function` /
+`aws ecs describe-task-definition` calls `drift.yml` uses) and applies with
+those as `-var` overrides, using a dedicated CI role
+(`infra/terraform-apply-role.tf`, assumed via `TF_APPLY_AWS_ROLE_ARN`).
 
-This is not bookkeeping. The Lambda functions declare `ignore_changes` on their
-image, so the release owns their code and Terraform leaves it alone. The ECS
-worker cannot do the same: ECS keeps the image, the command and every
-environment variable in one `container_definitions` attribute, and
-`ignore_changes` works per attribute - excluding the image would also stop
-Terraform managing the environment, which is worse than the problem. So
-Terraform still believes whatever the tfvars say, and an apply run for an
-entirely unrelated reason will quietly revert the worker to an older image.
-Nothing fails; jobs simply start running last release's code.
+Why this mattered enough to automate: the Lambda functions declare
+`ignore_changes` on their image, so the release owns their code and Terraform
+leaves it alone. The ECS worker cannot do the same: ECS keeps the image, the
+command and every environment variable in one `container_definitions`
+attribute, and `ignore_changes` works per attribute - excluding the image
+would also stop Terraform managing the environment, which is worse than the
+problem. So Terraform believes whatever it was last told, and an apply run
+for an entirely unrelated reason would quietly revert the worker to an older
+image. Nothing fails; jobs simply start running last release's code. That
+happened once, for real (v0.0.26 → v0.0.23) - see the comments in
+`modules/serverless/compute.tf` and `.github/workflows/drift.yml`.
 
-The scheduled drift check (`.github/workflows/drift.yml`) reports this within a
-day if it is missed, which is the backstop rather than the plan.
+**This changes what a local apply should do.** `serverless.tfvars`'s two
+image lines are no longer kept fresh by habit - CI is now the one updating
+the account, so your local copy of those two lines can be stale by the time
+you next touch Terraform for something unrelated (a Cognito tweak, an alarm
+threshold). Don't trust them: pull the current tags the same way the
+workflow does, and pass them as `-var` instead of relying on the file -
+
+```bash
+aws lambda get-function --function-name <API_LAMBDA_FUNCTION> --query 'Code.ImageUri' --output text
+aws ecs describe-task-definition --task-definition <the worker service's current one> --query 'taskDefinition.containerDefinitions[0].image' --output text
+```
+
+then e.g. `terraform apply -var-file=serverless.tfvars -var serverless_api_image=<api> -var serverless_worker_image=<worker>`,
+which overrides whatever the file says. Otherwise the exact bug this section
+used to describe just moves from "CI forgot" to "your local file was stale."
+
+The scheduled drift check (`.github/workflows/drift.yml`) still reports any
+mismatch within a day, as a backstop - not as the plan.
 
 ## Migrating to the serverless backend
 
