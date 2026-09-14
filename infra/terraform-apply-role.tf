@@ -222,14 +222,17 @@ data "aws_iam_policy_document" "github_terraform_apply" {
     resources = ["arn:aws:ecr:${var.aws_region}:${var.account_id}:repository/${var.existing_ecr_repository_name}"]
   }
 
-  statement { # modules/serverless/storage.tf v2 files bucket (full management)
+  statement { # modules/serverless/storage.tf v2 files bucket (full management).
+    # ListBucket/HeadBucket back the provider's existence check on refresh -
+    # without it, an AccessDenied there reads as "bucket is gone", and apply
+    # then tries (and fails) to recreate a bucket that already exists.
     sid       = "ServerlessFilesBucket"
-    actions   = ["s3:CreateBucket", "s3:DeleteBucket", "s3:PutBucketVersioning", "s3:GetBucketVersioning", "s3:PutEncryptionConfiguration", "s3:GetEncryptionConfiguration", "s3:PutBucketPublicAccessBlock", "s3:GetBucketPublicAccessBlock", "s3:PutBucketCORS", "s3:GetBucketCORS", "s3:PutLifecycleConfiguration", "s3:GetLifecycleConfiguration", "s3:PutBucketNotification", "s3:GetBucketNotification", "s3:PutBucketTagging", "s3:GetBucketTagging", "s3:GetBucketLocation", "s3:GetBucketAcl", "s3:PutBucketAcl"]
+    actions   = ["s3:CreateBucket", "s3:DeleteBucket", "s3:ListBucket", "s3:HeadBucket", "s3:PutBucketVersioning", "s3:GetBucketVersioning", "s3:PutEncryptionConfiguration", "s3:GetEncryptionConfiguration", "s3:PutBucketPublicAccessBlock", "s3:GetBucketPublicAccessBlock", "s3:PutBucketCORS", "s3:GetBucketCORS", "s3:PutLifecycleConfiguration", "s3:GetLifecycleConfiguration", "s3:PutBucketNotification", "s3:GetBucketNotification", "s3:PutBucketTagging", "s3:GetBucketTagging", "s3:GetBucketLocation", "s3:GetBucketAcl", "s3:PutBucketAcl", "s3:GetBucketPolicy"]
     resources = ["arn:aws:s3:::better-music-sheet-v2-files-${var.account_id}"]
   }
   statement { # modules/serverless/storage.tf CORS added to the pre-existing legacy bucket only
     sid       = "LegacyBucketCors"
-    actions   = ["s3:GetBucketCORS", "s3:PutBucketCORS", "s3:GetBucketLocation"]
+    actions   = ["s3:GetBucketCORS", "s3:PutBucketCORS", "s3:GetBucketLocation", "s3:ListBucket", "s3:HeadBucket"]
     resources = ["arn:aws:s3:::annotated-music-sheet"]
   }
 
