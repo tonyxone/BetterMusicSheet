@@ -114,10 +114,19 @@ resource "aws_cognito_user_pool_client" "web" {
   # Cognito matches these by exact string. The trailing slash is required:
   # next.config.ts sets trailingSlash, so the exported page really is at
   # /auth/callback/ (see lib/auth.ts's callbackUrl).
+  #
+  # The custom-scheme entry is the iOS app's redirect: it has no page of its
+  # own to receive the hosted-UI code, so ASWebAuthenticationSession watches
+  # for this scheme instead and hands the callback URL back to the app
+  # directly (see better_music_sheet_ios/Config/AppConfig.swift's
+  # authCallbackURL). This same "web" client is reused rather than a
+  # separate iOS app client - it's already public (no secret), and Cognito
+  # allows any number of registered callback URLs on one client.
   callback_urls = [
     "https://${var.domain_name}/auth/callback/",
     "https://www.${var.domain_name}/auth/callback/",
     "http://localhost:3000/auth/callback/",
+    "bettermusicsheet://auth/callback",
   ]
 
   logout_urls = [
