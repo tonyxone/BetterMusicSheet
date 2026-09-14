@@ -36,7 +36,7 @@ data "aws_iam_policy_document" "github_terraform_apply" {
 
   statement { # route53.tf, and the cert validation records in acm.tf
     sid       = "Route53"
-    actions   = ["route53:ChangeResourceRecordSets", "route53:GetHostedZone", "route53:ListResourceRecordSets"]
+    actions   = ["route53:ChangeResourceRecordSets", "route53:GetHostedZone", "route53:ListResourceRecordSets", "route53:ListTagsForResource"]
     resources = ["arn:aws:route53:::hostedzone/*"]
   }
   statement { # these three don't support resource-level scoping
@@ -65,6 +65,10 @@ data "aws_iam_policy_document" "github_terraform_apply" {
       "cognito-idp:CreateUserPoolDomain", "cognito-idp:DescribeUserPoolDomain", "cognito-idp:DeleteUserPoolDomain", "cognito-idp:UpdateUserPoolDomain",
       "cognito-idp:SetUICustomization", "cognito-idp:GetUICustomization",
       "cognito-idp:CreateIdentityProvider", "cognito-idp:DescribeIdentityProvider", "cognito-idp:UpdateIdentityProvider", "cognito-idp:DeleteIdentityProvider", "cognito-idp:ListIdentityProviders",
+      # Read on every refresh of aws_cognito_user_pool even though this config
+      # never touches MFA - the provider always asks. Found by an actual
+      # AccessDenied in the first real CI apply, not anticipated up front.
+      "cognito-idp:GetUserPoolMfaConfig",
     ]
     resources = ["arn:aws:cognito-idp:${var.aws_region}:${var.account_id}:userpool/*"]
   }
@@ -99,8 +103,14 @@ data "aws_iam_policy_document" "github_terraform_apply" {
 
   statement { # log groups declared in modules/serverless/compute.tf, filter in monitoring.tf
     sid       = "Logs"
-    actions   = ["logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:DescribeLogGroups", "logs:PutRetentionPolicy", "logs:ListTagsForResource", "logs:TagResource", "logs:UntagResource", "logs:PutMetricFilter", "logs:DescribeMetricFilters", "logs:DeleteMetricFilter"]
+    actions   = ["logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:PutRetentionPolicy", "logs:ListTagsForResource", "logs:TagResource", "logs:UntagResource", "logs:PutMetricFilter", "logs:DescribeMetricFilters", "logs:DeleteMetricFilter"]
     resources = ["arn:aws:logs:${var.aws_region}:${var.account_id}:log-group:/better-music-sheet-v2/*"]
+  }
+  statement { # DescribeLogGroups only supports the log-group::log-stream: ARN
+    # shape (confirmed by an actual AccessDenied), not a name-prefixed one
+    sid       = "LogsAccount"
+    actions   = ["logs:DescribeLogGroups"]
+    resources = ["*"]
   }
 
   statement { # modules/serverless/monitoring.tf
@@ -188,6 +198,13 @@ data "aws_iam_policy_document" "github_terraform_apply" {
     sid       = "BackendJwtParameter"
     actions   = ["ssm:PutParameter", "ssm:GetParameter", "ssm:GetParameters", "ssm:DeleteParameter", "ssm:AddTagsToResource", "ssm:ListTagsForResource", "ssm:RemoveTagsFromResource"]
     resources = ["arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/${var.project}/*"]
+  }
+  statement { # DescribeParameters is read on every refresh of the parameter -
+    # AWS scopes it to this account/region wildcard, not a name-prefixed ARN
+    # (confirmed by an actual AccessDenied)
+    sid       = "SsmDescribeParameters"
+    actions   = ["ssm:DescribeParameters"]
+    resources = ["arn:aws:ssm:${var.aws_region}:${var.account_id}:*"]
   }
 
   statement { # so the release workflow can load Google/Apple/Facebook creds
