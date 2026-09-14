@@ -275,19 +275,30 @@ jobs:
 
       - name: Apply
         run: |
+          # `... | tee apply.txt` on its own would let this step report
+          # success on a real terraform failure - a piped command's exit
+          # status is the LAST command's (tee's, which always succeeds), not
+          # terraform's. Capture terraform's own code explicitly instead - a
+          # real CI run reported "success" on an apply that had actually
+          # errored, for exactly this reason.
+          set +e
           terraform -chdir=infra apply -input=false -auto-approve \
             -var "enable_serverless=true" \
             -var "serverless_api_image=${{ steps.images.outputs.api }}" \
             -var "serverless_worker_image=${{ steps.images.outputs.worker }}" \
             -var "alert_email=${{ secrets.ALERT_EMAIL }}" \
-            | tee apply.txt
+            > apply.txt 2>&1
+          CODE=$?
+          set -e
+          tail -60 apply.txt
           {
             echo '## Terraform apply'
             echo ''
             echo '```'
-            grep -E '^  # |^Plan:|^Apply complete|^No changes' apply.txt || tail -20 apply.txt
+            grep -E '^  # |^Plan:|^Apply complete|^No changes|^Error:' apply.txt || tail -20 apply.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          exit "$CODE"
 
   deploy-ui:
     name: Build and deploy the web UI
