@@ -89,10 +89,27 @@ resource "aws_cognito_user_pool_client" "web" {
   # The hosted-UI OAuth settings below are kept so the redirect flow still
   # works (nothing in the app uses it today) - harmless, and removing them
   # would mean re-registering callback URLs to ever go back.
+  #
+  # Social sign-in DOES use this redirect flow - Google, Apple and Facebook
+  # cannot be driven from the app's own modal the way a password can, because
+  # the credentials are entered on the provider's site. See cognito-idp.tf.
   allowed_oauth_flows_user_pool_client = true
   allowed_oauth_flows                  = ["code"]
   allowed_oauth_scopes                 = ["openid", "email", "profile"]
-  supported_identity_providers         = ["COGNITO"]
+
+  # "COGNITO" is the pool's own username/password users. The rest appear only
+  # once their credentials are configured - naming a provider that does not
+  # exist yet fails the apply.
+  supported_identity_providers = concat(["COGNITO"], local.social_providers)
+
+  # Terraform has no way to infer this: the list above is built from locals,
+  # not from the provider resources themselves, so without this the client can
+  # be updated before the providers it names exist.
+  depends_on = [
+    aws_cognito_identity_provider.google,
+    aws_cognito_identity_provider.facebook,
+    aws_cognito_identity_provider.apple,
+  ]
 
   # Cognito matches these by exact string. The trailing slash is required:
   # next.config.ts sets trailingSlash, so the exported page really is at

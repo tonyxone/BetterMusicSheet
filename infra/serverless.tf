@@ -60,6 +60,7 @@ module "serverless" {
   secret_parameter = aws_ssm_parameter.backend_jwt_secret.arn
   cognito_pool     = aws_cognito_user_pool.users.id
   cognito_client   = aws_cognito_user_pool_client.web.id
+  cognito_domain   = "https://${aws_cognito_user_pool_domain.users.domain}.auth.${var.aws_region}.amazoncognito.com"
   api_domain       = var.api_subdomain
   certificate_arn  = aws_acm_certificate_validation.api.certificate_arn
   origins          = ["https://${var.domain_name}", "https://www.${var.domain_name}", "http://localhost:3000"]

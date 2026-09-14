@@ -22,6 +22,7 @@ import os
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from fastapi import Header, HTTPException
@@ -44,6 +45,9 @@ if IS_PRODUCTION:
     COGNITO_USER_POOL_ID = os.environ["COGNITO_USER_POOL_ID"]
     COGNITO_APP_CLIENT_ID = os.environ["COGNITO_APP_CLIENT_ID"]
     BACKEND_JWT_SECRET = os.environ["BACKEND_JWT_SECRET"]
+    # Hosted-UI base URL, needed only by the social sign-in exchange below.
+    # Not required: the pool works without any federated provider configured.
+    COGNITO_DOMAIN = os.environ.get("COGNITO_DOMAIN", UNCONFIGURED)
 else:
     # Local dev needs no Cognito setup at all: the guest path below works
     # without any of these, and POST /api/auth/token simply fails if it's
@@ -53,6 +57,7 @@ else:
     COGNITO_USER_POOL_ID = os.environ.get("COGNITO_USER_POOL_ID", UNCONFIGURED)
     COGNITO_APP_CLIENT_ID = os.environ.get("COGNITO_APP_CLIENT_ID", UNCONFIGURED)
     BACKEND_JWT_SECRET = os.environ.get("BACKEND_JWT_SECRET", "local-dev-secret-not-for-production")
+    COGNITO_DOMAIN = os.environ.get("COGNITO_DOMAIN", UNCONFIGURED)
 COGNITO_ISSUER = f"https://cognito-idp.{COGNITO_REGION}.amazonaws.com/{COGNITO_USER_POOL_ID}"
 
 BACKEND_JWT_ALGORITHM = "HS256"
@@ -74,6 +79,72 @@ def _get_jwks():
 def is_cognito_configured():
     """Whether this server can verify Cognito tokens at all."""
     return COGNITO_USER_POOL_ID != UNCONFIGURED and COGNITO_APP_CLIENT_ID != UNCONFIGURED
+
+
+def exchange_authorization_code(code, redirect_uri):
+    """Trade a hosted-UI authorization code for Cognito's ID token.
+
+    Google, Apple and Facebook cannot go through the password flow the app's
+    own modal uses, because the credentials are typed on the provider's site,
+    not ours. The browser comes back from that round trip holding a one-time
+    code instead, and this turns it into a token.
+
+    The swap happens on the server rather than in the browser so the code and
+    the tokens it becomes never pass through page scripts. The app client has
+    no secret (it is a public client), so no client authentication is sent.
+
+    `redirect_uri` is not validated here on purpose: Cognito checks it against
+    the pool client's registered callback_urls and rejects a mismatch, so a
+    forged value fails the exchange rather than redirecting anyone anywhere.
+
+    Returns (id_token, refresh_token) - refresh_token may be None if Cognito
+    didn't issue one."""
+    if not is_cognito_configured():
+        raise HTTPException(
+            503,
+            "Sign-in isn't configured on this server: set COGNITO_USER_POOL_ID "
+            "and COGNITO_APP_CLIENT_ID (see .env.example).",
+        )
+    if COGNITO_DOMAIN == UNCONFIGURED:
+        raise HTTPException(
+            503,
+            "Social sign-in isn't configured on this server: set COGNITO_DOMAIN "
+            "to the hosted-UI base URL (terraform output cognito_hosted_ui_domain).",
+        )
+    request = urllib.request.Request(
+        f"{COGNITO_DOMAIN}/oauth2/token",
+        data=urllib.parse.urlencode({
+            "grant_type": "authorization_code",
+            "client_id": COGNITO_APP_CLIENT_ID,
+            "code": code,
+            "redirect_uri": redirect_uri,
+        }).encode(),
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payload = json.load(response)
+    except urllib.error.HTTPError as e:
+        # Cognito answers invalid_grant for a code that is expired or already
+        # spent - which someone hits just by reloading the callback page. That
+        # is the caller's problem to retry, not a server fault, so it is a 400.
+        try:
+            reason = json.load(e).get("error", e.reason)
+        except (ValueError, OSError):
+            reason = e.reason
+        raise HTTPException(400, f"That sign-in could not be completed ({reason}). Please try again.")
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        raise HTTPException(502, f"Couldn't reach Cognito to complete the sign-in ({e}).")
+
+    id_token = payload.get("id_token")
+    if not id_token:
+        raise HTTPException(502, "Cognito completed the sign-in without returning an ID token.")
+    # refresh_token: the frontend has no Cognito tokens of its own for a
+    # social sign-in (unlike the password flow, which calls Cognito directly
+    # and already holds one) - this is the only chance to hand it one, or the
+    # session is stuck expiring at BACKEND_JWT_LIFETIME_SECONDS with no way to
+    # renew short of signing in again.
+    return id_token, payload.get("refresh_token")
 
 
 def verify_cognito_id_token(token):

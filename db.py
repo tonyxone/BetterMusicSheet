@@ -57,6 +57,31 @@ if IS_PRODUCTION:
         except _users_table.meta.client.exceptions.ConditionalCheckFailedException:
             pass
 
+    def save_user_identity(user_id, email, display_name):
+        """Write the identity claims a just-verified sign-in proved.
+
+        create_user_if_missing deliberately never touches an existing row, so a
+        row first created without a name - see server.py's /api/me fallback,
+        which has only the token's subject to go on - could never acquire one
+        afterwards, and the header showed "Account" for good. Signing in is the
+        one moment we hold verified values, so that is where they are written.
+
+        Only non-None values are written: a pool that omits the name claim must
+        not erase a name an earlier sign-in already established."""
+        names = {"#created": "created_at"}
+        values = {":now": int(time.time())}
+        expression = "SET #created = if_not_exists(#created, :now)"
+        for i, (key, value) in enumerate((("email", email), ("display_name", display_name))):
+            if value is None:
+                continue
+            names[f"#f{i}"] = key
+            values[f":f{i}"] = value
+            expression += f", #f{i} = :f{i}"
+        _users_table.update_item(
+            Key={"user_id": user_id}, UpdateExpression=expression,
+            ExpressionAttributeNames=names, ExpressionAttributeValues=values,
+        )
+
     # ---- music_sheet ----
 
     def create_music_sheet(music_sheet_id, user_id, sheet_name):
@@ -153,6 +178,27 @@ else:
                 "user_id": user_id, "email": email,
                 "display_name": display_name, "created_at": int(time.time()),
             })
+
+    def save_user_identity(user_id, email, display_name):
+        """Write the identity claims a just-verified sign-in proved.
+
+        create_user_if_missing deliberately never touches an existing row, so a
+        row first created without a name - see server.py's /api/me fallback,
+        which has only the token's subject to go on - could never acquire one
+        afterwards, and the header showed "Account" for good. Signing in is the
+        one moment we hold verified values, so that is where they are written.
+
+        Only non-None values are written: a pool that omits the name claim must
+        not erase a name an earlier sign-in already established."""
+        with _lock:
+            row = _users.setdefault(user_id, {
+                "user_id": user_id, "email": None,
+                "display_name": None, "created_at": int(time.time()),
+            })
+            if email is not None:
+                row["email"] = email
+            if display_name is not None:
+                row["display_name"] = display_name
 
     # ---- music_sheet ----
 

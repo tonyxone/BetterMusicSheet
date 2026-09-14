@@ -24,6 +24,9 @@ variable "jobs_table" { type = string }
 variable "secret_parameter" { type = string }
 variable "cognito_pool" { type = string }
 variable "cognito_client" { type = string }
+# Hosted-UI base URL. The API needs it to trade a social sign-in's
+# authorization code for tokens at {domain}/oauth2/token - see ../../auth.py.
+variable "cognito_domain" { type = string }
 variable "api_domain" { type = string }
 variable "certificate_arn" { type = string }
 variable "origins" { type = list(string) }

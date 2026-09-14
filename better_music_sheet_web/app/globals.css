@@ -302,6 +302,41 @@ details.options[open] summary::before { content: "▾ "; }
   margin: 0 0 16px; padding: 10px 12px; border-radius: 10px; font-size: 13.5px;
   background: var(--danger-bg); color: var(--danger);
 }
+.modal-social { display: flex; flex-direction: column; gap: 10px; margin-bottom: 4px; }
+/* Shared shape only. Every colour lives in the per-provider rules below and is
+   hardcoded rather than drawn from this site's palette: Google's white button
+   and Apple's black one are part of each mark's brand requirements, so they
+   must not shift with the surrounding theme. */
+.modal-social-btn {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  height: 46px; border-radius: 999px; border: 1px solid transparent;
+  font: inherit; font-size: 15px; font-weight: 600; letter-spacing: 0.01em;
+  text-decoration: none; cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+.modal-social-btn svg { flex: none; }
+
+.modal-social-btn.google {
+  background: #fff; border-color: #dadce0; color: #3c4043;
+}
+.modal-social-btn.google:hover {
+  background: #f8f9fa; box-shadow: 0 1px 3px rgba(60, 64, 67, 0.2);
+}
+
+.modal-social-btn.apple {
+  background: #000; color: #fff;
+}
+.modal-social-btn.apple:hover { background: #1a1a1a; }
+
+.modal-social-btn.facebook {
+  background: #1877f2; color: #fff;
+}
+.modal-social-btn.facebook:hover { background: #166fe0; }
+.modal-divider {
+  display: flex; align-items: center; gap: 12px; margin: 18px 0;
+  color: var(--ink-soft); font-size: 12.5px;
+}
+.modal-divider::before, .modal-divider::after { content: ""; flex: 1; height: 1px; background: var(--paper-deep); }
 .modal-field { display: block; margin-bottom: 16px; }
 .modal-field > span { display: block; margin-bottom: 6px; font-size: 13.5px; font-weight: 600; color: var(--ink); }
 .modal-field > span em { font-weight: 400; font-style: normal; color: var(--ink-soft); }

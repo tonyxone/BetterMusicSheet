@@ -14,8 +14,51 @@
 
 const REGION = process.env.NEXT_PUBLIC_COGNITO_REGION;
 const CLIENT_ID = process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID;
+// Hosted-UI base URL. Only social sign-in needs it - see socialSignInUrl
+// below - because that is the one flow Cognito insists on redirecting for;
+// email/password stays on this page, calling the API above directly.
+const DOMAIN = process.env.NEXT_PUBLIC_COGNITO_DOMAIN;
 
 export const isCognitoConfigured = Boolean(REGION && CLIENT_ID);
+
+/** Which social buttons to show, from a build-time comma list
+ * (terraform output cognito_social_providers). Empty until at least one
+ * provider has real credentials configured in infra/cognito-idp.tf. */
+export type SocialProvider = "Google" | "Facebook" | "SignInWithApple";
+
+export const configuredSocialProviders: SocialProvider[] = (
+  process.env.NEXT_PUBLIC_COGNITO_SOCIAL_PROVIDERS ?? ""
+)
+  .split(",")
+  .map((s) => s.trim())
+  .filter((s): s is SocialProvider => s === "Google" || s === "Facebook" || s === "SignInWithApple");
+
+/** This app's own callback route - has to match next.config.ts's
+ * trailingSlash setting and the app client's registered callback_urls (see
+ * infra/cognito.tf) exactly, byte for byte, or Cognito refuses the redirect.
+ * Computed rather than hardcoded so it's correct on localhost too. */
+export function callbackRedirectUri(): string {
+  return `${window.location.origin}/auth/callback/`;
+}
+
+/** The hosted-UI URL that starts a social sign-in. The browser is sent here
+ * directly (a real navigation, not fetch) - the provider's own login page has
+ * to be able to set its own cookies and show its own UI, which an XHR can't
+ * do. `redirectUri` must exactly match one of the app client's callback_urls
+ * (see infra/cognito.tf) - Cognito rejects anything else outright. */
+export function socialSignInUrl(provider: SocialProvider, redirectUri: string): string {
+  if (!isCognitoConfigured || !DOMAIN) {
+    throw new CognitoError("NotConfigured", "Social sign-in isn't configured for this build.");
+  }
+  const params = new URLSearchParams({
+    identity_provider: provider,
+    redirect_uri: redirectUri,
+    response_type: "code",
+    client_id: CLIENT_ID!,
+    scope: "openid email profile",
+  });
+  return `${DOMAIN}/oauth2/authorize?${params.toString()}`;
+}
 
 export type CognitoTokens = {
   IdToken: string;

@@ -14,7 +14,13 @@ resource "aws_lambda_function" "api" {
   timeout                        = 25
   reserved_concurrent_executions = 10
   environment {
-    variables = merge(local.environment, { BACKEND_JWT_SECRET_PARAMETER = var.secret_parameter })
+    # COGNITO_DOMAIN is set here rather than in local.environment because only
+    # the API completes a sign-in; giving it to the worker too would churn a
+    # task-definition revision for a variable it never reads.
+    variables = merge(local.environment, {
+      BACKEND_JWT_SECRET_PARAMETER = var.secret_parameter
+      COGNITO_DOMAIN               = var.cognito_domain
+    })
   }
   logging_config {
     log_format = "Text"

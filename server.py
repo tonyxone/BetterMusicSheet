@@ -25,6 +25,7 @@ import db
 import storage
 from auth import (
     BACKEND_JWT_LIFETIME_SECONDS,
+    exchange_authorization_code,
     get_current_user_id,
     get_signed_in_user_id,
     mint_backend_token,
@@ -127,21 +128,60 @@ class TokenRequest(BaseModel):
     id_token: str
 
 
-@app.post("/api/auth/token")
-def exchange_token(body: TokenRequest):
-    """Sign-in, step 2: trade a verified Cognito ID token for one of ours.
+class SocialTokenRequest(BaseModel):
+    """What the callback page posts back after a hosted-UI round trip."""
+    code: str = Field(min_length=1, max_length=4096)
+    redirect_uri: str = Field(min_length=1, max_length=2048)
 
-    This is also the only place a `users` row is ever created - guests never
-    get one (see db.py)."""
-    user_id, email, display_name = verify_cognito_id_token(body.id_token)
-    db.create_user_if_missing(user_id, email, display_name)
-    user = db.get_user(user_id)
+
+def _session_from_id_token(id_token):
+    """Verify a Cognito ID token and turn it into one of our own sessions.
+
+    Shared by both sign-in routes below so a password sign-in and a social one
+    are indistinguishable from here on: same verification, same user row, same
+    token shape. This is also the only place a `users` row is ever created -
+    guests never get one (see db.py)."""
+    user_id, email, display_name = verify_cognito_id_token(id_token)
+    # Not create-if-missing: a row that already exists without a name has to be
+    # able to gain one, or a user whose row was recreated by /api/me is stuck
+    # being called "Account" no matter how often they sign in again. Writing
+    # only the claims that are present also matters for Apple, which sends a
+    # name on the first authorization and never again.
+    db.save_user_identity(user_id, email, display_name)
     return {
         "access_token": mint_backend_token(user_id),
         "token_type": "Bearer",
         "expires_in": BACKEND_JWT_LIFETIME_SECONDS,
-        "user": user,
+        "user": db.get_user(user_id),
     }
+
+
+@app.post("/api/auth/token")
+def exchange_token(body: TokenRequest):
+    """Sign-in, step 2: trade a verified Cognito ID token for one of ours."""
+    return _session_from_id_token(body.id_token)
+
+
+@app.post("/api/auth/social")
+def exchange_social_code(body: SocialTokenRequest):
+    """Google/Apple/Facebook sign-in, step 2.
+
+    Those providers collect credentials on their own pages, so the browser
+    returns from the hosted UI holding an authorization code rather than a
+    token. Trading it happens server-side (see auth.exchange_authorization_code),
+    after which this is an ordinary sign-in.
+
+    Federated users are separate accounts by design - Cognito does not match
+    them to an existing password account by email, and this project does not
+    link them (see infra/cognito-idp.tf)."""
+    id_token, refresh_token = exchange_authorization_code(body.code, body.redirect_uri)
+    session = _session_from_id_token(id_token)
+    # Unlike the password flow - where the frontend calls Cognito directly and
+    # already holds a refresh token - this exchange is the only place a social
+    # session ever sees one. Without passing it through, sign-in would work
+    # but silently stop renewing after BACKEND_JWT_LIFETIME_SECONDS.
+    session["refresh_token"] = refresh_token
+    return session
 
 
 @app.get("/api/me")

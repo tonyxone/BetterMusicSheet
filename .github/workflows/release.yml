@@ -254,13 +254,18 @@ jobs:
       # NEXT_PUBLIC_* values are inlined into the bundle at build time, not
       # read at runtime - a static export has no server to read them from.
       # Leaving the Cognito pair unset just hides the Sign in button (see
-      # lib/cognito.ts); `terraform output` supplies both values.
+      # lib/cognito.ts); `terraform output` supplies all four values. The
+      # social pair is optional on top of that - empty just means no social
+      # buttons render, the same way an empty Cognito pair hides sign-in
+      # entirely (see cognito_hosted_ui_domain / cognito_social_providers).
       - name: Build static export
         working-directory: better_music_sheet_web
         env:
           NEXT_PUBLIC_API_BASE: https://${{ vars.API_SUBDOMAIN }}
           NEXT_PUBLIC_COGNITO_REGION: ${{ vars.AWS_REGION }}
           NEXT_PUBLIC_COGNITO_CLIENT_ID: ${{ vars.COGNITO_APP_CLIENT_ID }}
+          NEXT_PUBLIC_COGNITO_DOMAIN: ${{ vars.COGNITO_HOSTED_UI_DOMAIN }}
+          NEXT_PUBLIC_COGNITO_SOCIAL_PROVIDERS: ${{ vars.COGNITO_SOCIAL_PROVIDERS }}
         run: npm run build
 
       - name: Configure AWS credentials

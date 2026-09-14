@@ -14,3 +14,42 @@ serverless_spot_burst   = false
 alert_email = "your-address@example.com"
 # An AWS Budget at $25/$50/$100. Leave unset if you already keep your own.
 # budget_email = "your-address@example.com"
+
+# ---- Social sign-in (optional) --------------------------------------------
+# Each provider appears on the user pool only once its credentials are filled
+# in here, so you can enable them one at a time. Leaving a block commented out
+# simply means that button is not offered.
+#
+# These are secrets: this file is gitignored (infra/**/*.tfvars), and the
+# values also land in terraform.tfstate, which is gitignored for the same
+# reason. Supply them as TF_VAR_* environment variables instead if you would
+# rather they never touch disk.
+#
+# NOTE: a social sign-in creates a SEPARATE account from a password sign-in
+# with the same email address - Cognito does not link them, and this project
+# deliberately does not either. See infra/cognito-idp.tf.
+
+# Google: console.cloud.google.com -> APIs & Services -> Credentials -> OAuth
+# client ID (type "Web application"). Authorised redirect URI must be
+# https://<cognito_hosted_ui_domain>/oauth2/idpresponse
+# google_client_id     = "1234567890-abc.apps.googleusercontent.com"
+# google_client_secret = "GOCSPX-..."
+
+# Facebook: developers.facebook.com -> your app -> Facebook Login. Valid OAuth
+# redirect URI is the same /oauth2/idpresponse URL as above.
+# facebook_app_id     = "1234567890123456"
+# facebook_app_secret = "..."
+
+# Apple: developer.apple.com. You need a Services ID (NOT an app bundle id)
+# with Sign in with Apple enabled, its return URL set to the same
+# /oauth2/idpresponse URL, plus a Sign in with Apple key (.p8). Apple sends the
+# user's name only on their FIRST authorization, so a mistake here cannot be
+# retried without removing the app from the account's Apple ID settings.
+# apple_services_id = "com.bettermusicsheet.signin"
+# apple_team_id     = "ABCDE12345"
+# apple_key_id      = "KEY1234567"
+# apple_private_key = <<-EOT
+#   -----BEGIN PRIVATE KEY-----
+#   ...
+#   -----END PRIVATE KEY-----
+# EOT

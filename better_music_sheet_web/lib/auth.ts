@@ -14,7 +14,7 @@
 // Signing in is optional everywhere - a signed-out visitor uploads under an
 // anonymous guest id instead (see guest-id.ts).
 import { API_BASE, type User } from "./api";
-import { isCognitoConfigured, refreshTokens, signInWithPassword, type CognitoTokens } from "./cognito";
+import { isCognitoConfigured, refreshTokens, signInWithPassword } from "./cognito";
 
 const SESSION_KEY = "bms_auth";
 
@@ -52,15 +52,20 @@ function clearSession() {
   localStorage.removeItem(SESSION_KEY);
 }
 
-/** Trade a Cognito ID token for our backend's own token, plus the user row
- * it creates on first sign-in. */
-async function exchangeWithBackend(tokens: CognitoTokens, refreshToken: string | null): Promise<Session> {
+/** POST to one of the backend's two sign-in-completion routes and return its
+ * parsed body. Shared because a password sign-in and a social one converge
+ * here: same request shape, same errors. What differs is where each one's
+ * refresh token comes from, so building the Session is left to the caller
+ * (see the two functions below) rather than folded in here too. */
+async function postForSession(path: string, body: Record<string, unknown>): Promise<{
+  access_token: string; expires_in?: number; refresh_token?: string; user: User;
+}> {
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}/api/auth/token`, {
+    res = await fetch(`${API_BASE}${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id_token: tokens.IdToken }),
+      body: JSON.stringify(body),
     });
   } catch {
     // Same reasoning as cognito.ts: a transport failure surfaces only as
@@ -77,7 +82,10 @@ async function exchangeWithBackend(tokens: CognitoTokens, refreshToken: string |
       .catch(() => null);
     throw new Error(detail || `Sign-in failed (${res.status}).`);
   }
-  const data = await res.json();
+  return res.json();
+}
+
+function storeSession(data: { access_token: string; expires_in?: number; user: User }, refreshToken: string | null): Session {
   const session: Session = {
     token: data.access_token,
     expiresAt: Math.floor(Date.now() / 1000) + (data.expires_in ?? 3600),
@@ -92,7 +100,20 @@ async function exchangeWithBackend(tokens: CognitoTokens, refreshToken: string |
 export async function signIn(email: string, password: string): Promise<Session> {
   if (!isAuthConfigured) throw new Error("Cognito is not configured");
   const tokens = await signInWithPassword(email, password);
-  return exchangeWithBackend(tokens, tokens.RefreshToken ?? null);
+  const data = await postForSession("/api/auth/token", { id_token: tokens.IdToken });
+  return storeSession(data, tokens.RefreshToken ?? null);
+}
+
+/** Finish a social sign-in: the callback page has an authorization code from
+ * the hosted-UI redirect, and the backend does the rest (see POST
+ * /api/auth/social). Unlike the password flow, this browser never sees a
+ * Cognito token of its own - the refresh token comes back IN this response
+ * instead, since that exchange is the only place either side of this ever
+ * sees one. */
+export async function signInWithSocialCode(code: string, redirectUri: string): Promise<Session> {
+  if (!isAuthConfigured) throw new Error("Cognito is not configured");
+  const data = await postForSession("/api/auth/social", { code, redirect_uri: redirectUri });
+  return storeSession(data, data.refresh_token ?? null);
 }
 
 /** The current backend token, refreshed if it's expired or about to be.
@@ -107,9 +128,13 @@ export async function getAccessToken(): Promise<string | null> {
     return null;
   }
   try {
+    // Cognito's refresh grant works the same regardless of how the refresh
+    // token was originally issued - password sign-in or a social one - so
+    // this one path covers both.
     const tokens = await refreshTokens(session.refreshToken);
+    const data = await postForSession("/api/auth/token", { id_token: tokens.IdToken });
     // Cognito doesn't return a new refresh token on this grant - keep ours.
-    const refreshed = await exchangeWithBackend(tokens, session.refreshToken);
+    const refreshed = storeSession(data, session.refreshToken);
     return refreshed.token;
   } catch {
     // Refresh token expired or revoked: drop back to guest rather than
