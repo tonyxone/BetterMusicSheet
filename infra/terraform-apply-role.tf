@@ -225,9 +225,20 @@ data "aws_iam_policy_document" "github_terraform_apply" {
   statement { # modules/serverless/storage.tf v2 files bucket (full management).
     # ListBucket/HeadBucket back the provider's existence check on refresh -
     # without it, an AccessDenied there reads as "bucket is gone", and apply
-    # then tries (and fails) to recreate a bucket that already exists.
-    sid       = "ServerlessFilesBucket"
-    actions   = ["s3:CreateBucket", "s3:DeleteBucket", "s3:ListBucket", "s3:HeadBucket", "s3:PutBucketVersioning", "s3:GetBucketVersioning", "s3:PutEncryptionConfiguration", "s3:GetEncryptionConfiguration", "s3:PutBucketPublicAccessBlock", "s3:GetBucketPublicAccessBlock", "s3:PutBucketCORS", "s3:GetBucketCORS", "s3:PutLifecycleConfiguration", "s3:GetLifecycleConfiguration", "s3:PutBucketNotification", "s3:GetBucketNotification", "s3:PutBucketTagging", "s3:GetBucketTagging", "s3:GetBucketLocation", "s3:GetBucketAcl", "s3:PutBucketAcl", "s3:GetBucketPolicy"]
+    # then tries (and fails) to recreate a bucket that already exists. The
+    # aws_s3_bucket resource also reads back a long list of optional
+    # sub-configs on every refresh regardless of whether this config sets
+    # them (website, logging, replication, etc.) - granted here as a batch,
+    # having already found several of these one AccessDenied at a time.
+    sid = "ServerlessFilesBucket"
+    actions = ["s3:CreateBucket", "s3:DeleteBucket", "s3:ListBucket", "s3:HeadBucket", "s3:PutBucketVersioning", "s3:GetBucketVersioning",
+      "s3:PutEncryptionConfiguration", "s3:GetEncryptionConfiguration", "s3:PutBucketPublicAccessBlock", "s3:GetBucketPublicAccessBlock",
+      "s3:PutBucketCORS", "s3:GetBucketCORS", "s3:PutLifecycleConfiguration", "s3:GetLifecycleConfiguration", "s3:PutBucketNotification",
+      "s3:GetBucketNotification", "s3:PutBucketTagging", "s3:GetBucketTagging", "s3:GetBucketLocation", "s3:GetBucketAcl", "s3:PutBucketAcl",
+      "s3:GetBucketPolicy", "s3:GetBucketWebsite", "s3:GetBucketLogging", "s3:GetBucketRequestPayment", "s3:GetBucketOwnershipControls",
+      "s3:GetAccelerateConfiguration", "s3:GetReplicationConfiguration", "s3:GetBucketObjectLockConfiguration", "s3:GetAnalyticsConfiguration",
+      "s3:GetIntelligentTieringConfiguration", "s3:GetMetricsConfiguration", "s3:GetInventoryConfiguration",
+    ]
     resources = ["arn:aws:s3:::better-music-sheet-v2-files-${var.account_id}"]
   }
   statement { # modules/serverless/storage.tf CORS added to the pre-existing legacy bucket only
