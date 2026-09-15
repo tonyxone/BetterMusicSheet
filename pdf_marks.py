@@ -88,7 +88,11 @@ def octave_intervals(page, staff_lines):
         text = span['text'].strip()
         amount = OCTAVES.get(ord(text)) if len(text) == 1 else None
         if amount is None:
-            amount = {'8': 1, '8va': 1, '8vb': 1, '15': 2, '15ma': 2, '22': 3}.get(text)
+            # Some exporters draw the dashed continuation as literal hyphens
+            # appended to the label itself ('8va-', '8--') instead of a
+            # separate line drawing, so strip trailing dashes before lookup.
+            label = re.sub(r'-+$', '', text)
+            amount = {'8': 1, '8va': 1, '8vb': 1, '15': 2, '15ma': 2, '22': 3}.get(label)
         if amount is None:
             continue
         x0, y0, x1, y1 = span['bbox']

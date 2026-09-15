@@ -384,6 +384,15 @@ class AccuracyTests(unittest.TestCase):
         page.get_drawings = lambda: []
         self.assertEqual(pdf_marks.octave_intervals(page, {1: (40, 50, 60, 70, 80)}), {})
 
+    def test_pdf_octave_label_with_embedded_dashes_is_recognized(self):
+        from types import SimpleNamespace
+        for label in ('8-', '8--', '8va-', '8va--'):
+            page = SimpleNamespace(get_text=lambda _, label=label: {'blocks': [{'lines': [{'spans': [
+                {'text': label, 'bbox': (20, 20, 28, 30)}]}]}]},
+                get_drawings=lambda: [{'dashes': '[1 1] 0', 'items': [('l', pymupdf.Point(30, 25), pymupdf.Point(180, 25))]}])
+            self.assertEqual(pdf_marks.octave_intervals(page, {1: (40, 50, 60, 70, 80)}),
+                              {1: [(18, 182, 1)]}, msg=label)
+
     def test_pdf_dotted_metronome_units(self):
         from types import SimpleNamespace
         spans = [{'text': '\ueca5', 'bbox': (20, 20, 28, 30)},
