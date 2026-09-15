@@ -480,6 +480,19 @@ function Player({ jobId }: { jobId: string }) {
     [openSignIn, soundOn, baseBpm, instrument],
   );
 
+  // Warm the sampler as soon as the sheet and instrument choice are known,
+  // so pressing Play doesn't wait on a fetch+decode that could already have
+  // happened while the page was just sitting there. Only sound *output*
+  // needs a user gesture (see ensurePlayback's docstring); decoding doesn't.
+  // Read through a ref so a tempo/mute change (which also changes
+  // ensurePlayback's identity) doesn't retrigger this and flash the loading
+  // hint - only an actual sheet or instrument change should.
+  const ensurePlaybackRef = useRef(ensurePlayback);
+  useEffect(() => { ensurePlaybackRef.current = ensurePlayback; }, [ensurePlayback]);
+  useEffect(() => {
+    if (timeline) void ensurePlaybackRef.current(timeline, instrument);
+  }, [timeline, instrument]);
+
   // Applies mid-playback too, not just at the next press.
   useEffect(() => {
     synthRef.current?.setMuted(!soundOn);
