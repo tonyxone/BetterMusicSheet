@@ -25,6 +25,7 @@ import db
 import storage
 from auth import (
     BACKEND_JWT_LIFETIME_SECONDS,
+    delete_cognito_user,
     exchange_authorization_code,
     get_current_user_id,
     get_signed_in_user_id,
@@ -200,6 +201,35 @@ def me(user_id: str = Depends(get_signed_in_user_id)):
         db.create_user_if_missing(user_id, None, None)
         user = db.get_user(user_id)
     return user
+
+
+@app.delete("/api/me", status_code=204)
+def delete_account(user_id: str = Depends(get_signed_in_user_id)):
+    """Delete the signed-in user's account - required by Apple's App Store
+    guideline 5.1.1(v) for any app that supports account creation.
+
+    Deletes the Cognito account itself (not just this backend's row - a
+    resurrectable "deletion" isn't one), then every row this backend holds
+    for the user: their music_sheet and annotation_job history, and the
+    users row last. Uploaded files in S3 are deliberately left alone for
+    now - only the database and the identity go.
+
+    Cognito goes first and any failure there aborts the whole thing: if it
+    fails partway through, "account still exists in Cognito, rows already
+    gone" is worse than "nothing happened yet, try again" - the former lets
+    a later sign-in quietly recreate the users row and look like the
+    deletion never took full effect."""
+    if user_id is None:
+        raise HTTPException(401, "not signed in")
+    if db.get_in_progress_job(user_id):
+        raise HTTPException(409, "Wait for your current upload to finish before deleting your account.")
+    delete_cognito_user(user_id)
+    for job in db.list_annotation_jobs(user_id):
+        db.delete_annotation_job(job["job_id"])
+    for sheet in db.list_music_sheets(user_id):
+        db.delete_music_sheet(sheet["music_sheet_id"])
+    db.delete_user(user_id)
+    return Response(status_code=204)
 
 
 class UploadRequest(BaseModel):

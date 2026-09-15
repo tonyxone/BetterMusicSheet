@@ -22,6 +22,15 @@ locals {
     Resource  = aws_s3_bucket.files.arn,
     Condition = { StringLike = { "s3:prefix" = ["jobs/*"] } }
   }
+  # DELETE /api/me (server.py) removes the Cognito account itself, not just
+  # this backend's row - required by Apple's App Store guideline 5.1.1(v).
+  # ListUsers is needed because AdminDeleteUser takes a Username, which for a
+  # federated sign-in (Google/Apple) is not the same as the sub this backend
+  # otherwise identifies accounts by.
+  cognito_delete_statement = {
+    Effect   = "Allow", Action = ["cognito-idp:ListUsers", "cognito-idp:AdminDeleteUser"],
+    Resource = "arn:aws:cognito-idp:${var.region}:${data.aws_caller_identity.current.account_id}:userpool/${var.cognito_pool}"
+  }
 }
 
 resource "aws_iam_role" "api" {
@@ -32,6 +41,7 @@ resource "aws_iam_role_policy" "api" {
   role = aws_iam_role.api.id
   policy = jsonencode({ Version = "2012-10-17", Statement = [
     local.logs_statement, local.db_statement, local.new_files_statement, local.list_files_statement,
+    local.cognito_delete_statement,
     { Effect = "Allow", Action = ["s3:GetObject", "s3:DeleteObject"], Resource = "arn:aws:s3:::${var.legacy_bucket}/*" },
     { Effect = "Allow", Action = ["s3:ListBucket"], Resource = "arn:aws:s3:::${var.legacy_bucket}" },
     { Effect = "Allow", Action = ["ssm:GetParameter"], Resource = var.secret_parameter }

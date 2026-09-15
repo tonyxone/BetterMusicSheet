@@ -82,6 +82,9 @@ if IS_PRODUCTION:
             ExpressionAttributeNames=names, ExpressionAttributeValues=values,
         )
 
+    def delete_user(user_id):
+        _users_table.delete_item(Key={"user_id": user_id})
+
     # ---- music_sheet ----
 
     def create_music_sheet(music_sheet_id, user_id, sheet_name):
@@ -199,6 +202,10 @@ else:
                 row["email"] = email
             if display_name is not None:
                 row["display_name"] = display_name
+
+    def delete_user(user_id):
+        with _lock:
+            _users.pop(user_id, None)
 
     # ---- music_sheet ----
 

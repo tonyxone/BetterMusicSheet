@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { Logo } from "./logo";
 import { KeyboardIcon } from "./keyboard-icon";
@@ -8,6 +9,7 @@ import { HistoryIcon } from "./history-icon";
 import { SignInIcon } from "./sign-in-icon";
 import { useAuth } from "./auth-context";
 import { isAuthConfigured } from "@/lib/auth";
+import { clientApiFetch } from "@/lib/client-api";
 
 export function Header() {
   const { user, loading, openSignIn, signOut } = useAuth();
@@ -66,6 +68,10 @@ export function Header() {
 
 function UserMenu({ name, email, onSignOut }: { name: string; email: string | null; onSignOut: () => void }) {
   const [open, setOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [confirmText, setConfirmText] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -83,6 +89,34 @@ function UserMenu({ name, email, onSignOut }: { name: string; email: string | nu
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [open]);
+
+  function closeDeleteAccount() {
+    if (deleting) return;
+    setDeleteOpen(false);
+    setDeleteError(null);
+    setConfirmText("");
+  }
+
+  const confirmTextMatches = confirmText.trim().toLowerCase() === "delete";
+
+  async function confirmDeleteAccount() {
+    if (deleting || !confirmTextMatches) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const res = await clientApiFetch("/api/me", { method: "DELETE" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null) as { detail?: string } | null;
+        throw new Error(body?.detail || `Could not delete your account (${res.status}).`);
+      }
+      // The account (and its Cognito identity) is gone - same cleanup as an
+      // ordinary sign-out: drop the local session and reload signed out.
+      onSignOut();
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : "Could not delete your account.");
+      setDeleting(false);
+    }
+  }
 
   return (
     <div className="nav-menu-root" ref={rootRef}>
@@ -113,8 +147,83 @@ function UserMenu({ name, email, onSignOut }: { name: string; email: string | nu
           >
             Sign out
           </button>
+          <button
+            type="button"
+            className="nav-menu-item danger"
+            role="menuitem"
+            title="Permanently delete your account"
+            onClick={() => {
+              setOpen(false);
+              setDeleteError(null);
+              setDeleteOpen(true);
+            }}
+          >
+            Delete account
+          </button>
         </div>
       )}
+      {deleteOpen &&
+        createPortal(
+          // A plain child of .site-header can't use position:fixed to cover
+          // the viewport - the header's own backdrop-filter makes it the
+          // containing block instead (a CSS rule for filter/transform/etc,
+          // not just this app), which is why this portals to <body> the same
+          // way the sign-in modal already avoids the header by living in
+          // AuthProvider instead of inside it.
+          <div
+            className="modal-backdrop"
+            onMouseDown={(e) => {
+              if (e.target === e.currentTarget) closeDeleteAccount();
+            }}
+          >
+            <div className="modal-card delete-modal" role="alertdialog" aria-modal="true" aria-labelledby="delete-account-title">
+              <button
+                type="button"
+                className="modal-close"
+                onClick={closeDeleteAccount}
+                disabled={deleting}
+                title="Close"
+                aria-label="Close"
+              >
+                <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                  <path d="M4 4l8 8M12 4l-8 8" />
+                </svg>
+              </button>
+              <h2 id="delete-account-title" className="serif modal-title">Delete your account?</h2>
+              <p className="modal-sub">
+                This permanently deletes your account{email ? ` (${email})` : ""} and your sheet
+                history. This can&apos;t be undone.
+              </p>
+              <label className="modal-field">
+                <span>Type <strong>delete</strong> to confirm</span>
+                <input
+                  type="text"
+                  autoComplete="off"
+                  autoFocus
+                  value={confirmText}
+                  onChange={(e) => setConfirmText(e.target.value)}
+                  disabled={deleting}
+                />
+              </label>
+              {deleteError && <p className="modal-error">{deleteError}</p>}
+              <div className="modal-actions">
+                <button type="button" className="btn-pill ghost" title="Keep your account" onClick={closeDeleteAccount} disabled={deleting}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn-pill danger"
+                  title={confirmTextMatches ? "Permanently delete your account" : 'Type "delete" to enable this button'}
+                  onClick={confirmDeleteAccount}
+                  disabled={deleting || !confirmTextMatches}
+                >
+                  {deleting ? "Deleting…" : "Delete account"}
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
