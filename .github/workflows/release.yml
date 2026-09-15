@@ -208,8 +208,8 @@ jobs:
           cluster: ${{ vars.ECS_CLUSTER }}
           wait-for-service-stability: true
 
-  plan-infra:
-    name: Plan Terraform (image tags + any pending infra changes)
+  apply-infra:
+    name: Apply Terraform (image tags + any pending infra changes)
     runs-on: ubuntu-latest
     needs: [preflight, push-image, deploy-legacy, deploy-serverless]
     # Exactly one of the deploy jobs runs and the other is skipped, so this
@@ -229,8 +229,8 @@ jobs:
 
       # cognito-idp.tf switches each social identity provider on the moment
       # its client id var is non-empty. Without this, that var is empty here
-      # (it's never in tfvars - see social-signin-env.sh), and the plan below
-      # would show the real Google/Apple providers as needing destruction.
+      # (it's never in tfvars - see social-signin-env.sh), and the apply
+      # below would destroy the real Google/Apple providers.
       - name: Load social sign-in secrets
         run: |
           source infra/social-signin-env.sh
@@ -273,42 +273,40 @@ jobs:
           echo "api=$API" >> "$GITHUB_OUTPUT"
           echo "worker=$WORKER" >> "$GITHUB_OUTPUT"
 
-      # Plan only - this job never applies. A hand-crafted least-privilege CI
-      # role is exactly the kind of thing that can be missing one read-only
-      # permission the AWS provider needs to CONFIRM a resource still exists;
-      # get that wrong and a real `apply` can read AccessDenied as "this is
-      # gone" and destroy/recreate it. That happened for real once - the v2
-      # files bucket's CORS, notification and public-access-block configs
-      # were actually deleted before the gap was found. So: this job reports
-      # what Terraform would do, and a human runs `apply` themselves (see
-      # infra/README.md) - `-lock=false` for the same reason drift.yml uses
-      # it, this never intends to hold the lock a real apply needs.
-      - name: Plan
+      # `... | tee apply.txt` on its own would let this step report success on
+      # a real terraform failure - a piped command's exit status is the LAST
+      # command's (tee's, which always succeeds), not terraform's. Capture
+      # terraform's own code explicitly instead - a real CI run once reported
+      # "success" on an apply that had actually errored, for exactly this
+      # reason.
+      #
+      # This auto-applies. An earlier version of the CI role hand-enumerated
+      # every action Terraform needed, scoped as tightly as possible - and a
+      # real run proved that dangerous: a missing read-only permission made
+      # the AWS provider read AccessDenied as "this bucket is gone," and it
+      # actually deleted the v2 files bucket's CORS/notification/public-
+      # access-block config before recreating it. The role now uses
+      # PowerUserAccess (see terraform-apply-role.tf) specifically so that
+      # class of failure - AccessDenied on some refresh call nobody
+      # anticipated - can't happen anymore; auto-apply is only safe again
+      # because of that change, not despite it.
+      - name: Apply
         run: |
           set +e
-          terraform -chdir=infra plan -input=false -no-color -lock=false \
+          terraform -chdir=infra apply -input=false -auto-approve \
             -var "enable_serverless=true" \
             -var "serverless_api_image=${{ steps.images.outputs.api }}" \
             -var "serverless_worker_image=${{ steps.images.outputs.worker }}" \
             -var "alert_email=${{ secrets.ALERT_EMAIL }}" \
-            > plan.txt 2>&1
+            > apply.txt 2>&1
           CODE=$?
           set -e
-          tail -80 plan.txt
+          tail -80 apply.txt
           {
-            echo '## Terraform plan (review before applying - this job does not apply)'
-            echo ''
-            echo 'Run the apply yourself once this looks right:'
-            echo ''
-            echo '```bash'
-            echo "terraform -chdir=infra apply \\"
-            echo "  -var enable_serverless=true \\"
-            echo "  -var serverless_api_image=${{ steps.images.outputs.api }} \\"
-            echo "  -var serverless_worker_image=${{ steps.images.outputs.worker }}"
-            echo '```'
+            echo '## Terraform apply'
             echo ''
             echo '```'
-            grep -E '^  # |^Plan:|^No changes|^Error:' plan.txt || tail -30 plan.txt
+            grep -E '^  # |^Plan:|^Apply complete|^No changes|^Error:' apply.txt || tail -30 apply.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$CODE"

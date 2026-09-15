@@ -5,171 +5,45 @@
 # deploy role, so it reuses the same GitHub OIDC subject claim rather than a
 # second trust relationship to hand-configure.
 #
-# This is the one role in this config with write access across nearly every
-# service the stack uses - narrower than PowerUserAccess, but still broad by
-# necessity, because that is what applying infra/*.tf actually requires.
-# Every statement below maps to a resource type actually declared under
-# infra/ or infra/modules/serverless/ - nothing speculative.
+# PowerUserAccess, not a hand-enumerated list of actions. An earlier version
+# of this file tried to name every action Terraform needs, scoped down as
+# tightly as possible - and a real CI run proved that approach dangerous, not
+# just tedious: the AWS provider makes a long list of read-only calls during
+# refresh that aren't obvious from reading infra/*.tf (bucket existence
+# checks, MFA config, log-group lookups, task-definition version lookups...),
+# and missing even one on a resource whose existence-check silently maps
+# AccessDenied to "not found" makes Terraform decide that resource was
+# deleted outside Terraform - and it really did delete and recreate the v2
+# files bucket's CORS/notification/public-access-block config once, before
+# the gap was found. Five rounds of "found one more missing read permission"
+# for S3 ALONE proved this doesn't scale. PowerUserAccess covers virtually
+# every read/write call across every service (excluding IAM and
+# Organizations), which makes that whole failure mode structurally
+# impossible - not "we found every gap," but "there is no gap of that shape
+# left to find."
+#
+# What PowerUserAccess deliberately excludes is IAM management, so this role
+# still needs its own narrow inline policy for that: creating/updating the
+# serverless module's four roles, passing them to Lambda/ECS, and managing
+# its own (and its sibling CI roles') inline policies, since deploy-role.tf
+# declares all of that as Terraform resources too.
 #
 # Bootstrapping note: this role cannot grant itself into existence over
 # OIDC. The first apply that creates it has to run locally, the same way
 # github_drift originally did.
 
-variable "tf_state_bucket_name" {
-  description = "Terraform state bucket - must match infra/backend.hcl"
-  type        = string
-  default     = "bettermusicsheet-tfstate-324752064997"
+resource "aws_iam_role" "github_terraform_apply" {
+  name               = "${var.project}-github-terraform-apply"
+  description        = "Runs terraform apply from the release workflow"
+  assume_role_policy = data.aws_iam_role.github_deploy.assume_role_policy
 }
 
-data "aws_iam_policy_document" "github_terraform_apply" {
-  statement { # Terraform state + lock (S3-native locking, use_lockfile = true)
-    sid       = "TerraformState"
-    actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"]
-    resources = ["arn:aws:s3:::${var.tf_state_bucket_name}", "arn:aws:s3:::${var.tf_state_bucket_name}/*"]
-  }
+resource "aws_iam_role_policy_attachment" "github_terraform_apply" {
+  role       = aws_iam_role.github_terraform_apply.name
+  policy_arn = "arn:aws:iam::aws:policy/PowerUserAccess"
+}
 
-  statement { # acm.tf
-    sid       = "Acm"
-    actions   = ["acm:RequestCertificate", "acm:DescribeCertificate", "acm:DeleteCertificate", "acm:AddTagsToCertificate", "acm:RemoveTagsFromCertificate", "acm:ListTagsForCertificate"]
-    resources = ["arn:aws:acm:*:${var.account_id}:certificate/*"]
-  }
-
-  statement { # route53.tf, and the cert validation records in acm.tf
-    sid       = "Route53"
-    actions   = ["route53:ChangeResourceRecordSets", "route53:GetHostedZone", "route53:ListResourceRecordSets", "route53:ListTagsForResource"]
-    resources = ["arn:aws:route53:::hostedzone/*"]
-  }
-  statement { # these three don't support resource-level scoping
-    sid       = "Route53Account"
-    actions   = ["route53:ListHostedZones", "route53:ListHostedZonesByName", "route53:GetChange"]
-    resources = ["*"]
-  }
-
-  statement { # cloudfront.tf
-    sid       = "CloudFront"
-    actions   = ["cloudfront:CreateDistribution", "cloudfront:GetDistribution", "cloudfront:UpdateDistribution", "cloudfront:DeleteDistribution", "cloudfront:TagResource", "cloudfront:UntagResource", "cloudfront:ListTagsForResource"]
-    resources = ["arn:aws:cloudfront::${var.account_id}:distribution/*"]
-  }
-  statement {
-    sid       = "CloudFrontAccount"
-    actions   = ["cloudfront:ListDistributions"]
-    resources = ["*"]
-  }
-
-  statement { # cognito.tf, cognito-idp.tf
-    sid = "Cognito"
-    actions = [
-      "cognito-idp:CreateUserPool", "cognito-idp:DescribeUserPool", "cognito-idp:UpdateUserPool", "cognito-idp:DeleteUserPool",
-      "cognito-idp:TagResource", "cognito-idp:UntagResource",
-      "cognito-idp:CreateUserPoolClient", "cognito-idp:DescribeUserPoolClient", "cognito-idp:UpdateUserPoolClient", "cognito-idp:DeleteUserPoolClient", "cognito-idp:ListUserPoolClients",
-      "cognito-idp:CreateUserPoolDomain", "cognito-idp:DescribeUserPoolDomain", "cognito-idp:DeleteUserPoolDomain", "cognito-idp:UpdateUserPoolDomain",
-      "cognito-idp:SetUICustomization", "cognito-idp:GetUICustomization",
-      "cognito-idp:CreateIdentityProvider", "cognito-idp:DescribeIdentityProvider", "cognito-idp:UpdateIdentityProvider", "cognito-idp:DeleteIdentityProvider", "cognito-idp:ListIdentityProviders",
-      # Read on every refresh of aws_cognito_user_pool even though this config
-      # never touches MFA - the provider always asks. Found by an actual
-      # AccessDenied in the first real CI apply, not anticipated up front.
-      "cognito-idp:GetUserPoolMfaConfig",
-    ]
-    resources = ["arn:aws:cognito-idp:${var.aws_region}:${var.account_id}:userpool/*"]
-  }
-  statement { # ListUserPools takes no ARN; DescribeUserPoolDomain is keyed by
-    # domain name, not the pool's ARN, so AWS won't scope it either
-    # (confirmed by an actual AccessDenied)
-    sid       = "CognitoAccount"
-    actions   = ["cognito-idp:ListUserPools", "cognito-idp:DescribeUserPoolDomain"]
-    resources = ["*"]
-  }
-
-  statement { # dynamodb.tf, plus the module's control table (storage.tf)
-    sid       = "DynamoDb"
-    actions   = ["dynamodb:CreateTable", "dynamodb:DescribeTable", "dynamodb:UpdateTable", "dynamodb:DeleteTable", "dynamodb:TagResource", "dynamodb:UntagResource", "dynamodb:ListTagsOfResource", "dynamodb:DescribeContinuousBackups", "dynamodb:UpdateContinuousBackups", "dynamodb:DescribeTimeToLive"]
-    resources = ["arn:aws:dynamodb:${var.aws_region}:${var.account_id}:table/better-music-sheet-*"]
-  }
-  statement {
-    sid       = "DynamoDbAccount"
-    actions   = ["dynamodb:ListTables"]
-    resources = ["*"]
-  }
-
-  statement { # modules/serverless/compute.tf (api, controller functions)
-    sid       = "Lambda"
-    actions   = ["lambda:CreateFunction", "lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:UpdateFunctionConfiguration", "lambda:UpdateFunctionCode", "lambda:DeleteFunction", "lambda:TagResource", "lambda:UntagResource", "lambda:ListTags", "lambda:AddPermission", "lambda:RemovePermission", "lambda:GetPolicy", "lambda:ListVersionsByFunction"]
-    resources = ["arn:aws:lambda:${var.aws_region}:${var.account_id}:function:better-music-sheet-v2-*"]
-  }
-
-  statement { # modules/serverless/compute.tf reconcile schedule
-    sid       = "EventBridge"
-    actions   = ["events:PutRule", "events:DescribeRule", "events:PutTargets", "events:RemoveTargets", "events:DeleteRule", "events:ListTargetsByRule", "events:ListTagsForResource", "events:TagResource", "events:UntagResource"]
-    resources = ["arn:aws:events:${var.aws_region}:${var.account_id}:rule/better-music-sheet-v2-*"]
-  }
-
-  statement { # log groups declared in modules/serverless/compute.tf, filter in monitoring.tf
-    sid       = "Logs"
-    actions   = ["logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:PutRetentionPolicy", "logs:ListTagsForResource", "logs:TagResource", "logs:UntagResource", "logs:PutMetricFilter", "logs:DescribeMetricFilters", "logs:DeleteMetricFilter"]
-    resources = ["arn:aws:logs:${var.aws_region}:${var.account_id}:log-group:/better-music-sheet-v2/*"]
-  }
-  statement { # DescribeLogGroups only supports the log-group::log-stream: ARN
-    # shape (confirmed by an actual AccessDenied), not a name-prefixed one
-    sid       = "LogsAccount"
-    actions   = ["logs:DescribeLogGroups"]
-    resources = ["*"]
-  }
-
-  statement { # modules/serverless/monitoring.tf
-    sid       = "Alarms"
-    actions   = ["cloudwatch:PutMetricAlarm", "cloudwatch:DescribeAlarms", "cloudwatch:DeleteAlarms", "cloudwatch:ListTagsForResource", "cloudwatch:TagResource", "cloudwatch:UntagResource"]
-    resources = ["arn:aws:cloudwatch:${var.aws_region}:${var.account_id}:alarm:better-music-sheet-v2-*"]
-  }
-
-  statement {
-    sid       = "Sns"
-    actions   = ["sns:CreateTopic", "sns:GetTopicAttributes", "sns:SetTopicAttributes", "sns:DeleteTopic", "sns:Subscribe", "sns:Unsubscribe", "sns:GetSubscriptionAttributes", "sns:ListSubscriptionsByTopic", "sns:TagResource", "sns:UntagResource", "sns:ListTagsForResource"]
-    resources = ["arn:aws:sns:${var.aws_region}:${var.account_id}:better-music-sheet-v2-alerts"]
-  }
-
-  statement { # modules/serverless/storage.tf (jobs + failed queues)
-    sid       = "Sqs"
-    actions   = ["sqs:CreateQueue", "sqs:GetQueueAttributes", "sqs:SetQueueAttributes", "sqs:DeleteQueue", "sqs:GetQueueUrl", "sqs:TagQueue", "sqs:UntagQueue", "sqs:ListQueueTags"]
-    resources = ["arn:aws:sqs:${var.aws_region}:${var.account_id}:better-music-sheet-v2-*"]
-  }
-  statement {
-    sid       = "SqsAccount"
-    actions   = ["sqs:ListQueues"]
-    resources = ["*"]
-  }
-
-  statement { # modules/serverless/compute.tf worker task definition - ECS does
-    # not support resource-level scoping on these two actions
-    sid       = "EcsTaskDefinitions"
-    actions   = ["ecs:RegisterTaskDefinition", "ecs:DeregisterTaskDefinition", "ecs:DescribeTaskDefinition"]
-    resources = ["*"]
-  }
-  statement {
-    sid       = "EcsService"
-    actions   = ["ecs:CreateService", "ecs:UpdateService", "ecs:DeleteService", "ecs:DescribeServices", "ecs:TagResource", "ecs:UntagResource", "ecs:ListTagsForResource"]
-    resources = ["arn:aws:ecs:${var.aws_region}:${var.account_id}:service/${var.existing_ecs_cluster_name}/better-music-sheet-v2-worker"]
-  }
-  statement {
-    sid       = "EcsClusterRead"
-    actions   = ["ecs:DescribeClusters"]
-    resources = ["arn:aws:ecs:${var.aws_region}:${var.account_id}:cluster/${var.existing_ecs_cluster_name}"]
-  }
-
-  statement { # modules/serverless/compute.tf worker security group - EC2
-    # doesn't support name-prefix scoping for these
-    sid       = "Ec2SecurityGroup"
-    actions   = ["ec2:CreateSecurityGroup", "ec2:DescribeSecurityGroups", "ec2:DeleteSecurityGroup", "ec2:AuthorizeSecurityGroupEgress", "ec2:RevokeSecurityGroupEgress", "ec2:CreateTags", "ec2:DescribeTags"]
-    resources = ["*"]
-  }
-
-  statement { # modules/serverless/compute.tf API Gateway v2 - API Gateway's IAM
-    # model is HTTP-verb actions against management-API resource paths, not
-    # per-resource-type actions
-    sid       = "ApiGatewayV2"
-    actions   = ["apigateway:GET", "apigateway:POST", "apigateway:PUT", "apigateway:PATCH", "apigateway:DELETE"]
-    resources = ["arn:aws:apigateway:${var.aws_region}::/apis/*", "arn:aws:apigateway:${var.aws_region}::/domainnames/*"]
-  }
-
+data "aws_iam_policy_document" "github_terraform_apply_iam" {
   statement { # modules/serverless/iam.tf (api, controller, worker, execution roles)
     sid       = "ServerlessIamRoles"
     actions   = ["iam:CreateRole", "iam:GetRole", "iam:DeleteRole", "iam:PutRolePolicy", "iam:GetRolePolicy", "iam:DeleteRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies", "iam:ListInstanceProfilesForRole", "iam:TagRole", "iam:UntagRole", "iam:ListRoleTags"]
@@ -195,81 +69,12 @@ data "aws_iam_policy_document" "github_terraform_apply" {
       "arn:aws:iam::${var.account_id}:role/${var.project}-github-terraform-apply",
     ]
   }
-
-  statement { # secrets.tf
-    sid       = "BackendJwtParameter"
-    actions   = ["ssm:PutParameter", "ssm:GetParameter", "ssm:GetParameters", "ssm:DeleteParameter", "ssm:AddTagsToResource", "ssm:ListTagsForResource", "ssm:RemoveTagsFromResource"]
-    resources = ["arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/${var.project}/*"]
-  }
-  statement { # DescribeParameters is read on every refresh of the parameter -
-    # AWS scopes it to this account/region wildcard, not a name-prefixed ARN
-    # (confirmed by an actual AccessDenied)
-    sid       = "SsmDescribeParameters"
-    actions   = ["ssm:DescribeParameters"]
-    resources = ["arn:aws:ssm:${var.aws_region}:${var.account_id}:*"]
-  }
-
-  statement { # so the release workflow can load Google/Apple/Facebook creds
-    # via infra/social-signin-env.sh before applying
-    sid       = "SocialSignInSecret"
-    actions   = ["secretsmanager:GetSecretValue"]
-    resources = ["arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:better_music_sheet_singin_provider-*"]
-  }
-
-  statement { # ecr.tf lifecycle policy on the existing, unmanaged repo
-    sid       = "EcrLifecyclePolicy"
-    actions   = ["ecr:PutLifecyclePolicy", "ecr:GetLifecyclePolicy", "ecr:DeleteLifecyclePolicy"]
-    resources = ["arn:aws:ecr:${var.aws_region}:${var.account_id}:repository/${var.existing_ecr_repository_name}"]
-  }
-
-  statement { # modules/serverless/storage.tf v2 files bucket (full management).
-    # ListBucket/HeadBucket back the provider's existence check on refresh -
-    # without it, an AccessDenied there reads as "bucket is gone", and apply
-    # then tries (and fails) to recreate a bucket that already exists. The
-    # aws_s3_bucket resource also reads back a long list of optional
-    # sub-configs on every refresh regardless of whether this config sets
-    # them (website, logging, replication, etc.) - granted here as a batch,
-    # having already found several of these one AccessDenied at a time.
-    sid = "ServerlessFilesBucket"
-    actions = ["s3:CreateBucket", "s3:DeleteBucket", "s3:ListBucket", "s3:HeadBucket", "s3:PutBucketVersioning", "s3:GetBucketVersioning",
-      "s3:PutEncryptionConfiguration", "s3:GetEncryptionConfiguration", "s3:PutBucketPublicAccessBlock", "s3:GetBucketPublicAccessBlock",
-      "s3:PutBucketCORS", "s3:GetBucketCORS", "s3:PutLifecycleConfiguration", "s3:GetLifecycleConfiguration", "s3:PutBucketNotification",
-      "s3:GetBucketNotification", "s3:PutBucketTagging", "s3:GetBucketTagging", "s3:GetBucketLocation", "s3:GetBucketAcl", "s3:PutBucketAcl",
-      "s3:GetBucketPolicy", "s3:GetBucketWebsite", "s3:GetBucketLogging", "s3:GetBucketRequestPayment", "s3:GetBucketOwnershipControls",
-      "s3:GetAccelerateConfiguration", "s3:GetReplicationConfiguration", "s3:GetBucketObjectLockConfiguration", "s3:GetAnalyticsConfiguration",
-      "s3:GetIntelligentTieringConfiguration", "s3:GetMetricsConfiguration", "s3:GetInventoryConfiguration",
-    ]
-    resources = ["arn:aws:s3:::better-music-sheet-v2-files-${var.account_id}"]
-  }
-  statement { # modules/serverless/storage.tf CORS added to the pre-existing legacy bucket only
-    sid       = "LegacyBucketCors"
-    actions   = ["s3:GetBucketCORS", "s3:PutBucketCORS", "s3:GetBucketLocation", "s3:ListBucket", "s3:HeadBucket"]
-    resources = ["arn:aws:s3:::annotated-music-sheet"]
-  }
-
-  statement { # serverless.tf budget - only actually created once budget_email is set
-    sid       = "Budget"
-    actions   = ["budgets:ViewBudget", "budgets:ModifyBudget"]
-    resources = ["arn:aws:budgets::${var.account_id}:budget/${var.project}-monthly"]
-  }
-
-  statement {
-    sid       = "CallerIdentity"
-    actions   = ["sts:GetCallerIdentity"]
-    resources = ["*"]
-  }
 }
 
-resource "aws_iam_role" "github_terraform_apply" {
-  name               = "${var.project}-github-terraform-apply"
-  description        = "Runs terraform apply from the release workflow"
-  assume_role_policy = data.aws_iam_role.github_deploy.assume_role_policy
-}
-
-resource "aws_iam_role_policy" "github_terraform_apply" {
-  name   = "terraform-apply"
+resource "aws_iam_role_policy" "github_terraform_apply_iam" {
+  name   = "terraform-apply-iam"
   role   = aws_iam_role.github_terraform_apply.name
-  policy = data.aws_iam_policy_document.github_terraform_apply.json
+  policy = data.aws_iam_policy_document.github_terraform_apply_iam.json
 }
 
 output "github_terraform_apply_role_arn" {

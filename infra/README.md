@@ -127,26 +127,35 @@ bucket must remain restricted.
 
 This used to be entirely manual (update `serverless_api_image` /
 `serverless_worker_image` in `serverless.tfvars`, then `terraform apply`).
-The release workflow's `plan-infra` job now automates the first half: it
-reads whatever image is actually running right now (the same
+The release workflow's `apply-infra` job now does it automatically: it reads
+whatever image is actually running right now (the same
 `aws lambda get-function` / `aws ecs describe-task-definition` calls
-`drift.yml` uses) and runs `terraform plan` with those as `-var` overrides,
+`drift.yml` uses) and runs `terraform apply` with those as `-var` overrides,
 using a dedicated CI role (`infra/terraform-apply-role.tf`, assumed via
-`TF_APPLY_AWS_ROLE_ARN`). The plan, plus a ready-to-run `terraform apply`
-command with the correct image tags filled in, lands in that job's step
-summary.
+`TF_APPLY_AWS_ROLE_ARN`).
 
-**It deliberately does not apply.** A hand-crafted least-privilege IAM
-policy is exactly the kind of thing that can be missing one read-only
-permission the AWS provider needs to *confirm a resource still exists* -
-get that wrong and `apply` reads AccessDenied as "this was deleted outside
-Terraform" and recreates it for real. That happened once already: a missing
-`s3:ListBucket`/`s3:HeadBucket` grant made the v2 files bucket look gone,
-and Terraform actually deleted its CORS, notification and
-public-access-block configuration before recreating them - silently
-breaking uploads until it was caught and fixed by hand (see the git history
-on `infra/terraform-apply-role.tf` for the exact permissions that were
-missing). So for now, review the plan, then run the apply yourself.
+**This auto-applies, which was not always true here and is worth
+understanding why.** An earlier version of that CI role hand-enumerated
+every action Terraform needed, scoped as tightly as possible - and a real
+run proved that dangerous, not just tedious: the AWS provider makes a long
+list of read-only calls during refresh that aren't obvious from reading
+`infra/*.tf` (bucket existence checks, MFA config, log-group lookups,
+task-definition version lookups...), and missing even one on a resource
+whose existence-check silently maps AccessDenied to "not found" makes
+Terraform decide that resource was deleted outside Terraform - it actually
+deleted the v2 files bucket's CORS, notification and public-access-block
+configuration before recreating them, silently breaking uploads until it was
+caught and fixed by hand. Five rounds of "found one more missing read
+permission" for S3 alone proved that approach doesn't scale to "we're
+confident we found every gap." The role now uses AWS's `PowerUserAccess`
+managed policy instead (plus a small inline policy for the one thing it
+excludes - IAM, needed to manage the serverless module's own roles - see
+`infra/terraform-apply-role.tf`), which makes that whole failure mode
+structurally impossible rather than merely unlikely. Auto-apply is only
+safe again *because* of that change - if this role is ever narrowed back
+down to a hand-picked action list, put the plan-only guard back
+(`git log` on this file has the version that did that, and the reasoning
+for why).
 
 Why the image sync matters at all: the Lambda functions declare
 `ignore_changes` on their image, so the release owns their code and
@@ -160,9 +169,10 @@ the worker to an older image. That happened once too (v0.0.26 → v0.0.23) -
 see the comments in `modules/serverless/compute.tf`.
 
 **This changes what `serverless.tfvars` is for.** Its two image lines are no
-longer kept fresh by habit, so treat them as stale by default. Before any
-apply - the CI-posted one or an unrelated local change - pull the current
-tags the same way the workflow does, and pass them as `-var`:
+longer kept fresh by habit - CI is the one updating the account now, so a
+*local* apply for something unrelated (a Cognito tweak, an alarm threshold)
+should treat them as stale. Pull the current tags the same way the workflow
+does, and pass them as `-var`:
 
 ```bash
 aws lambda get-function --function-name <API_LAMBDA_FUNCTION> --query 'Code.ImageUri' --output text
