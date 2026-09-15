@@ -486,9 +486,18 @@ def prepare_score(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=No
             if h:
                 used.add(h['source_id'])
                 # Corrected PDF clef is authoritative. Otherwise prefer the XML
-                # accidental/key semantics on a positively identified head.
+                # accidental/key semantics on a positively identified head -
+                # except when the note-and-key pass found neither a confident
+                # key signature nor an explicit accidental glyph for this head
+                # (h['alter'] == 0) while XML claims one anyway: Audiveris's
+                # own MusicXML export can bake in the same low-confidence key
+                # glyph its OMR project flagged as unreliable, so that isn't
+                # independent corroboration. One-directional on purpose - this
+                # only ever removes an accidental XML invented, never adds one
+                # XML omitted, so a real accidental XML got right is unaffected.
                 if h['clef_source'] != 'pdf' or h['clef'] == h['recognized_clef']:
-                    h['alter'] = n['alter']
+                    if not (h['alter'] == 0 and n['alter'] != 0):
+                        h['alter'] = n['alter']
                     h['midi'] = midi_of(h['diatonic'], h['alter'])
                 source_diatonic = h['pitch'] + clef_reference(n['clef']['sign'], n['clef']['line'])
                 xml_diatonic = 34 - (n['octave'] * 7 + 'CDEFGAB'.index(n['step']))
