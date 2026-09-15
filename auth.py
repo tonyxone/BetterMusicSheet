@@ -25,6 +25,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import boto3
+from botocore.exceptions import ClientError
 from fastapi import Header, HTTPException
 from jose import JWTError, jwt
 
@@ -257,3 +259,31 @@ def get_signed_in_user_id(authorization: str = Header(None)):
     if authorization and authorization.startswith("Bearer "):
         return _user_id_from_backend_token(authorization.removeprefix("Bearer "))
     return None
+
+
+def delete_cognito_user(sub):
+    """Delete the Cognito account itself - required by Apple's App Store
+    guideline 5.1.1(v): an app that lets someone create an account has to
+    let them delete it, and deletion has to remove the actual account, not
+    just some in-app data next to a Cognito account that still exists.
+
+    AdminDeleteUser takes a Username, which is NOT the same as the sub for a
+    federated sign-in - Cognito assigns Google/Apple users a Username like
+    "Google_<id>" instead, since username_attributes=["email"] only makes
+    email an alias for native accounts (see cognito.tf). So the user has to
+    be looked up by sub first; ListUsers supports filtering on it directly.
+
+    A no-op in local dev (no real pool to call), and idempotent in
+    production - a sub that's already gone is treated as success rather than
+    an error, since the end state ("no such account") is what was asked for
+    either way."""
+    if not is_cognito_configured():
+        return
+    client = boto3.client("cognito-idp", region_name=COGNITO_REGION)
+    try:
+        found = client.list_users(UserPoolId=COGNITO_USER_POOL_ID, Filter=f'sub = "{sub}"').get("Users", [])
+        if not found:
+            return
+        client.admin_delete_user(UserPoolId=COGNITO_USER_POOL_ID, Username=found[0]["Username"])
+    except ClientError as e:
+        raise HTTPException(502, f"Couldn't delete the Cognito account ({e}).")

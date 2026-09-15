@@ -97,6 +97,8 @@ main {
   font-family: inherit; color: var(--ink); cursor: pointer;
 }
 .nav-menu-item:hover { background: var(--paper-deep); }
+.nav-menu-item.danger { color: var(--danger); }
+.nav-menu-item.danger:hover { background: var(--danger-bg); }
 
 /* ---- Shared page wrap ---- */
 .wrap { max-width: 600px; margin: 0 auto; padding: 56px 32px 100px; }
