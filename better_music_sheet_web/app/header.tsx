@@ -33,8 +33,8 @@ export function Header() {
         <Link
           href="/history"
           className="icon-link"
-          title="History"
-          aria-label="History"
+          title="Library"
+          aria-label="Library"
         >
           <HistoryIcon />
         </Link>

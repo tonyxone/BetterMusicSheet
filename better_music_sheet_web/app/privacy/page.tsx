@@ -76,7 +76,7 @@ export default function PrivacyPage() {
 
       <h2>Removing your data</h2>
       <p>
-        Delete individual sheets from the <a href="/history">History</a> page.
+        Delete individual sheets from the <a href="/history">Library</a> page.
         To remove an account and everything attached to it, or to ask what is
         held about you, email{" "}
         <a href="mailto:privacy@bettermusicsheet.com">privacy@bettermusicsheet.com</a>.

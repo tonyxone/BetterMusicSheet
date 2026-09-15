@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { clientApiFetch } from "@/lib/client-api";
 import { KeyboardIcon } from "../keyboard-icon";
@@ -14,11 +14,14 @@ const STATUS_LABEL: Record<AnnotationJob["status"], string> = {
   queued: "Queued",
 };
 
+const PAGE_SIZE = 10;
+
 export default function HistoryPage() {
   const [jobs, setJobs] = useState<AnnotationJob[] | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AnnotationJob | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
     clientApiFetch("/api/sheets")
@@ -26,6 +29,15 @@ export default function HistoryPage() {
       .then(setJobs)
       .catch(() => setJobs([]));
   }, []);
+
+  const pageCount = jobs && jobs.length ? Math.ceil(jobs.length / PAGE_SIZE) : 1;
+  // Clamp rather than reset to 1: deleting the last item on the last page
+  // should land you on the new last page, not jump back to the start.
+  const currentPage = Math.min(page, pageCount);
+  const pageJobs = useMemo(
+    () => jobs?.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE) ?? [],
+    [jobs, currentPage],
+  );
 
   function openDelete(job: AnnotationJob) {
     setDeleteError(null);
@@ -60,8 +72,8 @@ export default function HistoryPage() {
   }
 
   return (
-    <div className="wrap medium">
-      <h1 className="serif">History</h1>
+    <div className="wrap medium history-page">
+      <h1 className="serif">Library</h1>
       <div className="sub" style={{ marginBottom: 30 }}>Sheets you&apos;ve annotated.</div>
 
       {jobs === null ? (
@@ -69,50 +81,83 @@ export default function HistoryPage() {
       ) : jobs.length === 0 ? (
         <div className="history-empty">No sheets annotated yet.</div>
       ) : (
-        <div>
-          {jobs.map((job) => (
-            // A plain div, not the link itself: a Play link sits alongside the
-            // main one below, and an <a> can't nest inside another <a>.
-            <div key={job.job_id} className="history-row">
-              <Link href={`/sheets?job=${job.job_id}`} className="history-row-link">
-                <div className="history-icon">📄</div>
-                <div className="history-info">
-                  <div className="history-title">{job.sheet_name}</div>
-                  <div className="history-meta">{new Date(job.created_at * 1000).toLocaleString()}</div>
-                </div>
-              </Link>
-              {/* Only a finished sheet has a timeline to play back. */}
-              {job.status === "done" && (
-                <Link
-                  href={`/play?job=${job.job_id}`}
-                  className="icon-link"
-                  title="Practice with the keyboard"
-                  aria-label="Practice with the keyboard"
-                >
-                  <KeyboardIcon />
+        <>
+          <div>
+            {pageJobs.map((job) => (
+              <div key={job.job_id} className="history-item">
+                <Link href={`/sheets?job=${job.job_id}`} className="history-row">
+                  <div className="history-icon">📄</div>
+                  <div className="history-info">
+                    <div className="history-title">{job.sheet_name}</div>
+                    <div className="history-meta">{new Date(job.created_at * 1000).toLocaleString()}</div>
+                  </div>
+                  <span className={`history-badge ${job.status}`}>{STATUS_LABEL[job.status]}</span>
                 </Link>
-              )}
-              <span className={`history-badge ${job.status}`}>{STATUS_LABEL[job.status]}</span>
+                <div className="history-actions">
+                  {/* Only a finished sheet has a timeline to play back. */}
+                  {job.status === "done" && (
+                    <Link
+                      href={`/play?job=${job.job_id}`}
+                      className="history-action"
+                      title="Practice with the keyboard"
+                      aria-label="Practice with the keyboard"
+                    >
+                      <KeyboardIcon />
+                    </Link>
+                  )}
+                  <button
+                    type="button"
+                    className="history-action history-delete"
+                    onClick={() => openDelete(job)}
+                    disabled={job.status === "uploading" || job.status === "queued" || job.status === "processing"}
+                    title={
+                      job.status === "uploading" || job.status === "queued" || job.status === "processing"
+                        ? "Wait for processing to finish before deleting"
+                        : `Delete ${job.sheet_name || "sheet"}`
+                    }
+                    aria-label={`Delete ${job.sheet_name || "sheet"}`}
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5m4-5v5" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {pageCount > 1 && (
+            <nav className="pagination" aria-label="Library pages">
               <button
                 type="button"
-                className="history-delete"
-                onClick={() => openDelete(job)}
-                disabled={job.status === "uploading" || job.status === "queued" || job.status === "processing"}
-                title={
-                  job.status === "uploading" || job.status === "queued" || job.status === "processing"
-                    ? "Wait for processing to finish before deleting"
-                    : `Delete ${job.sheet_name || "sheet"}`
-                }
-                aria-label={`Delete ${job.sheet_name || "sheet"}`}
+                className="pagination-btn"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                aria-label="Previous page"
               >
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5m4-5v5" />
-                </svg>
+                ‹
               </button>
-            </div>
-          ))}
-        </div>
+              <span className="pagination-status">Page {currentPage} of {pageCount}</span>
+              <button
+                type="button"
+                className="pagination-btn"
+                onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
+                disabled={currentPage === pageCount}
+                aria-label="Next page"
+              >
+                ›
+              </button>
+            </nav>
+          )}
+        </>
       )}
+
+      <Link href="/" className="upload-fab" title="Upload a sheet" aria-label="Upload a sheet">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 5v14M5 12h14" />
+        </svg>
+        Upload
+      </Link>
 
       {deleteTarget && (
         <div className="modal-backdrop" onMouseDown={(event) => {
