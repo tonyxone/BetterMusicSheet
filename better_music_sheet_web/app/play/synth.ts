@@ -2,6 +2,9 @@ import type { Smplr } from "smplr";
 import { SynthEngine as BasicSynth } from "./basic-synth";
 export { GRACE_SECONDS, midiToFrequency } from "./basic-synth";
 
+// Commit enough audio to survive a brief PDF render or main-thread stall.
+export const AUDIO_LOOKAHEAD_SECONDS = .5;
+
 export const INSTRUMENTS = [
   { id: "grand", name: "Grand piano" },
   { id: "electric", name: "Electric piano · Wurlitzer" },
@@ -27,7 +30,6 @@ export class SynthEngine {
   instrumentId: InstrumentId = "basic";
 
   constructor(private ctx: AudioContext) {
-    this.basic = new BasicSynth(ctx);
     this.master = ctx.createGain();
     this.master.gain.value = .65;
     this.limiter = ctx.createDynamicsCompressor();
@@ -36,6 +38,7 @@ export class SynthEngine {
     this.limiter.ratio.value = 12;
     this.master.connect(this.limiter);
     this.limiter.connect(ctx.destination);
+    this.basic = new BasicSynth(ctx, this.limiter);
   }
   get usesPianoPedal() { return this.instrumentId !== "organ"; }
 
@@ -58,12 +61,27 @@ export class SynthEngine {
             try { return await cache.fetch(url); } catch { return http.fetch(url); }
           } };
           const options = { destination: this.master, storage, volume: 85,
+            // smplr has its own queue. Its window must cover ours so notes
+            // reach native audio nodes now instead of waiting on another timer.
+            scheduler: lib.Scheduler(this.ctx, { lookaheadMs: (AUDIO_LOOKAHEAD_SECONDS + .05) * 1000 }),
             onLoadProgress: ({ loaded, total }: { loaded: number; total: number }) => {
               if (generation === this.generation && !this.disposed) progress(total ? Math.round(loaded / total * 100) : 0);
             } };
+          const sampleNotes = new Set<number>();
+          if (id === "grand") {
+            // notesToLoad selects recorded sample roots, not playable keys.
+            // Include each key's nearest recording in every dynamic layer.
+            for (const layer of lib.LAYERS) {
+              for (const midi of new Set(notes.map(Math.round))) {
+                sampleNotes.add(layer.samples.reduce<number>((nearest, [pitch]) =>
+                  Math.abs(Number(pitch) - midi) < Math.abs(nearest - midi) ? Number(pitch) : nearest,
+                Number(layer.samples[0][0])));
+              }
+            }
+          }
           candidate = id === "grand"
             ? lib.SplendidGrandPiano(this.ctx, { ...options, decayTime: .35,
-                notesToLoad: { notes: [...new Set(notes.map(Math.round))], velocityRange: [1, 127] } })
+                notesToLoad: { notes: [...sampleNotes], velocityRange: [1, 127] } })
             : id === "organ"
               ? lib.Soundfont(this.ctx, { ...options, instrument: "church_organ", kit: "FluidR3_GM", loadLoopData: true })
               : lib.ElectricPiano(this.ctx, { ...options, instrument: id === "cp80" ? "CP80" : "WurlitzerEP200" });
@@ -107,7 +125,11 @@ export class SynthEngine {
     this.basic.setMuted(muted);
     this.master.gain.setTargetAtTime(muted ? 0 : .65, this.ctx.currentTime, .01);
   }
-  allOff() { this.basic.allOff(); this.instrument?.stop(); }
+  allOff() {
+    this.basic.allOff();
+    this.instrument?.scheduler.stop();
+    this.instrument?.stop();
+  }
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
