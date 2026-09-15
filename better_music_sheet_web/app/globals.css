@@ -238,19 +238,30 @@ details.options[open] summary::before { content: "▾ "; }
 }
 .history-row:hover { box-shadow: 0 10px 26px rgba(46, 33, 23, 0.10); transform: translateY(-1px); }
 /* The keyboard/delete buttons used to live inside .history-row itself; now
-   they're their own column beside it, sized to match its height via
+   they sit in a row beside it, each sized to match the card's height via
    align-items:stretch rather than a fixed number that would drift out of
-   sync with the row's real (content-driven) height. */
+   sync with the row's real (content-driven) height. The group keeps a fixed
+   width and right-aligns within it, so a row carrying only the delete button
+   (nothing playable yet) still leaves its card the same width as the rest -
+   otherwise those cards would end a button's worth further right. */
 .history-item { display: flex; align-items: stretch; gap: 10px; margin-bottom: 12px; }
 .history-item .history-row { margin-bottom: 0; flex: 1; min-width: 0; }
-.history-actions { display: flex; flex-direction: column; gap: 10px; flex: none; width: 52px; }
+.history-actions { display: flex; gap: 10px; flex: none; width: 142px; justify-content: flex-end; }
 .history-action {
-  flex: 1; display: flex; align-items: center; justify-content: center;
-  background: var(--card); border: 1px solid var(--paper-deep); border-radius: 12px;
-  color: var(--ink-soft); text-decoration: none; cursor: pointer;
+  width: 52px; flex: none; display: flex; align-items: center; justify-content: center;
+  background: var(--card); border: 1px solid var(--paper-deep); border-radius: 12px; padding: 0;
+  color: var(--ink); text-decoration: none; cursor: pointer;
   transition: box-shadow .15s, color .15s, background .15s, border-color .15s;
 }
 .history-action:hover:not(:disabled) { box-shadow: 0 10px 26px rgba(46, 33, 23, 0.10); color: var(--accent); }
+/* The delete glyph shares a rule with the modal close button further down,
+   which wants 18px; in a 52px row button that reads as a speck. Override the
+   size here only, leaving that rule's stroke styling (and .modal-close)
+   alone. The keyboard icon isn't square, so it sizes itself via its prop. */
+.history-actions .history-delete svg { width: 26px; height: 26px; }
+/* Play is the primary action on a finished sheet, so it gets a wider button
+   and a larger glyph than delete rather than the two reading as equals. */
+.history-play { width: 80px; }
 .history-icon {
   width: 44px; height: 56px; background: var(--paper); border: 1px solid var(--paper-deep); border-radius: 6px;
   flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 18px;
@@ -271,6 +282,27 @@ details.options[open] summary::before { content: "▾ "; }
 .history-empty {
   border: 2px dashed var(--paper-deep); border-radius: 16px; padding: 40px; text-align: center;
   color: var(--ink-soft); font-size: 14.5px;
+}
+/* One library row packs an icon, two lines of text, a status badge and up to
+   two action buttons onto a single line. Below this width they stop fitting
+   and the flex squeeze lands on the sheet name first - the one thing you
+   actually scan the list for - collapsing it to nothing. Tighten the spacing
+   and shrink the buttons instead. The badge stays: "Processing"/"Failed" is
+   the reason to look at a row, so it can't be the thing that's dropped. */
+@media (max-width: 560px) {
+  .wrap.medium { padding-left: 16px; padding-right: 16px; }
+  .history-item { gap: 8px; }
+  .history-actions { width: 98px; gap: 8px; }
+  .history-action { width: 36px; }
+  .history-play { width: 54px; }
+  /* The timestamp is long enough to wrap to three lines in the narrow card,
+     which triples the row height for information nobody reads word by word.
+     Clip it instead - the date, the part that identifies the upload, stays. */
+  .history-meta { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .history-row { gap: 12px; padding: 14px; }
+  .history-icon { width: 34px; height: 44px; font-size: 15px; }
+  .history-badge { font-size: 11px; padding: 4px 8px; }
+  .history-title { font-size: 15.5px; }
 }
 .pagination { display: flex; align-items: center; justify-content: center; gap: 18px; margin-top: 24px; }
 .pagination-btn {

@@ -98,11 +98,11 @@ export default function HistoryPage() {
                   {job.status === "done" && (
                     <Link
                       href={`/play?job=${job.job_id}`}
-                      className="history-action"
+                      className="history-action history-play"
                       title="Practice with the keyboard"
                       aria-label="Practice with the keyboard"
                     >
-                      <KeyboardIcon />
+                      <KeyboardIcon size={40} />
                     </Link>
                   )}
                   <button
