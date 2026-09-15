@@ -34,9 +34,9 @@ import {
   noteName,
 } from "./keyboard-layout";
 
-const WHITE_D = 6.25;
+const WHITE_D = 5.6;
 const WHITE_H = 0.55;
-const BLACK_D = 3.75;
+const BLACK_D = 3.36;
 const BLACK_H = 0.95;
 
 const COLOR_WHITE = 0xfbf9f4;
