@@ -416,6 +416,9 @@ function Player({ jobId }: { jobId: string }) {
         ctxRef.current = new Ctor();
         synthRef.current = new SynthEngine(ctxRef.current);
         synthRef.current.setMuted(!soundOn);
+        // Best-effort: ask the browser not to evict the cached sample files
+        // under storage pressure. Unsupported (e.g. Safari) or refused is fine.
+        navigator.storage?.persist?.().catch(() => {});
       }
       ctxRef.current.resume().catch(() => {});
       setAudioError("");
@@ -428,11 +431,28 @@ function Player({ jobId }: { jobId: string }) {
       try {
         await synthRef.current!.load(chosen, [...tl.notes, ...(tl.audio_notes ?? [])].map((n) => n.midi), setAudioProgress);
       } catch {
-        if (request === audioRequest.current) {
+        if (request !== audioRequest.current) return null;
+        // The sampled instruments need a network fetch; the basic synth is
+        // pure oscillators and always available. Fall back rather than
+        // leaving playback broken because of a flaky connection.
+        if (chosen === "basic") {
+          setAudioError("Could not load the offline synth.");
+          setAudioLoading(false);
+          return null;
+        }
+        try {
+          await synthRef.current!.load("basic", []);
+        } catch {
           setAudioError("Could not load this instrument. Try again or choose Basic synth (offline).");
           setAudioLoading(false);
+          return null;
         }
-        return null;
+        if (request !== audioRequest.current || !ctxRef.current) return null;
+        setInstrument("basic");
+        setAudioError(
+          `Couldn't load ${INSTRUMENTS.find((i) => i.id === chosen)?.name ?? "the selected instrument"} ` +
+          "(check your connection) — playing with the offline synth instead."
+        );
       }
       if (request !== audioRequest.current || !ctxRef.current) return null;
       setAudioLoading(false);
