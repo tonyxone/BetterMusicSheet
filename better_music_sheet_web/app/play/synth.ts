@@ -5,6 +5,12 @@ export { GRACE_SECONDS, midiToFrequency } from "./basic-synth";
 // Commit enough audio to survive a brief PDF render or main-thread stall.
 export const AUDIO_LOOKAHEAD_SECONDS = .5;
 
+// Samples were originally fetched from third-party GitHub Pages hosts
+// (smpldsnds.github.io, gleitz.github.io); mirrored here so playback doesn't
+// depend on them, and so they ride the same CDN as the rest of the app.
+// See public/instrument-credits.txt for the original sources and licenses.
+const SAMPLES_BASE = "/instrument-samples";
+
 export const INSTRUMENTS = [
   { id: "grand", name: "Grand piano" },
   { id: "electric", name: "Electric piano · Wurlitzer" },
@@ -81,10 +87,17 @@ export class SynthEngine {
           }
           candidate = id === "grand"
             ? lib.SplendidGrandPiano(this.ctx, { ...options, decayTime: .35,
+                baseUrl: `${SAMPLES_BASE}/grand`,
                 notesToLoad: { notes: [...sampleNotes], velocityRange: [1, 127] } })
             : id === "organ"
-              ? lib.Soundfont(this.ctx, { ...options, instrument: "church_organ", kit: "FluidR3_GM", loadLoopData: true })
-              : lib.ElectricPiano(this.ctx, { ...options, instrument: id === "cp80" ? "CP80" : "WurlitzerEP200" });
+              ? lib.Soundfont(this.ctx, { ...options,
+                  instrumentUrl: `${SAMPLES_BASE}/organ/church_organ.js`,
+                  loopDataUrl: `${SAMPLES_BASE}/organ/church_organ-loop.json` })
+              : id === "cp80"
+                ? lib.ElectricPiano(this.ctx, { ...options, instrument: "CP80",
+                    baseUrl: `${SAMPLES_BASE}/cp80`, sfzUrl: `${SAMPLES_BASE}/cp80/CP80.sfz` })
+                : lib.ElectricPiano(this.ctx, { ...options, instrument: "WurlitzerEP200",
+                    baseUrl: `${SAMPLES_BASE}/wurlitzer`, sfzUrl: `${SAMPLES_BASE}/wurlitzer/wurlitzer-ep200.sfz` });
           this.pending = candidate;
           await candidate.ready;
         }

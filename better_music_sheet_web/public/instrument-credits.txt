@@ -16,5 +16,6 @@ Church Organ: FluidR3 GM by Frank Wen; prerendered audio distributed by
 Benjamin Gleitzman and contributors under CC BY 3.0, used through smplr.
 https://github.com/gleitz/midi-js-soundfonts
 
-Samples are fetched on demand from upstream public sample hosting and cached
-in this browser when available. No uploaded score is sent to sample hosts.
+Samples are mirrored in this app's own /instrument-samples/ and fetched from
+there on demand, cached in this browser when available. No uploaded score is
+sent anywhere for playback.
