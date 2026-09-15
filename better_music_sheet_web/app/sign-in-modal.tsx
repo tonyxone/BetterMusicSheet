@@ -70,6 +70,7 @@ function SocialButtons() {
   if (!isCognitoConfigured || configuredSocialProviders.length === 0) return null;
   return (
     <>
+      <div className="modal-divider">or</div>
       <div className="modal-social">
         {configuredSocialProviders.map((provider) => (
           <a
@@ -82,7 +83,6 @@ function SocialButtons() {
           </a>
         ))}
       </div>
-      <div className="modal-divider">or</div>
     </>
   );
 }
@@ -282,11 +282,6 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
         {notice && <p className="modal-notice">{notice}</p>}
         {error && <p className="modal-error">{error}</p>}
 
-        {/* Only on the sign-in screen: a federated provider creates the pool
-            user itself on first use, the same way it signs one in on every
-            later use - there's no separate "create account" step for it. */}
-        {view === "signin" && <SocialButtons />}
-
         <form onSubmit={handleSubmit}>
           {(view === "signin" || view === "signup" || view === "forgot") && (
             <label className="modal-field">
@@ -351,6 +346,11 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
             {submitLabel[view]}
           </button>
         </form>
+
+        {/* Only on the sign-in screen: a federated provider creates the pool
+            user itself on first use, the same way it signs one in on every
+            later use - there's no separate "create account" step for it. */}
+        {view === "signin" && <SocialButtons />}
 
         <div className="modal-links">
           {view === "signin" && (
