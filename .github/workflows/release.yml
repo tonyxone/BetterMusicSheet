@@ -103,11 +103,110 @@ jobs:
           echo "Worker: $REGISTRY/$REPOSITORY:$TAG" >> "$GITHUB_STEP_SUMMARY"
           echo "API: $REGISTRY/$REPOSITORY:api-$TAG" >> "$GITHUB_STEP_SUMMARY"
 
+  apply-infra:
+    name: Apply Terraform (image tags + any pending infra changes)
+    runs-on: ubuntu-latest
+    needs: [preflight, push-image]
+    # Runs before the deploy jobs below, not after: this is the only place
+    # that can create a table, add an environment variable, or grant a
+    # permission the new code is about to need - deploying the code first
+    # would leave a window where it's live without whatever it depends on
+    # (this is exactly how the original migration once broke uploads with
+    # KeyError: 'JOB_CONTROL_TABLE' - see docs/serverless-migration.md).
+    # Only runs for the serverless target - legacy's ECS API isn't
+    # Terraform's to manage (see infra/README.md).
+    if: ${{ !cancelled() && !failure() && needs.preflight.outputs.deploy == 'true' && needs.preflight.outputs.target == 'serverless' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.TF_APPLY_AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-skip-session-tagging: true
+
+      # cognito-idp.tf switches each social identity provider on the moment
+      # its client id var is non-empty. Without this, that var is empty here
+      # (it's never in tfvars - see social-signin-env.sh), and the apply
+      # below would destroy the real Google/Apple providers.
+      - name: Load social sign-in secrets
+        run: |
+          source infra/social-signin-env.sh
+          for name in google_client_id google_client_secret facebook_app_id facebook_app_secret \
+                      apple_services_id apple_team_id apple_key_id apple_private_key; do
+            var="TF_VAR_$name"
+            value="${!var:-}"
+            if [ -n "$value" ]; then
+              echo "$var<<BMS_SECRET_EOF" >> "$GITHUB_ENV"
+              echo "$value" >> "$GITHUB_ENV"
+              echo "BMS_SECRET_EOF" >> "$GITHUB_ENV"
+            fi
+          done
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.14.6
+
+      - name: Initialise against the real backend
+        run: |
+          terraform -chdir=infra init -input=false \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="key=better-music-sheet/terraform.tfstate" \
+            -backend-config="region=${{ vars.AWS_REGION }}"
+
+      # `... | tee apply.txt` on its own would let this step report success on
+      # a real terraform failure - a piped command's exit status is the LAST
+      # command's (tee's, which always succeeds), not terraform's. Capture
+      # terraform's own code explicitly instead - a real CI run once reported
+      # "success" on an apply that had actually errored, for exactly this
+      # reason.
+      #
+      # This auto-applies. An earlier version of the CI role hand-enumerated
+      # every action Terraform needed, scoped as tightly as possible - and a
+      # real run proved that dangerous: a missing read-only permission made
+      # the AWS provider read AccessDenied as "this bucket is gone," and it
+      # actually deleted the v2 files bucket's CORS/notification/public-
+      # access-block config before recreating it. The role now uses
+      # PowerUserAccess (see terraform-apply-role.tf) specifically so that
+      # class of failure - AccessDenied on some refresh call nobody
+      # anticipated - can't happen anymore; auto-apply is only safe again
+      # because of that change, not despite it.
+      #
+      # The image vars are push-image's own output, not a live lookup - this
+      # now runs before deploy-serverless, so there is no "currently
+      # deployed" image yet to query, only the one about to be.
+      - name: Apply
+        env:
+          API_IMAGE: ${{ needs.push-image.outputs.api-image }}
+          WORKER_IMAGE: ${{ needs.push-image.outputs.image }}
+        run: |
+          set +e
+          terraform -chdir=infra apply -input=false -auto-approve \
+            -var "enable_serverless=true" \
+            -var "serverless_api_image=$API_IMAGE" \
+            -var "serverless_worker_image=$WORKER_IMAGE" \
+            -var "alert_email=${{ secrets.ALERT_EMAIL }}" \
+            > apply.txt 2>&1
+          CODE=$?
+          set -e
+          tail -80 apply.txt
+          {
+            echo '## Terraform apply'
+            echo ''
+            echo '```'
+            grep -E '^  # |^Plan:|^Apply complete|^No changes|^Error:' apply.txt || tail -30 apply.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$CODE"
+
   deploy-legacy:
     name: Deploy the ECS API service
     runs-on: ubuntu-latest
-    needs: [preflight, push-image]
-    if: needs.preflight.outputs.deploy == 'true' && needs.preflight.outputs.target == 'legacy'
+    needs: [preflight, push-image, apply-infra]
+    # apply-infra skips itself (rather than failing) for this target, so this
+    # only needs to rule out an actual failure/cancellation, not a skip.
+    if: ${{ !cancelled() && !failure() && needs.preflight.outputs.deploy == 'true' && needs.preflight.outputs.target == 'legacy' }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -143,8 +242,13 @@ jobs:
   deploy-serverless:
     name: Deploy Lambda API and ECS worker
     runs-on: ubuntu-latest
-    needs: [preflight, push-image]
-    if: needs.preflight.outputs.deploy == 'true' && needs.preflight.outputs.target == 'serverless'
+    needs: [preflight, push-image, apply-infra]
+    # apply-infra runs first specifically so the table/env var/permission a
+    # new release depends on exists before this deploys the code that needs
+    # it - if apply-infra genuinely failed, don't deploy on top of half-applied
+    # infra. (It skips itself, rather than failing, for the legacy target, so
+    # this only needs to rule out an actual failure/cancellation, not a skip.)
+    if: ${{ !cancelled() && !failure() && needs.preflight.outputs.deploy == 'true' && needs.preflight.outputs.target == 'serverless' }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -207,109 +311,6 @@ jobs:
           service: ${{ vars.WORKER_ECS_SERVICE }}
           cluster: ${{ vars.ECS_CLUSTER }}
           wait-for-service-stability: true
-
-  apply-infra:
-    name: Apply Terraform (image tags + any pending infra changes)
-    runs-on: ubuntu-latest
-    needs: [preflight, push-image, deploy-legacy, deploy-serverless]
-    # Exactly one of the deploy jobs runs and the other is skipped, so this
-    # waits on "nothing failed" rather than on either one succeeding. Only
-    # runs for the serverless target - legacy's ECS API isn't Terraform's to
-    # manage (see infra/README.md), so there is nothing image-related to sync.
-    if: ${{ !cancelled() && !failure() && needs.preflight.outputs.deploy == 'true' && needs.preflight.outputs.target == 'serverless' }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.TF_APPLY_AWS_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
-          role-skip-session-tagging: true
-
-      # cognito-idp.tf switches each social identity provider on the moment
-      # its client id var is non-empty. Without this, that var is empty here
-      # (it's never in tfvars - see social-signin-env.sh), and the apply
-      # below would destroy the real Google/Apple providers.
-      - name: Load social sign-in secrets
-        run: |
-          source infra/social-signin-env.sh
-          for name in google_client_id google_client_secret facebook_app_id facebook_app_secret \
-                      apple_services_id apple_team_id apple_key_id apple_private_key; do
-            var="TF_VAR_$name"
-            value="${!var:-}"
-            if [ -n "$value" ]; then
-              echo "$var<<BMS_SECRET_EOF" >> "$GITHUB_ENV"
-              echo "$value" >> "$GITHUB_ENV"
-              echo "BMS_SECRET_EOF" >> "$GITHUB_ENV"
-            fi
-          done
-
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.14.6
-
-      - name: Initialise against the real backend
-        run: |
-          terraform -chdir=infra init -input=false \
-            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
-            -backend-config="key=better-music-sheet/terraform.tfstate" \
-            -backend-config="region=${{ vars.AWS_REGION }}"
-
-      # Read the image actually running right now rather than trusting
-      # push-image's output directly - correct regardless of exactly what
-      # deploy-serverless just did, and it's the same technique drift.yml
-      # already uses to avoid ever rolling the worker back (see its comments).
-      - name: Read the deployed image tags
-        id: images
-        run: |
-          API=$(aws lambda get-function --function-name "${{ vars.API_LAMBDA_FUNCTION }}" \
-                  --query 'Code.ImageUri' --output text)
-          TASK=$(aws ecs describe-services --cluster "${{ vars.ECS_CLUSTER }}" \
-                  --services "${{ vars.WORKER_ECS_SERVICE }}" \
-                  --query 'services[0].taskDefinition' --output text)
-          WORKER=$(aws ecs describe-task-definition --task-definition "$TASK" \
-                  --query 'taskDefinition.containerDefinitions[0].image' --output text)
-          echo "api=$API" >> "$GITHUB_OUTPUT"
-          echo "worker=$WORKER" >> "$GITHUB_OUTPUT"
-
-      # `... | tee apply.txt` on its own would let this step report success on
-      # a real terraform failure - a piped command's exit status is the LAST
-      # command's (tee's, which always succeeds), not terraform's. Capture
-      # terraform's own code explicitly instead - a real CI run once reported
-      # "success" on an apply that had actually errored, for exactly this
-      # reason.
-      #
-      # This auto-applies. An earlier version of the CI role hand-enumerated
-      # every action Terraform needed, scoped as tightly as possible - and a
-      # real run proved that dangerous: a missing read-only permission made
-      # the AWS provider read AccessDenied as "this bucket is gone," and it
-      # actually deleted the v2 files bucket's CORS/notification/public-
-      # access-block config before recreating it. The role now uses
-      # PowerUserAccess (see terraform-apply-role.tf) specifically so that
-      # class of failure - AccessDenied on some refresh call nobody
-      # anticipated - can't happen anymore; auto-apply is only safe again
-      # because of that change, not despite it.
-      - name: Apply
-        run: |
-          set +e
-          terraform -chdir=infra apply -input=false -auto-approve \
-            -var "enable_serverless=true" \
-            -var "serverless_api_image=${{ steps.images.outputs.api }}" \
-            -var "serverless_worker_image=${{ steps.images.outputs.worker }}" \
-            -var "alert_email=${{ secrets.ALERT_EMAIL }}" \
-            > apply.txt 2>&1
-          CODE=$?
-          set -e
-          tail -80 apply.txt
-          {
-            echo '## Terraform apply'
-            echo ''
-            echo '```'
-            grep -E '^  # |^Plan:|^Apply complete|^No changes|^Error:' apply.txt || tail -30 apply.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit "$CODE"
 
   deploy-ui:
     name: Build and deploy the web UI

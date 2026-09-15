@@ -127,12 +127,20 @@ bucket must remain restricted.
 
 This used to be entirely manual (update `serverless_api_image` /
 `serverless_worker_image` in `serverless.tfvars`, then `terraform apply`).
-The release workflow's `apply-infra` job now does it automatically: it reads
-whatever image is actually running right now (the same
-`aws lambda get-function` / `aws ecs describe-task-definition` calls
-`drift.yml` uses) and runs `terraform apply` with those as `-var` overrides,
-using a dedicated CI role (`infra/terraform-apply-role.tf`, assumed via
-`TF_APPLY_AWS_ROLE_ARN`).
+The release workflow's `apply-infra` job now does it automatically, using
+the image tags `push-image` just built as `-var` overrides and a dedicated
+CI role (`infra/terraform-apply-role.tf`, assumed via `TF_APPLY_AWS_ROLE_ARN`).
+
+**It runs before the code gets deployed, not after.** `deploy-legacy` and
+`deploy-serverless` both depend on it. The only thing `aws lambda
+update-function-code` / the ECS deploy actions touch is the running
+code/image - a table, an environment variable, or an IAM permission a new
+release depends on only ever comes from `terraform apply`. Deploying code
+that needs one before `apply-infra` has run would leave a window where it's
+live without it, which is exactly how the original serverless migration
+once broke uploads for real (`KeyError: 'JOB_CONTROL_TABLE'` - see
+`docs/serverless-migration.md`). If `apply-infra` fails, both deploy jobs
+are skipped rather than deploying on top of half-applied infra.
 
 **This auto-applies, which was not always true here and is worth
 understanding why.** An earlier version of that CI role hand-enumerated
