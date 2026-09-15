@@ -84,8 +84,11 @@ export default function HistoryPage() {
         <>
           <div>
             {pageJobs.map((job) => (
-              <div key={job.job_id} className="history-item">
-                <Link href={`/sheets?job=${job.job_id}`} className="history-row">
+              // A plain div, not the link itself: the Play link and delete button
+              // sit alongside it inside the same card, and an <a>/<button> can't
+              // nest inside another <a>.
+              <div key={job.job_id} className="history-row">
+                <Link href={`/sheets?job=${job.job_id}`} className="history-row-link">
                   <div className="history-icon">📄</div>
                   <div className="history-info">
                     <div className="history-title">{job.sheet_name}</div>
