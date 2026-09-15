@@ -330,7 +330,7 @@ export function Keyboard3D({
     const out: { midi: number; black: boolean; text: string }[] = [];
     for (let midi = FIRST_MIDI; midi <= LAST_MIDI; midi++) {
       const black = isBlackKey(midi);
-      out.push({ midi, black, text: black ? noteName(midi) : noteName(midi, midi % 12 === 0) });
+      out.push({ midi, black, text: black ? "" : noteName(midi, midi % 12 === 0) });
     }
     return out;
   }, []);
