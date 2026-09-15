@@ -36,9 +36,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setLoading(false);
         return;
       }
-      // Paint the stored name right away; /api/me confirms or corrects it.
+      // Paint the stored name right away and stop blocking the header on
+      // it - /api/me still confirms or corrects it, but in the background.
+      // loading used to stay true until that call returned, so a signed-in
+      // visitor saw no header button at all for a whole network round trip
+      // (header.tsx renders nothing while loading), despite the user state
+      // already being known from the cached session.
       const stored = readSession();
-      if (stored) setUser(stored.user);
+      if (stored) {
+        setUser(stored.user);
+        setLoading(false);
+      }
       try {
         const res = await clientApiFetch("/api/me");
         if (res.ok) setUser(await res.json());
