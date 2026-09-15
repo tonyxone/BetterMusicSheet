@@ -286,7 +286,6 @@ function Player({ jobId }: { jobId: string }) {
   const [soundOn, setSoundOn] = useState(true);
   const [instrument, setInstrument] = useState<InstrumentId>("grand");
   const [audioLoading, setAudioLoading] = useState(false);
-  const [audioProgress, setAudioProgress] = useState(0);
   const [audioError, setAudioError] = useState("");
   const audioRequest = useRef(0);
   const [activeNotes, setActiveNotes] = useState<TimelineNote[]>([]);
@@ -423,13 +422,12 @@ function Player({ jobId }: { jobId: string }) {
       ctxRef.current.resume().catch(() => {});
       setAudioError("");
       setAudioLoading(true);
-      setAudioProgress(0);
       if (synthRef.current!.instrumentId !== chosen) {
         playbackRef.current?.pause();
         setPlaying(false);
       }
       try {
-        await synthRef.current!.load(chosen, [...tl.notes, ...(tl.audio_notes ?? [])].map((n) => n.midi), setAudioProgress);
+        await synthRef.current!.load(chosen, [...tl.notes, ...(tl.audio_notes ?? [])].map((n) => n.midi));
       } catch {
         if (request !== audioRequest.current) return null;
         // The sampled instruments need a network fetch; the basic synth is
@@ -952,7 +950,6 @@ function Player({ jobId }: { jobId: string }) {
 
       </div>
 
-      {audioLoading && <p className="play-hint" role="status">Loading samples… {audioProgress}%</p>}
       {audioError && <p className="play-hint" role="alert">{audioError}</p>}
 
       <Panel
@@ -976,6 +973,11 @@ function Player({ jobId }: { jobId: string }) {
           activeKeys={activeNotes.map((n) => ({ midi: n.midi, role: n.role }))}
           showKeyNames={showKeyNames}
         />
+        {audioLoading && (
+          <div className="play-keyboard-loading" role="status" aria-label="Loading instrument">
+            <span className="keyboard-spinner" />
+          </div>
+        )}
       </div>
     </div>
   );
