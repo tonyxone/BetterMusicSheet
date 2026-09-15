@@ -5,6 +5,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
+import * as smplr from 'smplr';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -41,11 +42,11 @@ function sampleEngine() {
   const create = () => {
     let resolve, reject;
     const ready = new Promise((a,b) => { resolve=a; reject=b; });
-    const instrument = { ready, resolve, reject, calls:[], disposed:false, stopped:0,
+    const instrument = { ready, resolve, reject, calls:[], disposed:false, stopped:0, scheduler:{stop(){}},
       start(event) { this.calls.push(event); }, stop() { this.stopped++; }, dispose() { this.disposed=true; } };
     instruments.push(instrument); return instrument;
   };
-  const lib = { SplendidGrandPiano:create, ElectricPiano:create, Soundfont:create,
+  const lib = { LAYERS:smplr.LAYERS, Scheduler:smplr.Scheduler, SplendidGrandPiano:create, ElectricPiano:create, Soundfont:create,
     HttpStorage:{fetch(){}}, CacheStorage:()=>({fetch(){}}) };
   const { SynthEngine } = modules({smplr:lib}).load('app/play/synth.ts');
   const param = () => ({value:0,setTargetAtTime(){}});
@@ -231,6 +232,107 @@ test('a suspended tab skips expired notes instead of replaying a burst', () => {
   assert.equal(x.sounds.length, 1);
   assert.equal(x.sounds[0][0], 64);
   assert.equal(x.sounds[0][1], x.ctx.currentTime);
+});
+
+test('a 300 ms browser stall across a barline does not delay or lose short notes', () => {
+  const x = player(score(Array.from({length: 16}, (_, i) => note(3.5 + i / 16, 1 / 16, 60 + i)), 8));
+  x.p.play(1);
+  x.ctx.currentTime = x.p.originTime + 3.75; x.p.tick();
+  const scheduledBeforeStall = [...x.sounds];
+  x.ctx.currentTime += .3; x.p.tick();
+  for (const n of x.p.timeline.notes.filter((n) => n.start_beat >= 3.75 && n.start_beat < 4.05)) {
+    const sound = scheduledBeforeStall.find(([midi]) => midi === n.midi);
+    assert.ok(sound, `MIDI ${n.midi} must be in the audio engine before the stall`);
+    assert.equal(sound[1], x.p.originTime + n.start_beat);
+    assert.equal(sound[2], x.p.originTime + n.start_beat + n.duration_beats);
+  }
+});
+
+test('unison voices strike one key once with the longest sustain and strongest dynamic', () => {
+  const notes = [note(0, 1, 60, {velocity: 52}), note(0, 3, 60, {role: 1, velocity: 80}), note(.25, 1, 60)];
+  const x = player(score(notes)); x.p.play(1);
+  assert.equal(x.p.schedule.length, 2);
+  assert.equal(x.p.schedule[0].end, 3);
+  assert.equal(x.p.schedule[0].note.velocity, 80);
+  assert.equal(x.p.notesAt(.1).length, 2, 'both written voices still highlight');
+  assert.equal(x.p.schedule[1].start, .25, 'a later repeated note still attacks');
+});
+
+test('seeking into overlapping same-pitch sustains does not stack attacks', () => {
+  const x = player(score([note(0, 8), note(1, 6), note(3, 1)]));
+  x.p.play(1, {fromBeat: 2});
+  assert.equal(x.p.schedule.length, 2);
+  assert.equal(x.p.schedule[0].end, 6);
+  assert.equal(x.p.schedule[1].start, 1);
+});
+
+// Exercise the installed sampler's matching, scheduler and cancellation,
+// substituting only the audio device and sample downloads.
+function nativeSampler() {
+  const sources = [];
+  const param = () => ({value: 0, setValueAtTime() {}, setTargetAtTime() {},
+    cancelScheduledValues() {}, linearRampToValueAtTime() {}});
+  const node = () => ({gain: param(), pan: param(), frequency: param(),
+    threshold: param(), knee: param(), ratio: param(), attack: param(), release: param(),
+    connect() {}, disconnect() {}});
+  const ctx = {currentTime: 0, destination: node(), createGain: node,
+    createStereoPanner: node, createBiquadFilter: node, createDynamicsCompressor: node,
+    createBufferSource() {
+      const source = {...node(), detune: param(), stops: [],
+        start(at) {this.at = at;}, stop(at) {this.stops.push(at);}};
+      sources.push(source); return source;
+    }};
+  const loader = {async load(preset) {
+    return new Map(preset.groups.flatMap((g) => g.regions.map((r) => [r.sample, {duration: 20}])));
+  }};
+  const lib = {...smplr,
+    CacheStorage: () => ({}),
+    SplendidGrandPiano: (context, options) => smplr.SplendidGrandPiano(context, {...options, loader})};
+  const {SynthEngine} = modules({smplr: lib}).load('app/play/synth.ts');
+  return {engine: new SynthEngine(ctx), ctx, sources};
+}
+
+test('a sheet containing only an unsampled piano pitch sounds at every velocity layer', async () => {
+  const {engine, sources} = nativeSampler();
+  await engine.load('grand', [61]);
+  for (const velocity of [20, 52, 80, 90, 110]) engine.noteOn(61, 0, 1, velocity);
+  assert.equal(sources.length, 5);
+  assert.ok(sources.every((s) => Math.abs(s.detune.value) <= 100));
+  engine.dispose();
+});
+
+test('sparse scores retain the nearest piano sample across the entire keyboard', async () => {
+  for (let midi = 21; midi <= 108; midi++) {
+    const {engine, sources} = nativeSampler();
+    await engine.load('grand', [midi]);
+    for (const velocity of [20, 52, 80, 90, 110]) engine.noteOn(midi, 0, 1, velocity);
+    assert.equal(sources.length, 5, `MIDI ${midi} needs every dynamic layer`);
+    assert.ok(sources.every((s) => Math.abs(s.detune.value) <= 200), `MIDI ${midi} must use a nearby sample`);
+    engine.dispose();
+  }
+});
+
+test('sampler commits half-second-ahead notes directly to the audio clock', async () => {
+  const {engine, sources} = nativeSampler();
+  try {
+    await engine.load('grand', [60]);
+    engine.noteOn(60, .5, 1, 80);
+    assert.equal(sources.length, 1);
+    assert.equal(sources[0].at, .5);
+  } finally { engine.dispose(); }
+});
+
+test('pause cancels both sustained and future sampler voices after duration was scheduled', async () => {
+  const {engine, ctx, sources} = nativeSampler();
+  await engine.load('grand', [60, 64]);
+  engine.noteOn(60, 0, 5, 80);
+  engine.noteOn(64, .15, 4, 80);
+  ctx.currentTime = .1; engine.allOff();
+  assert.ok(sources[0].stops.at(-1) <= .12 + 1e-9, 'held note fades promptly');
+  assert.ok(sources[1].stops.at(-1) <= .15, 'future note is cancelled before its attack');
+  engine.noteOn(60, .16, 1, 80);
+  assert.equal(sources[2].at, .16, 'resuming can schedule new voices');
+  engine.dispose();
 });
 
 test('printed correction applies to every repeated occurrence', () => {

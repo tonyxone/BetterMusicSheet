@@ -1,11 +1,10 @@
 // Audio and highlights share a tempo-integrated AudioContext clock. Sounding
 // events can span multiple written tie segments or continue under the pedal.
-import { GRACE_SECONDS, SynthEngine } from "./synth";
+import { AUDIO_LOOKAHEAD_SECONDS, GRACE_SECONDS, SynthEngine } from "./synth";
 import { tempoClock } from "./tempo";
 import { measureIndexAt, notesAtBeat } from "@/lib/timeline";
 import type { AudioNote, Timeline, TimelineNote } from "@/lib/timeline";
 
-const LOOKAHEAD_SECONDS = .1;
 const SCHEDULER_INTERVAL_MS = 25;
 // Shared with the falling-note roll; retain the full opening descent.
 export const LEAD_IN_BEATS = 4;
@@ -72,7 +71,7 @@ export class Playback {
         return segments.length ? { ...n, duration_beats: Math.min(n.duration_beats, end - n.start_beat) } : n;
       });
     }
-    this.schedule = events
+    const scheduled = events
       .filter((n) => n.start_beat < this.windowEnd - 1e-9 && n.start_beat + n.duration_beats > this.windowStart + 1e-9)
       .map((n) => ({
         note: n,
@@ -80,6 +79,21 @@ export class Playback {
         end: this.clock.secondsAt(Math.min(n.start_beat + n.duration_beats, this.windowEnd)) - this.startSeconds,
       }))
       .sort((a, b) => a.start - b.start);
+    // Multiple written voices can share a physical key. Strike it once,
+    // including when seeking into overlapping sustains of the same pitch.
+    // Keep the written notes intact for highlighting and corrections.
+    this.schedule = [];
+    const lastByPitch = new Map<number, typeof scheduled[number]>();
+    for (const s of scheduled) {
+      const previous = lastByPitch.get(s.note.midi);
+      if (previous && Math.abs(previous.start - s.start) < 1e-8) {
+        previous.end = Math.max(previous.end, s.end);
+        previous.note = { ...previous.note, velocity: Math.max(previous.note.velocity ?? 80, s.note.velocity ?? 80) };
+      } else {
+        this.schedule.push(s);
+        lastByPitch.set(s.note.midi, s);
+      }
+    }
     const lead = this.windowStart <= 1e-9
       ? this.clock.secondsAt(0) - this.clock.secondsAt(-LEAD_IN_BEATS) : .06;
     this.originTime = this.ctx.currentTime + lead;
@@ -132,7 +146,7 @@ export class Playback {
   private tick() {
     if (!this.playing) return;
     const elapsed = this.ctx.currentTime - this.originTime;
-    while (this.cursorIndex < this.schedule.length && this.schedule[this.cursorIndex].start <= elapsed + LOOKAHEAD_SECONDS) {
+    while (this.cursorIndex < this.schedule.length && this.schedule[this.cursorIndex].start <= elapsed + AUDIO_LOOKAHEAD_SECONDS) {
       const s = this.schedule[this.cursorIndex++];
       // A backgrounded tab can wake after an event. Skip expired sounds and
       // resume a still-active event at the current audio time.

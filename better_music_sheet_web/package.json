@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "postinstall": "patch-package --error-on-fail",
     "test": "node --test tests/*.test.mjs",
     "dev": "next dev",
     "build": "next build",
@@ -16,7 +17,7 @@
     "pdfjs-dist": "^6.3.289",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "smplr": "^1.0.0",
+    "smplr": "1.0.0",
     "three": "^0.185.1"
   },
   "devDependencies": {
@@ -27,6 +28,7 @@
     "@types/three": "^0.185.4",
     "eslint": "^9",
     "eslint-config-next": "16.3.3",
+    "patch-package": "8.0.1",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

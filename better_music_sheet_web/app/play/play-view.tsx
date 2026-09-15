@@ -286,7 +286,6 @@ function Player({ jobId }: { jobId: string }) {
   const [soundOn, setSoundOn] = useState(true);
   const [instrument, setInstrument] = useState<InstrumentId>("grand");
   const [audioLoading, setAudioLoading] = useState(false);
-  const [audioProgress, setAudioProgress] = useState(0);
   const [audioError, setAudioError] = useState("");
   const audioRequest = useRef(0);
   const [activeNotes, setActiveNotes] = useState<TimelineNote[]>([]);
@@ -416,23 +415,42 @@ function Player({ jobId }: { jobId: string }) {
         ctxRef.current = new Ctor();
         synthRef.current = new SynthEngine(ctxRef.current);
         synthRef.current.setMuted(!soundOn);
+        // Best-effort: ask the browser not to evict the cached sample files
+        // under storage pressure. Unsupported (e.g. Safari) or refused is fine.
+        navigator.storage?.persist?.().catch(() => {});
       }
       ctxRef.current.resume().catch(() => {});
       setAudioError("");
       setAudioLoading(true);
-      setAudioProgress(0);
       if (synthRef.current!.instrumentId !== chosen) {
         playbackRef.current?.pause();
         setPlaying(false);
       }
       try {
-        await synthRef.current!.load(chosen, [...tl.notes, ...(tl.audio_notes ?? [])].map((n) => n.midi), setAudioProgress);
+        await synthRef.current!.load(chosen, [...tl.notes, ...(tl.audio_notes ?? [])].map((n) => n.midi));
       } catch {
-        if (request === audioRequest.current) {
+        if (request !== audioRequest.current) return null;
+        // The sampled instruments need a network fetch; the basic synth is
+        // pure oscillators and always available. Fall back rather than
+        // leaving playback broken because of a flaky connection.
+        if (chosen === "basic") {
+          setAudioError("Could not load the offline synth.");
+          setAudioLoading(false);
+          return null;
+        }
+        try {
+          await synthRef.current!.load("basic", []);
+        } catch {
           setAudioError("Could not load this instrument. Try again or choose Basic synth (offline).");
           setAudioLoading(false);
+          return null;
         }
-        return null;
+        if (request !== audioRequest.current || !ctxRef.current) return null;
+        setInstrument("basic");
+        setAudioError(
+          `Couldn't load ${INSTRUMENTS.find((i) => i.id === chosen)?.name ?? "the selected instrument"} ` +
+          "(check your connection) — playing with the offline synth instead."
+        );
       }
       if (request !== audioRequest.current || !ctxRef.current) return null;
       setAudioLoading(false);
@@ -459,6 +477,19 @@ function Player({ jobId }: { jobId: string }) {
     },
     [openSignIn, soundOn, baseBpm, instrument],
   );
+
+  // Warm the sampler as soon as the sheet and instrument choice are known,
+  // so pressing Play doesn't wait on a fetch+decode that could already have
+  // happened while the page was just sitting there. Only sound *output*
+  // needs a user gesture (see ensurePlayback's docstring); decoding doesn't.
+  // Read through a ref so a tempo/mute change (which also changes
+  // ensurePlayback's identity) doesn't retrigger this and flash the loading
+  // hint - only an actual sheet or instrument change should.
+  const ensurePlaybackRef = useRef(ensurePlayback);
+  useEffect(() => { ensurePlaybackRef.current = ensurePlayback; }, [ensurePlayback]);
+  useEffect(() => {
+    if (timeline) void ensurePlaybackRef.current(timeline, instrument);
+  }, [timeline, instrument]);
 
   // Applies mid-playback too, not just at the next press.
   useEffect(() => {
@@ -919,7 +950,6 @@ function Player({ jobId }: { jobId: string }) {
 
       </div>
 
-      {audioLoading && <p className="play-hint" role="status">Loading samples… {audioProgress}%</p>}
       {audioError && <p className="play-hint" role="alert">{audioError}</p>}
 
       <Panel
@@ -943,6 +973,11 @@ function Player({ jobId }: { jobId: string }) {
           activeKeys={activeNotes.map((n) => ({ midi: n.midi, role: n.role }))}
           showKeyNames={showKeyNames}
         />
+        {audioLoading && (
+          <div className="play-keyboard-loading" role="status" aria-label="Loading instrument">
+            <span className="keyboard-spinner" />
+          </div>
+        )}
       </div>
     </div>
   );

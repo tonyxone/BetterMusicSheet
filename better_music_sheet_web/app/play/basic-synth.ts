@@ -23,13 +23,13 @@ export class SynthEngine {
   private voices = new Map<number, Voice>();
   private nextId = 1;
 
-  constructor(ctx: AudioContext) {
+  constructor(ctx: AudioContext, destination: AudioNode = ctx.destination) {
     this.ctx = ctx;
     this.master = ctx.createGain();
     // Headroom: a dense chord is many simultaneous oscillators, and summing
     // them at full gain clips audibly.
     this.master.gain.value = 0.22;
-    this.master.connect(ctx.destination);
+    this.master.connect(destination);
   }
 
   /** Schedule a note. `at`/`until` are AudioContext times, so timing comes

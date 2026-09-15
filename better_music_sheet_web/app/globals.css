@@ -497,6 +497,21 @@ details.options[open] summary::before { content: "▾ "; }
   /* Square on top: the note roll sits flush against it, and a rounded corner
      there would cut a notch between two surfaces meant to read as one. */
   border-radius: 0; padding: 0 12px 4px;
+  /* Positioning context for .play-keyboard-loading. */
+  position: relative;
+}
+/* Covers the keyboard, not the whole page, while a new instrument loads -
+   the sheet and transport controls above stay interactive. */
+.play-keyboard-loading {
+  position: absolute; inset: 0; z-index: 2;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(15, 17, 19, 0.6);
+}
+.keyboard-spinner {
+  width: 28px; height: 28px; border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.25);
+  border-top-color: #fff;
+  animation: bms-spin 0.8s linear infinite;
 }
 /* aspect-ratio is set from the real geometry at runtime; this is only a
    placeholder so the page doesn't jump before the scene has been built.

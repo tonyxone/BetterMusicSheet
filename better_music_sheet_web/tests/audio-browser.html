@@ -3,6 +3,7 @@
 <pre id="result">Ready</pre>
 <script type="module">
 import { SynthEngine } from './synth.mjs';
+import { Instrument, Scheduler } from './smplr.mjs';
 document.querySelector('#test').onclick = async () => {
  const out = document.querySelector('#result'); out.textContent = '';
  const ctx = new AudioContext(); await ctx.resume();
@@ -11,6 +12,24 @@ document.querySelector('#test').onclick = async () => {
  const values = new Float32Array(analyser.fftSize);
  const pause = ms => new Promise(r => setTimeout(r, ms));
  try {
+  // Render a constant test sample so any ghost note after pause is measurable.
+  const offline = new OfflineAudioContext(1, 48000, 48000);
+  const buffer = offline.createBuffer(1, 48000, 48000);
+  buffer.getChannelData(0).fill(.25);
+  const TestInstrument = Instrument((ctx, options, sampler) => sampler.loadInstrument({
+   samples: {baseUrl:'', formats:['wav']}, defaults:{ampRelease:.35},
+   groups:[{regions:[{sample:'tone', keyRange:[0,127], pitch:60}]}],
+  }, new Map([['tone', buffer]])));
+  const fixture = TestInstrument(offline, {scheduler:Scheduler(offline, {lookaheadMs:1000})});
+  await fixture.ready;
+  fixture.start({note:60, time:0, duration:.8, stopId:1});
+  fixture.start({note:60, time:.4, duration:.5, stopId:2});
+  const paused = offline.suspend(.1).then(() => {fixture.stop(); return offline.resume();});
+  const rendered = await offline.startRendering(); await paused;
+  const samples = rendered.getChannelData(0);
+  if (!samples.slice(0, 4000).some((v) => Math.abs(v) > .001)) throw Error('Cancellation fixture was silent');
+  if (samples.slice(6000).some((v) => Math.abs(v) > .0001)) throw Error('A cancelled note still sounded');
+  fixture.dispose(); out.textContent += 'Native audio pause + future-note cancellation: PASS\n';
   for (const id of ['grand', 'electric', 'cp80', 'organ', 'basic']) {
    out.textContent += `Loading ${id}\n`;
    await engine.load(id, [48,60,64,67,89,94]);
@@ -19,6 +38,17 @@ document.querySelector('#test').onclick = async () => {
    const peak = Math.max(...values.map(Math.abs));
    if (peak < .0001) throw Error(`${id}: silent audio`);
    out.textContent += `${id}: PASS, peak ${peak.toFixed(4)}\n`;
+   if (id === 'grand') {
+    engine.allOff(); await pause(100);
+    await engine.load('grand', [61]);
+    for (const velocity of [20,52,80,90,110]) {
+     engine.noteOn(61,ctx.currentTime+.05,ctx.currentTime+.35,velocity);
+     await pause(200); analyser.getFloatTimeDomainData(values);
+     if (Math.max(...values.map(Math.abs)) < .0001) throw Error(`C-sharp at velocity ${velocity}: silent audio`);
+     engine.allOff(); await pause(100);
+    }
+    out.textContent += 'Unrecorded piano key, all five dynamics: PASS\n';
+   }
    if (id === 'organ') {
     await pause(1800); analyser.getFloatTimeDomainData(values);
     if (Math.max(...values.map(Math.abs)) < .0001) throw Error('Organ sustain ended early');

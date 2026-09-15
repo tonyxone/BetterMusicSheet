@@ -1,0 +1,170 @@
+diff --git a/node_modules/smplr/dist/index.d.ts b/node_modules/smplr/dist/index.d.ts
+index 5abf804..de54fb9 100644
+--- a/node_modules/smplr/dist/index.d.ts
++++ b/node_modules/smplr/dist/index.d.ts
+@@ -945,6 +945,10 @@ type ElectricPianoOptions = Partial<{
+     onLoadProgress: (progress: LoadProgress) => void;
+     /** Audio formats to try, in order of preference. Defaults to ["ogg", "m4a"]. */
+     formats: string[];
++    /** Override the built-in instrument's .sfz URL (self-hosting). */
++    sfzUrl: string;
++    /** Override the built-in instrument's sample base URL (self-hosting). */
++    baseUrl: string;
+ }>;
+ declare const ElectricPiano: InstrumentFactory<Partial<{
+     instrument: string;
+@@ -957,6 +961,10 @@ declare const ElectricPiano: InstrumentFactory<Partial<{
+     onLoadProgress: (progress: LoadProgress) => void;
+     /** Audio formats to try, in order of preference. Defaults to ["ogg", "m4a"]. */
+     formats: string[];
++    /** Override the built-in instrument's .sfz URL (self-hosting). */
++    sfzUrl: string;
++    /** Override the built-in instrument's sample base URL (self-hosting). */
++    baseUrl: string;
+ }> & {
+     instrument: string;
+ }, {
+diff --git a/node_modules/smplr/dist/index.js b/node_modules/smplr/dist/index.js
+index 86175b8..1428ebf 100644
+--- a/node_modules/smplr/dist/index.js
++++ b/node_modules/smplr/dist/index.js
+@@ -767,7 +767,7 @@ var noOp = () => {
+ var Scheduler = asConstructable(SchedulerImpl);
+ 
+ // src/smplr/voice.ts
+-var _context3, _source, _envelope, _startAt, _ampRelease, _state, _endedCallbacks;
++var _context3, _source, _envelope, _startAt, _ampRelease, _state, _releaseAt, _endedCallbacks;
+ var Voice = class {
+   constructor(context, buffer, params, destination, stopId, group, startTime) {
+     __privateAdd(this, _context3);
+@@ -776,6 +776,7 @@ var Voice = class {
+     __privateAdd(this, _startAt);
+     __privateAdd(this, _ampRelease);
+     __privateAdd(this, _state, "playing");
++    __privateAdd(this, _releaseAt, Infinity);
+     __privateAdd(this, _endedCallbacks, []);
+     __privateSet(this, _context3, context);
+     this.stopId = stopId;
+@@ -837,16 +838,21 @@ var Voice = class {
+   }
+   /**
+    * Stop the voice, applying a release envelope if time is after the start time.
+-   * Idempotent — subsequent calls after the first are ignored.
++   * An earlier stop supersedes a previously scheduled release.
+    */
+   stop(time) {
+-    if (__privateGet(this, _state) !== "playing") return;
+-    __privateSet(this, _state, "stopping");
++    if (__privateGet(this, _state) === "stopped") return;
+     const t = time != null ? time : __privateGet(this, _context3).currentTime;
++    // A duration schedules a future release immediately. Pause/seek must
++    // still be able to move that release earlier and cancel future attacks.
++    const previousRelease = __privateGet(this, _releaseAt);
++    if (t >= previousRelease) return;
++    __privateSet(this, _releaseAt, t);
++    __privateSet(this, _state, "stopping");
+     if (t <= __privateGet(this, _startAt)) {
+       __privateGet(this, _source).stop(t);
+     } else {
+-      const stopAt = t + __privateGet(this, _ampRelease);
++      const stopAt = t + (previousRelease < Infinity ? Math.min(.02, __privateGet(this, _ampRelease)) : __privateGet(this, _ampRelease));
+       __privateGet(this, _envelope).gain.cancelScheduledValues(t);
+       __privateGet(this, _envelope).gain.setValueAtTime(1, t);
+       __privateGet(this, _envelope).gain.linearRampToValueAtTime(0, stopAt);
+@@ -874,6 +880,7 @@ _envelope = new WeakMap();
+ _startAt = new WeakMap();
+ _ampRelease = new WeakMap();
+ _state = new WeakMap();
++_releaseAt = new WeakMap();
+ _endedCallbacks = new WeakMap();
+ 
+ // src/smplr/voice-manager.ts
+@@ -3264,12 +3271,14 @@ var ElectricPiano = Instrument(
+     };
+     const tremoloNode = createTremolo(ctx, depth.subscribe);
+     smplr.output.addInsert(tremoloNode);
+-    const ready = fetchOk(config.sfzUrl).then((r) => r.text()).then(
++    const sfzUrl = options.sfzUrl != null ? options.sfzUrl : config.sfzUrl;
++    const baseUrl = options.baseUrl != null ? options.baseUrl : config.baseUrl;
++    const ready = fetchOk(sfzUrl).then((r) => r.text()).then(
+       (sfzText) => {
+         var _a;
+         return smplr.loadInstrument(
+           sfzToPreset(sfzText, {
+-            baseUrl: config.baseUrl,
++            baseUrl,
+             pathFromSampleName: config.pathFromSampleName,
+             formats: (_a = options.formats) != null ? _a : ["ogg", "m4a"]
+           })
+diff --git a/node_modules/smplr/dist/index.mjs b/node_modules/smplr/dist/index.mjs
+index 35765d0..aa99526 100644
+--- a/node_modules/smplr/dist/index.mjs
++++ b/node_modules/smplr/dist/index.mjs
+@@ -699,7 +699,7 @@ var noOp = () => {
+ var Scheduler = asConstructable(SchedulerImpl);
+ 
+ // src/smplr/voice.ts
+-var _context3, _source, _envelope, _startAt, _ampRelease, _state, _endedCallbacks;
++var _context3, _source, _envelope, _startAt, _ampRelease, _state, _releaseAt, _endedCallbacks;
+ var Voice = class {
+   constructor(context, buffer, params, destination, stopId, group, startTime) {
+     __privateAdd(this, _context3);
+@@ -708,6 +708,7 @@ var Voice = class {
+     __privateAdd(this, _startAt);
+     __privateAdd(this, _ampRelease);
+     __privateAdd(this, _state, "playing");
++    __privateAdd(this, _releaseAt, Infinity);
+     __privateAdd(this, _endedCallbacks, []);
+     __privateSet(this, _context3, context);
+     this.stopId = stopId;
+@@ -769,16 +770,21 @@ var Voice = class {
+   }
+   /**
+    * Stop the voice, applying a release envelope if time is after the start time.
+-   * Idempotent — subsequent calls after the first are ignored.
++   * An earlier stop supersedes a previously scheduled release.
+    */
+   stop(time) {
+-    if (__privateGet(this, _state) !== "playing") return;
+-    __privateSet(this, _state, "stopping");
++    if (__privateGet(this, _state) === "stopped") return;
+     const t = time != null ? time : __privateGet(this, _context3).currentTime;
++    // A duration schedules a future release immediately. Pause/seek must
++    // still be able to move that release earlier and cancel future attacks.
++    const previousRelease = __privateGet(this, _releaseAt);
++    if (t >= previousRelease) return;
++    __privateSet(this, _releaseAt, t);
++    __privateSet(this, _state, "stopping");
+     if (t <= __privateGet(this, _startAt)) {
+       __privateGet(this, _source).stop(t);
+     } else {
+-      const stopAt = t + __privateGet(this, _ampRelease);
++      const stopAt = t + (previousRelease < Infinity ? Math.min(.02, __privateGet(this, _ampRelease)) : __privateGet(this, _ampRelease));
+       __privateGet(this, _envelope).gain.cancelScheduledValues(t);
+       __privateGet(this, _envelope).gain.setValueAtTime(1, t);
+       __privateGet(this, _envelope).gain.linearRampToValueAtTime(0, stopAt);
+@@ -806,6 +812,7 @@ _envelope = new WeakMap();
+ _startAt = new WeakMap();
+ _ampRelease = new WeakMap();
+ _state = new WeakMap();
++_releaseAt = new WeakMap();
+ _endedCallbacks = new WeakMap();
+ 
+ // src/smplr/voice-manager.ts
+@@ -3196,12 +3203,14 @@ var ElectricPiano = Instrument(
+     };
+     const tremoloNode = createTremolo(ctx, depth.subscribe);
+     smplr.output.addInsert(tremoloNode);
+-    const ready = fetchOk(config.sfzUrl).then((r) => r.text()).then(
++    const sfzUrl = options.sfzUrl != null ? options.sfzUrl : config.sfzUrl;
++    const baseUrl = options.baseUrl != null ? options.baseUrl : config.baseUrl;
++    const ready = fetchOk(sfzUrl).then((r) => r.text()).then(
+       (sfzText) => {
+         var _a;
+         return smplr.loadInstrument(
+           sfzToPreset(sfzText, {
+-            baseUrl: config.baseUrl,
++            baseUrl,
+             pathFromSampleName: config.pathFromSampleName,
+             formats: (_a = options.formats) != null ? _a : ["ogg", "m4a"]
+           })
