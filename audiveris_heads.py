@@ -104,6 +104,23 @@ def load_key_signature(omr_path, sheet_index):
     return {staff: events[0][1] for staff, events in load_key_timeline(omr_path, sheet_index).items()}
 
 
+# A real key signature is confidently and repeatedly detected: across known-
+# good scans (1-3 flat/sharp signatures, dozens of staves and glyphs) every
+# <key>/<key-alter> element's own `grade` was at least 0.65. A stray
+# misdetection (an accent, dot, or scan artifact shaped enough like a flat or
+# sharp to register) graded 0.09-0.17 in the one case on record - a piece
+# with no key signature at all that had every B flattened because Audiveris
+# built a one-flat <key> from two isolated, low-confidence glyphs. This
+# threshold sits far below the real cluster with margin on both sides, so
+# it isn't tuned to that single example.
+MIN_KEY_GRADE = 0.4
+
+
+def _low_confidence(elem):
+    grade = elem.get('grade')
+    return grade is not None and float(grade) < MIN_KEY_GRADE
+
+
 def load_key_timeline(omr_path, sheet_index):
     """Positioned key events, including cancellation to zero fifths.
 
@@ -114,15 +131,17 @@ def load_key_timeline(omr_path, sheet_index):
     result = {}
     for key in root.iter('key'):
         bounds = key.find('bounds')
-        if key.get('staff') and key.get('fifths') is not None and bounds is not None:
+        if key.get('staff') and key.get('fifths') is not None and bounds is not None and not _low_confidence(key):
             result.setdefault(int(key.get('staff')), []).append(
                 (float(bounds.get('x')), int(key.get('fifths'))))
     # Older exports may have only key-alter glyphs. Group adjacent glyphs;
-    # never sum separate signatures across an entire staff.
+    # never sum separate signatures across an entire staff. A low-confidence
+    # glyph is more likely noise (an accent, dot, or scan artifact) than a
+    # real accidental - see MIN_KEY_GRADE above.
     glyphs = {}
     for ka in root.iter('key-alter'):
         bounds = ka.find('bounds')
-        if not ka.get('staff') or bounds is None:
+        if not ka.get('staff') or bounds is None or _low_confidence(ka):
             continue
         staff = int(ka.get('staff'))
         if staff not in result:

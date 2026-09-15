@@ -90,9 +90,6 @@ export function JobStatus() {
           <div className="sub">{job.labeled_groups} beat-groups labeled</div>
         </div>
         <div className="result-actions">
-          <Link href="/" className="btn-pill ghost">
-            Annotate another
-          </Link>
           <Link
             href={`/play?job=${jobId}`}
             className="icon-link"
