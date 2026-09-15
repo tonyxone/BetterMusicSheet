@@ -246,17 +246,22 @@ details.options[open] summary::before { content: "▾ "; }
    otherwise those cards would end a button's worth further right. */
 .history-item { display: flex; align-items: stretch; gap: 10px; margin-bottom: 12px; }
 .history-item .history-row { margin-bottom: 0; flex: 1; min-width: 0; }
-.history-actions { display: flex; gap: 10px; flex: none; width: 114px; justify-content: flex-end; }
-/* Bare icons, like .icon-link in the header: no card, no border, nothing
-   drawn around the glyph. The width and the stretched height stay - with no
-   box to see they only serve as the tap target, which wants to be big. */
+.history-actions { display: flex; gap: 10px; flex: none; width: 142px; justify-content: flex-end; }
 .history-action {
   width: 52px; flex: none; display: flex; align-items: center; justify-content: center;
-  background: none; border: 0; padding: 0;
+  background: var(--card); border: 1px solid var(--paper-deep); border-radius: 12px; padding: 0;
   color: var(--ink); text-decoration: none; cursor: pointer;
-  transition: color .15s;
+  transition: box-shadow .15s, color .15s, background .15s, border-color .15s;
 }
-.history-action:hover:not(:disabled) { color: var(--accent); }
+.history-action:hover:not(:disabled) { box-shadow: 0 10px 26px rgba(46, 33, 23, 0.10); color: var(--accent); }
+/* The delete glyph shares a rule with the modal close button further down,
+   which wants 18px; in a 52px row button that reads as a speck. Override the
+   size here only, leaving that rule's stroke styling (and .modal-close)
+   alone. The keyboard icon isn't square, so it sizes itself via its prop. */
+.history-actions .history-delete svg { width: 26px; height: 26px; }
+/* Play is the primary action on a finished sheet, so it gets a wider button
+   and a larger glyph than delete rather than the two reading as equals. */
+.history-play { width: 80px; }
 .history-icon {
   width: 44px; height: 56px; background: var(--paper); border: 1px solid var(--paper-deep); border-radius: 6px;
   flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 18px;
@@ -272,7 +277,7 @@ details.options[open] summary::before { content: "▾ "; }
   width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8;
   stroke-linecap: round; stroke-linejoin: round;
 }
-.history-delete:hover:not(:disabled) { color: var(--danger); }
+.history-delete:hover:not(:disabled) { background: var(--danger-bg); color: var(--danger); border-color: var(--danger-bg); box-shadow: none; }
 .history-delete:disabled { opacity: 0.35; cursor: not-allowed; }
 .history-empty {
   border: 2px dashed var(--paper-deep); border-radius: 16px; padding: 40px; text-align: center;
@@ -287,8 +292,13 @@ details.options[open] summary::before { content: "▾ "; }
 @media (max-width: 560px) {
   .wrap.medium { padding-left: 16px; padding-right: 16px; }
   .history-item { gap: 8px; }
-  .history-actions { width: 84px; gap: 8px; }
-  .history-action { width: 38px; }
+  .history-actions { width: 98px; gap: 8px; }
+  .history-action { width: 36px; }
+  .history-play { width: 54px; }
+  /* The timestamp is long enough to wrap to three lines in the narrow card,
+     which triples the row height for information nobody reads word by word.
+     Clip it instead - the date, the part that identifies the upload, stays. */
+  .history-meta { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .history-row { gap: 12px; padding: 14px; }
   .history-icon { width: 34px; height: 44px; font-size: 15px; }
   .history-badge { font-size: 11px; padding: 4px 8px; }
