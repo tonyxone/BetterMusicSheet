@@ -1,9 +1,18 @@
 """Place note names close to their notes without covering score symbols."""
 from array import array
+from bisect import bisect_left, bisect_right
 from math import ceil, floor
 import warnings
 
 import pymupdf as fitz
+
+# How far sideways a label may be nudged, and in what steps, while hunting for
+# clear space. The reach is set per record from the label's own width, so a
+# label never ends up further from its notehead than its own footprint.
+SIDE_STEP = 1.5
+# A label further from its noteheads than this is no longer readably attached
+# to them, whatever empty space lies beyond.
+MAX_DISTANCE = 60
 
 
 class PageInk:
@@ -44,11 +53,17 @@ class PageInk:
         Labels may cross the five staff lines. Noteheads are protected
         separately using their exact OMR/PDF boxes, so ignoring these narrow
         horizontal bands does not make a note safe to cover.
+
+        ``ignored_staff_lines`` must be sorted: only the lines that fall inside
+        ``box`` are looked at, which matters because every candidate placement
+        is scored against a page's worth of staff lines.
         """
         total = self._count(box)
         if total == float('inf'):
             return total
-        for y in ignored_staff_lines:
+        first = bisect_left(ignored_staff_lines, box.y0 - .75)
+        last = bisect_right(ignored_staff_lines, box.y1 + .75)
+        for y in ignored_staff_lines[first:last]:
             strip = fitz.Rect(
                 box.x0, max(box.y0, y - .75),
                 box.x1, min(box.y1, y + .75),
@@ -74,10 +89,14 @@ def layout_page_records(page_records, font_size, measure_font, margin_pt, page):
     """Lay out single notes close by and chords as compact vertical stacks.
 
     Chords first try the right side of their noteheads. If that space is
-    occupied, they use the closest clear area above or below. Single notes
-    prefer above for treble and below for bass. Staff lines are allowed under
-    labels; noteheads, signatures, octave marks, dynamics and other printed
-    symbols remain obstacles.
+    occupied, the label sweeps outward from the heads - up, down and sideways -
+    and settles wherever the total of printed ink underneath plus distance
+    travelled is smallest. Scoring the two together keeps a name beside the note
+    it belongs to: crossing a dashed octave line costs less than escaping to the
+    first perfectly clear space far above the system. Single notes prefer above
+    for treble and below for bass. Staff lines are allowed under labels;
+    noteheads, signatures, octave marks, dynamics and other printed symbols
+    remain obstacles.
     """
     ink = PageInk(page)
     occupied = {}
@@ -85,15 +104,20 @@ def layout_page_records(page_records, font_size, measure_font, margin_pt, page):
         round(y, 2) for rec in page_records
         for y in rec.get('staff_lines_pt', ())
     })
-    note_boxes = [
-        fitz.Rect(box) + (-.6, -.6, .6, .6)
-        for rec in page_records for box in rec.get('note_boxes_pt', ())
-    ]
 
     def cells(box):
         return ((x, y)
                 for x in range(floor(box.x0 / 32), floor(box.x1 / 32) + 1)
                 for y in range(floor(box.y0 / 32), floor(box.y1 / 32) + 1))
+
+    # Noteheads are bucketed like the labels already placed: the sweep below
+    # tests far more candidates than a linear scan of the page can absorb.
+    note_cells = {}
+    for rec in page_records:
+        for box in rec.get('note_boxes_pt', ()):
+            note = fitz.Rect(box) + (-.6, -.6, .6, .6)
+            for cell in cells(note):
+                note_cells.setdefault(cell, []).append(note)
 
     def assess(block):
         boxes = label_boxes(block)
@@ -101,11 +125,14 @@ def layout_page_records(page_records, font_size, measure_font, margin_pt, page):
                box.y0 < 12 or box.y1 > page.rect.height - 12
                for box in boxes):
             return None
-        if any(box.intersects(note) for box in boxes for note in note_boxes):
-            return None
-        if any(box.intersects(old) for box in boxes for cell in cells(box)
-               for old in occupied.get(cell, ())):
-            return None
+        for box in boxes:
+            for cell in cells(box):
+                for other in note_cells.get(cell, ()):
+                    if box.intersects(other):
+                        return None
+                for old in occupied.get(cell, ()):
+                    if box.intersects(old):
+                        return None
         return sum(ink.count(box, all_staff_lines) for box in boxes)
 
     def block_at(rec, x, ys, fs, widths):
@@ -114,23 +141,38 @@ def layout_page_records(page_records, font_size, measure_font, margin_pt, page):
             'ys': ys, 'label_x_offsets': [0.] * len(widths),
         }
 
-    def vertical_candidates(rec, fs, widths, line_h):
+    def neighbourhood(rec, fs, widths, line_h):
+        """(cost, block) pairs, nearest first.
+
+        Each step outward is offered above, below and to either side before the
+        sweep moves further away, so a label boxed in vertically - an octave
+        line overhead, the next staff underneath - slides into the white space
+        beside its chord instead of climbing over the octave line.
+        """
         count = len(widths)
         above_base = (rec['top_y_pt'] - margin_pt - fs * .12 - .5
                       - (count - 1) * line_h)
         below_base = rec['bottom_y_pt'] + margin_pt + fs * .84 + .5
         preferred_above = rec['part'] == 0
-        for distance in range(0, 61, 2):
-            for above in (preferred_above, not preferred_above):
-                base = above_base - distance if above else below_base + distance
-                for shift in (0, -1.5, 1.5, -3, 3, -4.5, 4.5, -6, 6):
-                    yield block_at(
-                        rec,
-                        rec['anchor_x_pt'] + shift,
-                        [base + i * line_h for i in range(count)],
-                        fs,
-                        widths,
-                    )
+        reach = max(widths) + rec.get('notehead_w_pt', 0) / 2
+        shifts = [step * SIDE_STEP * sign
+                  for step in range(int(reach / SIDE_STEP) + 1)
+                  for sign in ((-1, 1) if step else (1,))]
+        plan = sorted(
+            (distance + abs(shift), above is not preferred_above,
+             distance, shift, above)
+            for distance in range(0, MAX_DISTANCE + 1, 2)
+            for above in (True, False)
+            for shift in shifts)
+        for cost, _, distance, shift, above in plan:
+            base = above_base - distance if above else below_base + distance
+            yield cost, block_at(
+                rec,
+                rec['anchor_x_pt'] + shift,
+                [base + i * line_h for i in range(count)],
+                fs,
+                widths,
+            )
 
     placed = []
     # Keep reading order stable. Dense repeated chords have already been
@@ -143,7 +185,7 @@ def layout_page_records(page_records, font_size, measure_font, margin_pt, page):
             for label in rec['labels']
         ]
         line_h = fs * .92
-        best, best_ink = None, float('inf')
+        best, best_ink, best_score = None, 0, float('inf')
 
         # Chord labels are always vertical. Use the right side when it is
         # actually clear, including when that means crossing staff lines.
@@ -164,19 +206,22 @@ def layout_page_records(page_records, font_size, measure_font, margin_pt, page):
                     widths,
                 )
                 score = assess(candidate)
-                if score is not None and score < best_ink:
-                    best, best_ink = candidate, score
+                if score is not None and score < best_score:
+                    best, best_ink, best_score = candidate, score, score
                 if score == 0:
                     break
 
-        # A blocked chord, or any single note, uses the closest clear vertical
-        # position. Above/below are checked at each distance so an 8va line can
-        # send a label into nearby staff space instead of far above the line.
-        if best_ink != 0:
-            for candidate in vertical_candidates(rec, fs, widths, line_h):
+        # A blocked chord, or any single note, sweeps its neighbourhood. Costs
+        # only ever grow along the sweep, and a block's score is at least its
+        # cost, so the first clear spot wins outright and anything costing more
+        # than the best score so far cannot beat it.
+        if best_score:
+            for cost, candidate in neighbourhood(rec, fs, widths, line_h):
+                if cost >= best_score:
+                    break
                 score = assess(candidate)
-                if score is not None and score < best_ink:
-                    best, best_ink = candidate, score
+                if score is not None and score + cost < best_score:
+                    best, best_ink, best_score = candidate, score, score + cost
                 if score == 0:
                     break
 

@@ -39,10 +39,11 @@ class LabelLayoutTests(unittest.TestCase):
             blocks = layout_page_records(records, 6.5, self.font, 3.2, self.page)
         self.assertEqual(len(blocks), len(records))
         ink = PageInk(self.page)
+        lines = sorted({y for record in records for y in record['staff_lines_pt']})
         footprints = []
         for block in blocks:
             boxes = label_boxes(block, self.font)
-            self.assertTrue(all(ink.count(box, [110, 116, 122, 128, 134]) == 0 for box in boxes))
+            self.assertTrue(all(ink.count(box, lines) == 0 for box in boxes))
             self.assertFalse(any(box.intersects(old) for box in boxes for old in footprints))
             footprints.extend(boxes)
         return blocks
@@ -87,6 +88,31 @@ class LabelLayoutTests(unittest.TestCase):
         blocks = self.layout([chord(), chord(158), chord(178, labels=['C'])])
         centers = {tuple(block['labels']): block['x'] for block in blocks}
         self.assertLessEqual(abs(centers[('C',)] - 178), 10)
+
+    def test_a_hemmed_in_chord_stays_beside_its_notes(self):
+        """An octave line overhead must not push labels to the top of the page.
+
+        The right side is taken, an octave line runs over the staff and the
+        other hand sits close underneath: the only clear space near the chord
+        is off to one side, and that beats the open margin high above.
+        """
+        self.page.draw_rect(fitz.Rect(143, 100, 170, 145), fill=(0, 0, 0))
+        self.page.draw_line((35, 102), (285, 102), dashes='[3 2] 0')
+        centers = [161, 167, 173, 179]
+        for y in range(158, 183, 6):
+            self.page.draw_line((35, y), (285, y), width=.5)
+        for y in centers:
+            self.page.draw_oval(fitz.Rect(137, y - 2, 143, y + 2), fill=(0, 0, 0))
+        other_hand = dict(
+            chord(part=1, labels=['B♭4', 'G♭4', 'E♭4', 'C♭4']),
+            top_y_pt=min(centers), bottom_y_pt=max(centers), staff_top_pt=158,
+            staff_bottom_pt=182, staff_lines_pt=[158, 164, 170, 176, 182],
+            note_boxes_pt=[(137, y - 2, 143, y + 2) for y in centers])
+        record = chord(labels=['B♭5', 'G♭5', 'E♭5', 'C♭5'])
+        block = self.layout([record, other_hand])[0]
+        self.assertLess(max(max(record['top_y_pt'] - box.y1,
+                                box.y0 - record['bottom_y_pt'])
+                            for box in label_boxes(block, self.font)), 25)
 
     def test_no_available_whitespace_does_not_silently_drop_labels(self):
         self.page.draw_rect(self.page.rect, fill=(0, 0, 0))
