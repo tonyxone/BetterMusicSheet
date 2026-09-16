@@ -361,6 +361,29 @@ class AccuracyTests(unittest.TestCase):
         self.assertIsNotNone(t['measures'][1]['bbox_pt'])
         self.assertEqual(t['notes'][1]['midi'], 62)
 
+    def system_missing_one_measure(self, numbers):
+        """Three printed measures in one system against a two-measure export."""
+        pages = [[[(6, 0, 1, None)], [(4, 0, 1, None)], [(5, 0, 1, None)]]]
+        resolved = self.resolved(pages)
+        first, second = numbers
+        source = mxl(self.path / 'score.mxl',
+                     measure(ATTR + note(duration=4), first)
+                     + measure(note('D', duration=4), second))
+        p = timeline.prepare_score(None, source, None, 1, resolved_notes=resolved)
+        return timeline.build_timeline(None, None, None, 1, prepared_score=p)
+
+    def test_measure_dropped_from_the_export_keeps_the_others_playable(self):
+        t = self.system_missing_one_measure((1, 3))
+        self.assertEqual([m['bbox_pt'][0] for m in t['measures']], [0, 200])
+        self.assertEqual(t['notes'][1]['midi'], 62)
+        self.assertTrue(all(n['bbox_pt'] for n in t['notes']))
+
+    def test_a_hole_the_measure_numbers_cannot_locate_stays_unplaced(self):
+        # 1 and 2 against three regions: the export could have dropped either
+        # the middle measure or the last, so nothing here can be placed safely.
+        t = self.system_missing_one_measure((1, 2))
+        self.assertEqual([m['bbox_pt'] for m in t['measures']], [None, None])
+
     def test_pedal_sustain_does_not_keep_key_held(self):
         start = '<direction><direction-type><pedal type="start"/><dynamics><p/></dynamics></direction-type></direction>'
         stop = '<forward><duration>3</duration></forward><direction><direction-type><pedal type="stop"/></direction-type></direction>'

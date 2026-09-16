@@ -437,6 +437,52 @@ def _prepare_musicxml_only(mxl_path, num_pages, page_omr_overrides=None):
     return {'resolved': {'pages': {}, 'notes': []}, 'printed': printed, 'stats': stats}
 
 
+def _measure_regions(printed, resolved):
+    """Map each MusicXML measure onto the printed measure it was engraved as.
+
+    A system's regions and its MusicXML measures normally line up one for one.
+    When Audiveris drops a measure from its export the counts disagree, and
+    lining the rest up by position would shift every later measure onto its
+    neighbour's bar. The measure numbers say where the hole is: if a system's
+    numbers span exactly as many measures as it has regions, each measure lands
+    on the region its own number points at and only the missing one is left
+    unplaced. Anything less certain - a system missing its first or last
+    measure, unnumbered measures, numbers that do not advance - keeps the whole
+    system unplaced rather than labelling the wrong bars.
+
+    Returns ``(regions, mismatched)``: the region per printed index (absent
+    where none could be assigned), and the indexes whose system's counts
+    disagreed.
+    """
+    systems = defaultdict(list)
+    for index, (m, _) in enumerate(printed):
+        systems[(m['page'], m['system'])].append(index)
+    assigned, mismatched = {}, set()
+    for (page, system), indexes in systems.items():
+        regions = sorted(
+            (r for r in resolved['pages'].get(page, {}).get('regions', ())
+             if r['system'] == system),
+            key=lambda r: r['system_measure'])
+        if len(regions) == len(indexes):
+            by_slot = {r['system_measure']: r for r in regions}
+            for index in indexes:
+                region = by_slot.get(printed[index][0]['system_measure'])
+                if region:
+                    assigned[index] = region
+            continue
+        mismatched.update(indexes)
+        labels = [printed[index][0]['label'] for index in indexes]
+        if not all(label.isdigit() for label in labels):
+            continue
+        numbers = [int(label) for label in labels]
+        if (numbers[-1] - numbers[0] + 1 != len(regions)
+                or any(b <= a for a, b in zip(numbers, numbers[1:]))):
+            continue
+        for index, number in zip(indexes, numbers):
+            assigned[index] = regions[number - numbers[0]]
+    return assigned, mismatched
+
+
 def prepare_score(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=None, resolved_notes=None):
     resolved = resolved_notes if resolved_notes is not None else resolve_score_notes(pdf_path, omr_path, num_pages, page_omr_overrides)
     printed = _printed_sources(mxl_path, num_pages, page_omr_overrides)
@@ -445,20 +491,18 @@ def prepare_score(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=No
     pdf_meter = None
     stats = {'notes_matched': 0, 'notes_unmatched': 0, 'pitch_corrections': 0,
              'measure_count_mismatch': 0, 'pages_without_regions': 0, 'measures_without_note_positions': 0}
-    xml_counts = defaultdict(int)
-    for m, _ in printed:
-        xml_counts[(m['page'], m['system'])] += 1
+    assigned, mismatched = _measure_regions(printed, resolved)
     pending_ties, printed_beat = {}, 0.0
     for printed_index, (m, notes) in enumerate(printed):
         m['printed_index'] = printed_index
         page = resolved['pages'].get(m['page'], {'regions': [], 'notes': []})
-        regions = [r for r in page['regions'] if r['system'] == m['system']]
-        region = None
-        if len(regions) == xml_counts[(m['page'], m['system'])]:
-            region = next((r for r in regions if r['system_measure'] == m['system_measure']), None)
-        else:
+        region = assigned.get(printed_index)
+        if printed_index in mismatched:
             stats['measure_count_mismatch'] += 1
-            m['warnings'].append('Measure geometry is incomplete; positions are left unassigned.')
+            m['warnings'].append(
+                'A printed measure is missing from the recognized score; this '
+                'system is placed by measure number.' if region else
+                'Measure geometry is incomplete; positions are left unassigned.')
         m['bbox_pt'] = region['bbox_pt'] if region else None
         if region:
             x0, y0, x1, y1 = region['bbox_pt']
