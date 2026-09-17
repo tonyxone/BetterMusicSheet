@@ -10,6 +10,10 @@ OCTAVES = {0xE510: 1, 0xE511: 1, 0xE512: 1, 0xE513: 1,
            0xE514: 2, 0xE515: 2, 0xE516: 2,
            0xE517: 3, 0xE518: 3, 0xE519: 3,
            0xE51C: 1, 0xE51D: 2, 0xE51E: 3}
+# Legacy Opus fonts predate SMuFL and expose notation glyphs through unrelated
+# Unicode characters. In OpusSpecialStd, these render as 8va and 8.
+LEGACY_OCTAVES = {('OpusSpecialStd', '”“'): 1,
+                  ('OpusSpecialStd', '“'): 1}
 METRONOMES = {0xECA2: 4, 0xECA3: 2, 0xECA4: 2, 0xECA5: 1,
               0xECA6: 1, 0xECA7: .5, 0xECA8: .5, 0xECA9: .25,
               0xECAA: .25, ord('♩'): 1, ord('♪'): .5}
@@ -86,25 +90,45 @@ def octave_intervals(page, staff_lines):
     intervals = {}
     for span in text_spans(page):
         text = span['text'].strip()
-        amount = OCTAVES.get(ord(text)) if len(text) == 1 else None
+        amount = LEGACY_OCTAVES.get((span.get('font'), text))
+        direction = 1 if amount is not None else None
         if amount is None:
-            # Some exporters draw the dashed continuation as literal hyphens
-            # appended to the label itself ('8va-', '8--') instead of a
-            # separate line drawing, so strip trailing dashes before lookup.
-            label = re.sub(r'-+$', '', text)
-            amount = {'8': 1, '8va': 1, '8vb': 1, '15': 2, '15ma': 2, '22': 3}.get(label)
+            amount = OCTAVES.get(ord(text)) if len(text) == 1 else None
+        suffix = ''
+        label = text
+        if amount is None:
+            match = re.fullmatch(r'(8(?:va|vb)?|15(?:ma)?|22)([-–—]*)', text, re.IGNORECASE)
+            if match:
+                label, suffix = match.groups()
+                amount = {'8': 1, '8va': 1, '8vb': 1,
+                          '15': 2, '15ma': 2, '22': 3}.get(label.lower())
+                if label.lower() in ('8va', '15ma'):
+                    direction = 1
+                elif label.lower() == '8vb':
+                    direction = -1
         if amount is None:
             continue
         x0, y0, x1, y1 = span['bbox']
-        lines = [(a, b, y) for a, b, y in dashed if -3 <= a - x1 <= 20 and y0 - 2 <= y <= y1 + 2]
+        # A suffix belongs to the continuation, not the label. Match vector
+        # lines against the end of the label portion so an overlapping line is
+        # not rejected merely because its first dashes share this text span.
+        label_right = x1
+        if suffix:
+            label_right = x0 + (x1 - x0) * len(label) / len(text)
+        lines = [(a, b, y) for a, b, y in dashed
+                 if -3 <= a - label_right <= 20 and y0 - 2 <= y <= y1 + 2]
+        # Some exporters encode the complete continuation as horizontally
+        # stretched hyphens in the label span and emit no vector line at all.
+        if not lines and suffix and x1 - label_right > 20:
+            lines = [(label_right, x1, (y0 + y1) / 2)]
         if len(lines) != 1:
             continue
         _, right, y = lines[0]
         candidates = []
         for staff, ys in staff_lines.items():
-            if y < min(ys):
+            if direction != -1 and y < min(ys):
                 candidates.append((min(ys) - y, staff, 1))
-            elif y > max(ys):
+            elif direction != 1 and y > max(ys):
                 candidates.append((y - max(ys), staff, -1))
         if not candidates:
             continue
