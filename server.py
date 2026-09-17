@@ -449,14 +449,24 @@ def job_assets(job_id: str, user_id: str = Depends(get_current_user_id)):
     job = with_sheet_name(_owned_job_or_404(job_id, user_id))
     if job["status"] != "done":
         raise HTTPException(409, "The sheet is not ready yet.")
+    # "original" is the file as uploaded, for the viewer's original/annotated
+    # toggle. It can be absent - a sheet whose upload was cleaned up, or one
+    # stored before this was served - so callers treat a null as "no toggle"
+    # rather than an error. original_type says whether it is a PDF, which the
+    # Play page needs: it renders through pdf.js and cannot show a photo.
+    original_type = storage.upload_media_type(job["sheet_name"])
     if not IS_PRODUCTION:
         return {"direct": False, "pdf": f"/api/sheets/{job_id}/download",
-                "timeline": f"/api/sheets/{job_id}/timeline"}
+                "timeline": f"/api/sheets/{job_id}/timeline",
+                "original": f"/api/sheets/{job_id}/original",
+                "original_type": original_type}
     stem = Path(job["sheet_name"]).stem
     disposition = _content_disposition("attachment", f"{stem} (annotated).pdf", f"{_ascii_stem(stem)} (annotated).pdf")
     return JSONResponse({"direct": True,
                          "pdf": storage.presign_artifact(job, "output", disposition),
-                         "timeline": storage.presign_artifact(job, "timeline")},
+                         "timeline": storage.presign_artifact(job, "timeline"),
+                         "original": storage.presign_artifact(job, "input"),
+                         "original_type": original_type},
                         headers={"Cache-Control": "no-store"})
 
 
@@ -465,14 +475,16 @@ def new_artifact_response(job, kind, disposition=None):
         result = storage.read_artifact(job, kind)
     except FileNotFoundError:
         raise HTTPException(404, "No playback timeline for this sheet.")
+    media_type = (storage.upload_media_type(job.get("sheet_name")) if kind == "input"
+                  else "application/pdf" if kind == "output" else "application/json")
     if IS_PRODUCTION:
         return StreamingResponse(result["Body"].iter_chunks(chunk_size=65536),
-            media_type="application/pdf" if kind == "output" else "application/json",
+            media_type=media_type,
             headers={"Content-Length": str(result["ContentLength"]),
                      **({"Content-Disposition": disposition} if disposition else {})})
     if not result.exists():
         raise HTTPException(404, "No artifact for this sheet.")
-    return FileResponse(result, media_type="application/pdf" if kind == "output" else "application/json",
+    return FileResponse(result, media_type=media_type,
                         headers={"Content-Disposition": disposition} if disposition else None)
 
 
@@ -508,6 +520,38 @@ def job_download(job_id: str, inline: bool = False, user_id: str = Depends(get_c
         path, media_type="application/pdf", filename=filename,
         content_disposition_type=disposition,
     )
+
+
+@app.get("/api/sheets/{job_id}/original")
+def job_original(job_id: str, user_id: str = Depends(get_current_user_id)):
+    """The sheet as it was uploaded, for the viewer's original/annotated toggle.
+
+    Always inline: this is shown in a frame or drawn to a canvas, never
+    offered as a download - the Download button hands over the annotated copy,
+    which is the thing the site made. 404 rather than 500 when the upload is
+    gone, since a sheet can outlive its input and the toggle simply hides."""
+    job = with_sheet_name(_owned_job_or_404(job_id, user_id))
+    if job["status"] != "done":
+        raise HTTPException(409, f"job is '{job['status']}', not done yet")
+    if SERVERLESS:
+        raise HTTPException(409, "Please refresh the page to load the original.")
+    if job.get("storage_version") == 2:
+        return new_artifact_response(job, "input")
+    sheet_name = job["sheet_name"]
+    if IS_PRODUCTION:
+        try:
+            body, content_length = storage.download_input_pdf(job["user_id"], sheet_name)
+        except Exception:
+            raise HTTPException(404, "no original for this sheet")
+        return StreamingResponse(
+            body.iter_chunks(chunk_size=65536),
+            media_type=storage.upload_media_type(sheet_name),
+            headers={"Content-Length": str(content_length)},
+        )
+    path = storage.local_input_path(job["user_id"], sheet_name)
+    if not path.exists():
+        raise HTTPException(404, "no original for this sheet")
+    return FileResponse(path, media_type=storage.upload_media_type(sheet_name))
 
 
 @app.get("/api/sheets/{job_id}/timeline")

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { BackButton } from "../back-button";
 
 export const metadata: Metadata = {
   title: "Terms | BetterMusicSheet.com",
@@ -8,7 +9,10 @@ export const metadata: Metadata = {
 export default function TermsPage() {
   return (
     <div className="wrap medium legal">
-      <h1 className="serif">Terms of use</h1>
+      <div className="page-title-row">
+        <BackButton />
+        <h1 className="serif">Terms of use</h1>
+      </div>
       <div className="sub">Last updated 12 September 2026</div>
 
       <p>
