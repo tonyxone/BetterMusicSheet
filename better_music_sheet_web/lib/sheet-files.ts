@@ -2,19 +2,50 @@
 
 import { clientApiFetch } from "./client-api";
 
+/** What /assets reports. `original` is the file as uploaded and may be absent
+ * (an older sheet, or one whose upload was cleaned up); `original_type` says
+ * whether it is a PDF, which decides if Play can render it. */
+export type SheetAssets = {
+  direct: boolean;
+  pdf: string | null;
+  timeline: string | null;
+  original?: string | null;
+  original_type?: string | null;
+};
+
+export type SheetFileKind = "pdf" | "timeline" | "original";
+
+const LEGACY_PATHS: Record<SheetFileKind, string> = {
+  pdf: "download?inline=1",
+  timeline: "timeline",
+  original: "original",
+};
+
+export async function fetchSheetAssets(jobId: string): Promise<SheetAssets | null> {
+  const assets = await clientApiFetch(`/api/sheets/${jobId}/assets`, { cache: "no-store" });
+  if (!assets.ok) return null;
+  return await assets.json() as SheetAssets;
+}
+
 /** Fetch credentials from our API, then bytes from S3 without forwarding the
  * user's Authorization/X-Guest-Id headers to another origin. No redirect. */
-export async function fetchSheetFile(jobId: string, kind: "pdf" | "timeline") {
+export async function fetchSheetFile(jobId: string, kind: SheetFileKind) {
   const assets = await clientApiFetch(`/api/sheets/${jobId}/assets`, { cache: "no-store" });
   // Allows the new UI to be published before the backend cutover.
   if (assets.status === 404) {
-    return clientApiFetch(`/api/sheets/${jobId}/${kind === "pdf" ? "download?inline=1" : "timeline"}`);
+    return clientApiFetch(`/api/sheets/${jobId}/${LEGACY_PATHS[kind]}`);
   }
   if (!assets.ok) return assets;
-  const data = await assets.json() as { direct: boolean; pdf: string | null; timeline: string | null };
-  const url = data[kind];
+  const data = await assets.json() as SheetAssets;
+  // A backend that predates the original/annotated toggle answers /assets
+  // without an "original" at all - fall back to the route rather than
+  // reporting the sheet has no original, which would hide the toggle.
+  const url = data[kind] ?? (kind === "original" && !("original" in data)
+    ? `/api/sheets/${jobId}/original` : null);
   if (!url) return new Response("File not available", { status: 404 });
-  return data.direct ? fetch(url, { credentials: "omit", cache: "no-store" }) : clientApiFetch(url);
+  return data.direct && url.startsWith("http")
+    ? fetch(url, { credentials: "omit", cache: "no-store" })
+    : clientApiFetch(url);
 }
 
 export async function uploadSheet(file: File, options: Record<string, string | number | boolean | null>) {

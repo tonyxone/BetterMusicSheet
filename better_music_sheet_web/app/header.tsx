@@ -16,7 +16,7 @@ export function Header() {
 
   return (
     <header className="site-header">
-      <Link href="/" className="logo" title="Upload another sheet">
+      <Link href="/" className="logo" title="Home">
         <Logo />
       </Link>
       <nav className="flex items-center gap-3">
@@ -30,6 +30,9 @@ export function Header() {
         >
           <KeyboardIcon size={44} />
         </Link>
+        {/* /history, not "/": the root is the Library only for a signed-in
+            visitor, and a guest with sheets of their own needs this to work
+            too. */}
         <Link
           href="/history"
           className="icon-link"

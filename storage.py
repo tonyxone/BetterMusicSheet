@@ -104,7 +104,9 @@ def presign_artifact(job, kind, disposition=None):
     # S3 holds, and a PDF labelled octet-stream cannot be rendered in a frame -
     # it downloads instead, named after the blob. Override the type here so old
     # and new objects behave the same.
-    params["ResponseContentType"] = "application/pdf" if kind == "output" else "application/json"
+    params["ResponseContentType"] = (
+        upload_media_type(job.get("sheet_name")) if kind == "input"
+        else "application/pdf" if kind == "output" else "application/json")
     if disposition:
         params["ResponseContentDisposition"] = disposition
     return _s3.generate_presigned_url("get_object", Params=params, ExpiresIn=300)
@@ -137,6 +139,24 @@ def _safe_stem(sheet_name):
     stem = Path(sheet_name or "").stem.strip()
     stem = re.sub(r"[\\/]+", "-", stem)
     return stem or "sheet"
+
+
+_UPLOAD_MEDIA_TYPES = {".pdf": "application/pdf", ".jpg": "image/jpeg",
+                       ".jpeg": "image/jpeg", ".png": "image/png"}
+
+
+def upload_media_type(sheet_name):
+    """The media type of the file the visitor actually uploaded.
+
+    The stored input is whatever was sent: a photo is converted to PDF in the
+    worker's scratch directory (see processor.py) and that copy is never
+    stored. Neither key layout records the type - v1 names every input
+    ".pdf" whatever it holds, and v2 ends the key at "input" - but the sheet
+    name is the uploaded filename, so its extension is the one record of it.
+    Unknown extensions fall back to PDF, which is what all but a handful of
+    uploads are.
+    """
+    return _UPLOAD_MEDIA_TYPES.get(Path(sheet_name or "").suffix.lower(), "application/pdf")
 
 
 def _input_key(user_id, sheet_name):
@@ -206,6 +226,13 @@ if IS_PRODUCTION:
         obj = _s3.get_object(Bucket=_BUCKET, Key=_timeline_key(user_id, sheet_name))
         return obj["Body"], obj["ContentLength"]
 
+    def download_input_pdf(user_id, sheet_name):
+        """(body, content_length) for the file as it was uploaded, streamed
+        back through this backend for the same reason the annotated copy is -
+        see download_output_pdf."""
+        obj = _s3.get_object(Bucket=_BUCKET, Key=_input_key(user_id, sheet_name))
+        return obj["Body"], obj["ContentLength"]
+
     def download_output_pdf(user_id, sheet_name):
         """Returns (body, content_length) for the annotated PDF, to be
         streamed back through this backend rather than redirecting the
@@ -249,6 +276,10 @@ else:
 
     def local_output_timeline_path(user_id, sheet_name):
         return _local_path(_timeline_key(user_id, sheet_name))
+
+    def local_input_path(user_id, sheet_name):
+        """Local-only counterpart of local_output_path, for the uploaded file."""
+        return _local_path(_input_key(user_id, sheet_name))
 
     def local_output_path(user_id, sheet_name):
         """Local-only: server.py serves this file itself instead of

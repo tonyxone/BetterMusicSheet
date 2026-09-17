@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { BackButton } from "../back-button";
 
 export const metadata: Metadata = {
   title: "About | BetterMusicSheet.com",
@@ -9,7 +10,10 @@ export const metadata: Metadata = {
 export default function AboutPage() {
   return (
     <div className="wrap medium legal">
-      <h1 className="serif">About</h1>
+      <div className="page-title-row">
+        <BackButton />
+        <h1 className="serif">About</h1>
+      </div>
       <div className="sub">What this does, and what it cannot do</div>
 
       <p>

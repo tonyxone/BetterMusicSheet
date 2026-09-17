@@ -4,8 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { clientApiFetch } from "@/lib/client-api";
-import { fetchSheetFile } from "@/lib/sheet-files";
+import { fetchSheetAssets, fetchSheetFile } from "@/lib/sheet-files";
+import { SheetToggle, type SheetVariant } from "../sheet-toggle";
 import { KeyboardIcon } from "../keyboard-icon";
+import { BackButton } from "../back-button";
 import type { AnnotationJob } from "@/lib/api";
 
 const POLL_INTERVAL_MS = 2500;
@@ -15,6 +17,26 @@ export function JobStatus() {
   const [job, setJob] = useState<AnnotationJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Which copy the preview shows. Owned here rather than by the preview
+  // itself: the control sits with the page's other actions, a level above it.
+  const [variant, setVariant] = useState<SheetVariant>("annotated");
+  const [originalMissing, setOriginalMissing] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!jobId) return;
+    let cancelled = false;
+    void fetchSheetAssets(jobId)
+      .then((assets) => {
+        if (cancelled || !assets) return;
+        // An older backend omits the field entirely; that is not proof of
+        // absence, so only an explicit null disables the toggle.
+        if ("original" in assets && !assets.original) {
+          setOriginalMissing("The uploaded file isn't stored for this sheet");
+        }
+      })
+      .catch(() => { /* Leave it enabled - the frame reports its own failures. */ });
+    return () => { cancelled = true; };
+  }, [jobId]);
 
   useEffect(() => {
     if (!jobId) return;
@@ -43,19 +65,22 @@ export function JobStatus() {
     };
   }, [jobId]);
 
-  if (!jobId) return <p className="wrap" style={{ color: "var(--danger)" }}>No sheet specified.</p>;
-  if (error) return <p className="wrap" style={{ color: "var(--danger)" }}>{error}</p>;
-  if (!job) return <p className="wrap" style={{ color: "var(--ink-soft)" }}>Loading…</p>;
+  if (!jobId) return <div className="wrap"><div className="page-title-row"><BackButton /><p style={{ color: "var(--danger)", margin: 0 }}>No sheet specified.</p></div></div>;
+  if (error) return <div className="wrap"><div className="page-title-row"><BackButton /><p style={{ color: "var(--danger)", margin: 0 }}>{error}</p></div></div>;
+  if (!job) return <div className="wrap"><div className="page-title-row"><BackButton /><p style={{ color: "var(--ink-soft)", margin: 0 }}>Loading…</p></div></div>;
 
   if (job.status === "failed") {
     return (
       <div className="wrap" style={{ textAlign: "center" }}>
-        <h1 className="serif" style={{ fontSize: 24, fontWeight: 600, color: "var(--danger)" }}>
-          Annotation failed
-        </h1>
+        <div className="page-title-row" style={{ justifyContent: "center" }}>
+          <BackButton />
+          <h1 className="serif" style={{ fontSize: 24, fontWeight: 600, color: "var(--danger)" }}>
+            Annotation failed
+          </h1>
+        </div>
         <p style={{ marginTop: 6, color: "var(--ink-soft)" }}>{job.sheet_name}</p>
         <p style={{ marginTop: 12, color: "var(--ink-soft)" }}>{job.error}</p>
-        <Link href="/" style={{ marginTop: 24, display: "inline-block", color: "var(--accent)", textDecoration: "underline" }}>
+        <Link href="/upload" style={{ marginTop: 24, display: "inline-block", color: "var(--accent)", textDecoration: "underline" }}>
           Try another file
         </Link>
       </div>
@@ -69,9 +94,12 @@ export function JobStatus() {
           <div className="line" />
           <div className="note">♪</div>
         </div>
-        <h2 className="serif" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>
-          Annotating your sheet…
-        </h2>
+        <div className="page-title-row" style={{ justifyContent: "center" }}>
+          <BackButton />
+          <h2 className="serif" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>
+            Annotating your sheet…
+          </h2>
+        </div>
         <p style={{ marginTop: 6, color: "var(--ink-soft)" }}>{job.sheet_name}</p>
         <div className="stage-card" style={{ marginTop: 30 }}>
           <div className="stage-spinner" />
@@ -85,11 +113,12 @@ export function JobStatus() {
   return (
     <div className="wrap wide">
       <div className="result-head">
-        <div>
+        <div className="page-title-row">
+          <BackButton />
           <h2 className="serif">{job.sheet_name}</h2>
-          <div className="sub">{job.labeled_groups} beat-groups labeled</div>
         </div>
         <div className="result-actions">
+          <SheetToggle value={variant} onChange={setVariant} unavailable={originalMissing} />
           <Link
             href={`/play?job=${jobId}`}
             className="icon-link"
@@ -102,7 +131,10 @@ export function JobStatus() {
         </div>
       </div>
       <div className="preview-card">
-        <PreviewFrame jobId={jobId} />
+        {/* Remounted on a switch: the frame's whole job is to fetch one file
+            and hand the browser a blob URL, and starting that over is simpler
+            and less error-prone than swapping documents mid-flight. */}
+        <PreviewFrame key={variant} jobId={jobId} variant={variant} />
       </div>
     </div>
   );
@@ -161,7 +193,7 @@ function DownloadButton({ jobId, sheetName }: { jobId: string; sheetName?: strin
 
 const PREVIEW_H_KEY = "bms_preview_h";
 
-function PreviewFrame({ jobId }: { jobId: string }) {
+function PreviewFrame({ jobId, variant }: { jobId: string; variant: SheetVariant }) {
   const resizeRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLIFrameElement>(null);
   const dragState = useRef({ startY: 0, startH: 0 });
@@ -170,7 +202,7 @@ function PreviewFrame({ jobId }: { jobId: string }) {
   useEffect(() => {
     let revoked = false;
     let objectUrl: string | null = null;
-    fetchSheetFile(jobId, "pdf")
+    fetchSheetFile(jobId, variant === "original" ? "original" : "pdf")
       .then((res) => {
         // A failed request otherwise gets turned into a blob and handed to
         // the PDF viewer, which renders it as an empty frame - indis-
@@ -212,7 +244,7 @@ function PreviewFrame({ jobId }: { jobId: string }) {
       revoked = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [jobId]);
+  }, [jobId, variant]);
 
   useEffect(() => {
     const saved = parseInt(localStorage.getItem(PREVIEW_H_KEY) || "", 10);
@@ -250,7 +282,9 @@ function PreviewFrame({ jobId }: { jobId: string }) {
     return (
       <div className="preview-resize" style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
         <p style={{ color: "var(--danger)", textAlign: "center", padding: 24 }}>
-          Couldn&apos;t show the preview here. The Download button still gives you the file.
+          {variant === "original"
+            ? "Couldn't show the uploaded file here."
+            : "Couldn't show the preview here. The Download button still gives you the file."}
         </p>
       </div>
     );
@@ -258,7 +292,7 @@ function PreviewFrame({ jobId }: { jobId: string }) {
 
   return (
     <div className="preview-resize" ref={resizeRef}>
-      <iframe ref={frameRef} title="Annotated sheet preview" />
+      <iframe ref={frameRef} title={variant === "original" ? "Original sheet preview" : "Annotated sheet preview"} />
       <div className="resize-handle" title="Drag to resize" onPointerDown={onPointerDown}>
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
           <line x1="3" y1="14" x2="14" y2="3" />

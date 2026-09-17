@@ -410,11 +410,43 @@ class AccuracyTests(unittest.TestCase):
     def test_pdf_octave_label_with_embedded_dashes_is_recognized(self):
         from types import SimpleNamespace
         for label in ('8-', '8--', '8va-', '8va--'):
+            line_start = 20 + len(label.rstrip('-')) * 5
             page = SimpleNamespace(get_text=lambda _, label=label: {'blocks': [{'lines': [{'spans': [
-                {'text': label, 'bbox': (20, 20, 28, 30)}]}]}]},
-                get_drawings=lambda: [{'dashes': '[1 1] 0', 'items': [('l', pymupdf.Point(30, 25), pymupdf.Point(180, 25))]}])
+                {'text': label, 'bbox': (20, 20, 20 + len(label) * 5, 30)}]}]}]},
+                get_drawings=lambda line_start=line_start: [{'dashes': '[1 1] 0', 'items': [
+                    ('l', pymupdf.Point(line_start, 25), pymupdf.Point(180, 25))]}])
             self.assertEqual(pdf_marks.octave_intervals(page, {1: (40, 50, 60, 70, 80)}),
                               {1: [(18, 182, 1)]}, msg=label)
+
+    def test_pdf_octave_continuation_inside_text_span_is_recognized(self):
+        from types import SimpleNamespace
+        for label in ('8-', '8--', '8va-', '8va--'):
+            page = SimpleNamespace(get_text=lambda _, label=label: {'blocks': [{'lines': [{'spans': [
+                {'text': label, 'bbox': (20, 20, 180, 30)}]}]}]}, get_drawings=lambda: [])
+            self.assertEqual(pdf_marks.octave_intervals(page, {1: (40, 50, 60, 70, 80)}),
+                              {1: [(18, 182, 1)]}, msg=label)
+
+    def test_pdf_octave_labels_from_legacy_opus_font_are_recognized(self):
+        from types import SimpleNamespace
+        for label in ('”“', '“'):
+            page = SimpleNamespace(get_text=lambda _, label=label: {'blocks': [{'lines': [{'spans': [
+                {'text': label, 'font': 'OpusSpecialStd', 'bbox': (20, 5, 30, 30)}]}]}]},
+                get_drawings=lambda: [{'dashes': '[2.5 2.1] 0', 'items': [
+                    ('l', pymupdf.Point(30, 25), pymupdf.Point(180, 25))]}])
+            self.assertEqual(pdf_marks.octave_intervals(page, {1: (40, 50, 60, 70, 80)}),
+                              {1: [(18, 182, 1)]}, msg=label)
+
+    def test_pdf_octave_direction_selects_the_correct_staff_between_systems(self):
+        from types import SimpleNamespace
+        staffs = {1: (0, 5, 10, 15, 20), 2: (50, 55, 60, 65, 70)}
+        drawing = lambda: [{'dashes': '[2.5 2.1] 0', 'items': [
+            ('l', pymupdf.Point(30, 32), pymupdf.Point(180, 32))]}]
+        alta = SimpleNamespace(get_text=lambda _: {'blocks': [{'lines': [{'spans': [
+            {'text': '8va', 'bbox': (20, 25, 30, 37)}]}]}]}, get_drawings=drawing)
+        bassa = SimpleNamespace(get_text=lambda _: {'blocks': [{'lines': [{'spans': [
+            {'text': '8vb', 'bbox': (20, 25, 30, 37)}]}]}]}, get_drawings=drawing)
+        self.assertEqual(pdf_marks.octave_intervals(alta, staffs), {2: [(18, 182, 1)]})
+        self.assertEqual(pdf_marks.octave_intervals(bassa, staffs), {1: [(18, 182, -1)]})
 
     def test_pdf_dotted_metronome_units(self):
         from types import SimpleNamespace

@@ -14,8 +14,10 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { clientApiFetch } from "@/lib/client-api";
-import { fetchSheetFile } from "@/lib/sheet-files";
+import { fetchSheetAssets, fetchSheetFile } from "@/lib/sheet-files";
+import { SheetToggle, type SheetVariant } from "../sheet-toggle";
 import { useAuth } from "../auth-context";
+import { BackButton } from "../back-button";
 import type { AnnotationJob } from "@/lib/api";
 import type { Timeline, TimelineNote } from "@/lib/timeline";
 import { notesAtBeat, measureIndexAt } from "@/lib/timeline";
@@ -97,6 +99,7 @@ function Panel({
   nodeRef,
   flush = false,
   dark = false,
+  actions,
   children,
 }: {
   /** Shown in the header. Omit for a panel whose content speaks for itself -
@@ -113,6 +116,9 @@ function Panel({
   flush?: boolean;
   /** Dark surface, for the note roll. */
   dark?: boolean;
+  /** Controls shown beside the header, only while the panel is open - they
+   * act on content a collapsed panel isn't showing. */
+  actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -123,17 +129,20 @@ function Panel({
       // header alone, so it must not grow at all.
       style={open ? { flex: `${grow} 1 0` } : { flex: "none" }}
     >
-      <button
-        type="button"
-        className="play-panel-head"
-        onClick={onToggle}
-        title={`${open ? "Collapse" : "Expand"} ${title ?? label}`}
-        aria-expanded={open}
-        aria-label={title ?? label}
-      >
-        <ChevronIcon />
-        {title && <span>{title}</span>}
-      </button>
+      <div className="play-panel-bar">
+        <button
+          type="button"
+          className="play-panel-head"
+          onClick={onToggle}
+          title={`${open ? "Collapse" : "Expand"} ${title ?? label}`}
+          aria-expanded={open}
+          aria-label={title ?? label}
+        >
+          <ChevronIcon />
+          {title && <span>{title}</span>}
+        </button>
+        {open && actions && <div className="play-panel-actions">{actions}</div>}
+      </div>
       {/* Unmounted rather than hidden when closed: the roll runs an animation
           frame loop and the sheet holds a pdf.js document, and neither should
           keep working behind a collapsed header. */}
@@ -194,6 +203,18 @@ function PauseIcon() {
   );
 }
 
+/** Three dots: the universal "more" glyph, for the options disclosure that
+ * only appears once a narrow viewport can't fit the full transport. */
+function MoreIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true">
+      <circle cx="5" cy="12" r="1.9" />
+      <circle cx="12" cy="12" r="1.9" />
+      <circle cx="19" cy="12" r="1.9" />
+    </svg>
+  );
+}
+
 /** How many printed lines (systems) a signed-out visitor can play before
  * being asked to sign in. Lines rather than measures because that is the unit
  * someone reading the sheet actually sees. */
@@ -218,7 +239,10 @@ function SheetPicker({ onPick }: { onPick: (jobId: string) => void }) {
 
   return (
     <div className="wrap medium">
-      <h1 className="serif">Practice</h1>
+      <div className="page-title-row">
+        <BackButton />
+        <h1 className="serif">Practice</h1>
+      </div>
       <div className="sub" style={{ marginBottom: 30 }}>
         Hear a sheet play back, with the notes lit up on a keyboard.
       </div>
@@ -226,7 +250,7 @@ function SheetPicker({ onPick }: { onPick: (jobId: string) => void }) {
         <p style={{ color: "var(--ink-soft)" }}>Loading…</p>
       ) : jobs.length === 0 ? (
         <div className="history-empty">
-          No annotated sheets yet. <Link href="/" style={{ color: "var(--accent)" }}>Upload one first.</Link>
+          No annotated sheets yet. <Link href="/upload" style={{ color: "var(--accent)" }}>Upload one first.</Link>
         </div>
       ) : (
         <div>
@@ -267,6 +291,11 @@ function Player({ jobId }: { jobId: string }) {
   const [baseBpm, setBaseBpm] = useState<number | null>(null);
   const [pdfData, setPdfData] = useState<ArrayBuffer | null>(null);
   const [pdfError, setPdfError] = useState<string | null>(null);
+  // The uploaded copy, fetched only if the visitor asks for it - most never
+  // do, and it is a second PDF over the wire.
+  const [variant, setVariant] = useState<SheetVariant>("annotated");
+  const [originalData, setOriginalData] = useState<ArrayBuffer | null>(null);
+  const [originalBlocked, setOriginalBlocked] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const [playing, setPlaying] = useState(false);
@@ -383,10 +412,52 @@ function Player({ jobId }: { jobId: string }) {
       }
     })();
 
+    // Whether the uploaded copy can be shown at all. Play draws through
+    // pdf.js, so a photo upload is ruled out here rather than failing later
+    // with a broken viewer.
+    void (async () => {
+      try {
+        const assets = await fetchSheetAssets(jobId);
+        if (cancelled || !assets) return;
+        if ("original" in assets && !assets.original) {
+          setOriginalBlocked("The uploaded file isn't stored for this sheet");
+        } else if (assets.original_type && assets.original_type !== "application/pdf") {
+          setOriginalBlocked("This sheet was uploaded as a photo, which Play can't display");
+        }
+      } catch {
+        // Leave it offered; the fetch below reports a real failure.
+      }
+    })();
+
     return () => {
       cancelled = true;
     };
   }, [jobId]);
+
+  // Fetched on first request and kept, so switching back and forth is free.
+  useEffect(() => {
+    if (variant !== "original" || originalData || originalBlocked) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetchSheetFile(jobId, "original");
+        if (!res.ok) throw new Error(`request failed (${res.status})`);
+        const buffer = await res.arrayBuffer();
+        // pdf.js would fail obscurely on anything else; say so plainly and
+        // fall back rather than leaving an empty panel.
+        const header = new TextDecoder().decode(new Uint8Array(buffer.slice(0, 5)));
+        if (header !== "%PDF-") throw new Error("not a PDF");
+        if (!cancelled) setOriginalData(buffer);
+      } catch (err) {
+        console.error("Loading the original sheet failed:", err);
+        if (!cancelled) {
+          setOriginalBlocked("The original couldn't be loaded");
+          setVariant("annotated");
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [jobId, variant, originalData, originalBlocked]);
 
   // Tear down audio and timers on unmount - otherwise an AudioContext and a
   // rAF loop keep running after navigating away.
@@ -547,6 +618,10 @@ function Player({ jobId }: { jobId: string }) {
 
   const [sheetOpen, setSheetOpen] = useState(true);
   const [rollOpen, setRollOpen] = useState(true);
+  /** Only consulted on a narrow viewport - see the .play-options CSS, which
+   * shows that group unconditionally once the window is wide enough to fit
+   * it inline. */
+  const [optionsOpen, setOptionsOpen] = useState(false);
 
   /** How the space the controls and keyboard leave over is divided between the
    * sheet and the roll: the sheet's share, 0 to 1. Storing a ratio rather than
@@ -756,7 +831,10 @@ function Player({ jobId }: { jobId: string }) {
   if (error) {
     return (
       <div className="wrap" style={{ textAlign: "center" }}>
-        <p style={{ color: "var(--danger)" }}>{error}</p>
+        <div className="page-title-row" style={{ justifyContent: "center" }}>
+          <BackButton />
+          <p style={{ color: "var(--danger)", margin: 0 }}>{error}</p>
+        </div>
         <Link href="/play" style={{ marginTop: 20, display: "inline-block", color: "var(--accent)" }}>
           Pick another sheet
         </Link>
@@ -764,21 +842,30 @@ function Player({ jobId }: { jobId: string }) {
     );
   }
   if (!timeline) {
-    return <p className="wrap" style={{ color: "var(--ink-soft)" }}>Loading…</p>;
+    return <div className="wrap"><div className="page-title-row"><BackButton /><p style={{ color: "var(--ink-soft)", margin: 0 }}>Loading…</p></div></div>;
   }
+
+  // Null while the original is still on its way, which renders the same
+  // "Loading the sheet preview" hint the annotated copy uses - rather than
+  // leaving the annotated pages up under a toggle that says Original.
+  const shownPdf = variant === "original" ? originalData : pdfData;
 
   return (
     <div className="play-view">
+      <BackButton />
       <Panel
         title="Sheet"
         nodeRef={sheetRef}
         open={sheetOpen}
         onToggle={() => setSheetOpen((v) => !v)}
         grow={rollOpen ? split : 1}
+        actions={
+          <SheetToggle value={variant} onChange={setVariant} unavailable={originalBlocked} />
+        }
       >
-        {pdfData ? (
+        {shownPdf ? (
           <SheetCanvas
-            pdfData={pdfData}
+            pdfData={shownPdf}
             measures={timeline.measures}
             playingIndex={playingMeasure}
             lockedFromIndex={lockedFrom}
@@ -865,89 +952,106 @@ function Player({ jobId }: { jobId: string }) {
         >
           <StepForwardIcon />
         </button>
-        <label className="play-speed">
-          Speed
-          <input
-            type="range"
-            min={0.1}
-            max={2}
-            step={0.1}
-            value={speed}
-            onChange={(e) => {
-              const value = Number(e.target.value);
-              setSpeed(value);
-              playbackRef.current?.setSpeed(value);
-            }}
-          />
-          {/* The true rate, not just an echo of the slider - a BPM override
-              near the ceiling can pull this below what's requested (see
-              MAX_EFFECTIVE_BPM in tempo.ts), and showing "2.0x" while it's
-              actually playing at 1.0x would read as broken, not capped. */}
-          <span title={effectiveSpeed < speed - 1e-6 ? `Capped from ${speed.toFixed(1)}x by the BPM limit` : undefined}>
-            {effectiveSpeed.toFixed(1)}x
-          </span>
-        </label>
+
+        {/* Only shown once .play-options can no longer fit inline - see the
+            CSS. On a wide window that group is already visible, so this
+            button would toggle nothing and stays hidden. */}
         <button
           type="button"
-          className={`icon-toggle${showKeyNames ? " on" : ""}`}
-          aria-pressed={showKeyNames}
-          title={showKeyNames ? "Hide key names" : "Show key names"}
-          aria-label={showKeyNames ? "Hide key names" : "Show key names"}
-          onClick={() => setShowKeyNames((v) => !v)}
+          className="icon-toggle play-options-toggle"
+          aria-expanded={optionsOpen}
+          aria-controls="play-options"
+          title={optionsOpen ? "Hide options" : "More options"}
+          aria-label={optionsOpen ? "Hide options" : "More options"}
+          onClick={() => setOptionsOpen((v) => !v)}
         >
-          <KeyNamesIcon />
+          <MoreIcon />
         </button>
 
-        <button
-          type="button"
-          className={`icon-toggle${soundOn ? " on" : ""}`}
-          aria-pressed={soundOn}
-          title={soundOn ? "Mute" : "Unmute"}
-          aria-label={soundOn ? "Mute" : "Unmute"}
-          onClick={() => setSoundOn((v) => !v)}
-        >
-          {/* The glyph itself carries the state, so it stays readable even
-              where the pressed styling is subtle. */}
-          {soundOn ? <SpeakerOnIcon /> : <SpeakerOffIcon />}
-        </button>
+        <div id="play-options" className={`play-options${optionsOpen ? " open" : ""}`}>
+          <label className="play-speed">
+            Speed
+            <input
+              type="range"
+              min={0.1}
+              max={2}
+              step={0.1}
+              value={speed}
+              onChange={(e) => {
+                const value = Number(e.target.value);
+                setSpeed(value);
+                playbackRef.current?.setSpeed(value);
+              }}
+            />
+            {/* The true rate, not just an echo of the slider - a BPM override
+                near the ceiling can pull this below what's requested (see
+                MAX_EFFECTIVE_BPM in tempo.ts), and showing "2.0x" while it's
+                actually playing at 1.0x would read as broken, not capped. */}
+            <span title={effectiveSpeed < speed - 1e-6 ? `Capped from ${speed.toFixed(1)}x by the BPM limit` : undefined}>
+              {effectiveSpeed.toFixed(1)}x
+            </span>
+          </label>
+          <button
+            type="button"
+            className={`icon-toggle${showKeyNames ? " on" : ""}`}
+            aria-pressed={showKeyNames}
+            title={showKeyNames ? "Hide key names" : "Show key names"}
+            aria-label={showKeyNames ? "Hide key names" : "Show key names"}
+            onClick={() => setShowKeyNames((v) => !v)}
+          >
+            <KeyNamesIcon />
+          </button>
 
-        <label className="play-speed">
-          BPM
-          <input
-            type="number"
-            min={20}
-            max={300}
-            className="play-tempo-input"
-            value={tempoControl(timeline, baseBpm).bpm}
-            aria-label={`Base tempo in ${tempoControl(timeline).unit}s per minute`}
-            // The score/assumed distinction still matters - it just doesn't need
-            // to live in the label text anymore, so it's a hover title instead.
-            title={
-              timeline.tempo_source === "score"
-                ? `Detected from the score (${tempoControl(timeline).unit} beats) - change it to override`
-                : "No tempo marking was found on the sheet; this is a default"
-            }
-            onChange={(e) => {
-              const value = Number(e.target.value);
-              if (value >= 20 && value <= 300) {
-                const quarterBpm = tempoControl(timeline).toQuarterBpm(value);
-                setBaseBpm(quarterBpm);
-                playbackRef.current?.setTempo(quarterBpm);
+          <button
+            type="button"
+            className={`icon-toggle${soundOn ? " on" : ""}`}
+            aria-pressed={soundOn}
+            title={soundOn ? "Mute" : "Unmute"}
+            aria-label={soundOn ? "Mute" : "Unmute"}
+            onClick={() => setSoundOn((v) => !v)}
+          >
+            {/* The glyph itself carries the state, so it stays readable even
+                where the pressed styling is subtle. */}
+            {soundOn ? <SpeakerOnIcon /> : <SpeakerOffIcon />}
+          </button>
+
+          <label className="play-speed">
+            BPM
+            <input
+              type="number"
+              min={20}
+              max={300}
+              className="play-tempo-input"
+              value={tempoControl(timeline, baseBpm).bpm}
+              aria-label={`Base tempo in ${tempoControl(timeline).unit}s per minute`}
+              // The score/assumed distinction still matters - it just doesn't need
+              // to live in the label text anymore, so it's a hover title instead.
+              title={
+                timeline.tempo_source === "score"
+                  ? `Detected from the score (${tempoControl(timeline).unit} beats) - change it to override`
+                  : "No tempo marking was found on the sheet; this is a default"
               }
-            }}
-          />
-        </label>
+              onChange={(e) => {
+                const value = Number(e.target.value);
+                if (value >= 20 && value <= 300) {
+                  const quarterBpm = tempoControl(timeline).toQuarterBpm(value);
+                  setBaseBpm(quarterBpm);
+                  playbackRef.current?.setTempo(quarterBpm);
+                }
+              }}
+            />
+          </label>
 
-        <div className="play-instrument">
-          <label>Instrument <select value={instrument} onChange={(e) => {
-            const value = e.target.value;
-            if (!isInstrumentId(value)) return;
-            setInstrument(value);
-            try { localStorage.setItem("sheet-instrument", value); } catch { /* Optional. */ }
-            void ensurePlayback(timeline, value);
-          }}>{INSTRUMENTS.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}</select></label>
+          <div className="play-instrument">
+            <label>Instrument <select value={instrument} onChange={(e) => {
+              const value = e.target.value;
+              if (!isInstrumentId(value)) return;
+              setInstrument(value);
+              try { localStorage.setItem("sheet-instrument", value); } catch { /* Optional. */ }
+              void ensurePlayback(timeline, value);
+            }}>{INSTRUMENTS.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}</select></label>
+          </div>
         </div>
-
       </div>
 
       {audioError && <p className="play-hint" role="alert">{audioError}</p>}

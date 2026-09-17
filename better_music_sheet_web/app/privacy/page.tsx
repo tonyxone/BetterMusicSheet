@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import Link from "next/link";
+import { BackButton } from "../back-button";
 
 export const metadata: Metadata = {
   title: "Privacy | BetterMusicSheet.com",
@@ -8,7 +10,10 @@ export const metadata: Metadata = {
 export default function PrivacyPage() {
   return (
     <div className="wrap medium legal">
-      <h1 className="serif">Privacy</h1>
+      <div className="page-title-row">
+        <BackButton />
+        <h1 className="serif">Privacy</h1>
+      </div>
       <div className="sub">Last updated 12 September 2026</div>
 
       <p>
@@ -76,7 +81,7 @@ export default function PrivacyPage() {
 
       <h2>Removing your data</h2>
       <p>
-        Delete individual sheets from the <a href="/history">Library</a> page.
+        Delete individual sheets from the <Link href="/history">Library</Link> page.
         To remove an account and everything attached to it, or to ask what is
         held about you, email{" "}
         <a href="mailto:privacy@bettermusicsheet.com">privacy@bettermusicsheet.com</a>.
