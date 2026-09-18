@@ -10,9 +10,9 @@ const OPTION_HELP: Record<UploadOption, string> = {
   style: "Unicode uses musical accidental symbols such as B♭ and C♯. ASCII uses plain-text Bb and C#, which can be easier to copy into older software.",
   fontSize: "Controls the printed note-label size. Larger labels are easier to read but have less room around dense chords.",
   color: "Sets the printed colour of every note label. A colour makes the labels easy to tell apart from the printed music, while black keeps the page looking like the original. Pale colours can be hard to read on white paper.",
-  dpi: "Controls the scan resolution used for recognition. Leave it on auto for most sheets; 300 DPI can help a blurry scan but takes longer to process.",
+  dpi: "Controls the resolution used for recognition. Auto starts at 300 DPI and can re-read unclear pages using different recognition methods. A forced higher value takes longer and uses more memory.",
   octave: "Adds the scientific octave number to every label, such as B♭4. This identifies the exact piano key but makes each label longer.",
-  autoRetry: "Automatically scans a page again at higher resolution when unusually few notes are found. It can improve difficult pages but increases processing time.",
+  autoRetry: "Automatically re-reads a page when notes are missing or its musical structure looks incomplete. It uses higher resolution where noteheads went undetected, and cheaper re-readings where they were found but could not be timed. It can improve difficult pages but increases processing time.",
 };
 
 /** Presets worth one click. All dark enough to read against the staff; the
@@ -139,16 +139,16 @@ export function UploadForm() {
             <div className="opt-row">
               <label htmlFor="dpi" className="main">Force DPI</label>
               <OptionHelp option="dpi" label="Force DPI" open={openHelp} onToggle={setOpenHelp} />
-              <input
+              <select
                 id="dpi"
-                type="number"
-                min={150}
-                max={300}
-                step={50}
-                placeholder="auto"
                 value={dpi}
                 onChange={(e) => setDpi(e.target.value)}
-              />
+              >
+                <option value="">Auto (recommended)</option>
+                {[200, 300, 400, 500, 600].map((value) => (
+                  <option key={value} value={value}>{value} DPI</option>
+                ))}
+              </select>
             </div>
             {openHelp === "dpi" && <OptionExplanation option="dpi" />}
             <div className="opt-row checkbox">
@@ -164,7 +164,7 @@ export function UploadForm() {
                 checked={autoRetry}
                 onChange={(e) => setAutoRetry(e.target.checked)}
               />
-              <label htmlFor="autoRetry">Auto re-scan under-recognized pages at higher DPI</label>
+              <label htmlFor="autoRetry">Auto re-read unclear pages</label>
               <OptionHelp option="autoRetry" label="Auto re-scan" open={openHelp} onToggle={setOpenHelp} />
             </div>
             {openHelp === "autoRetry" && <OptionExplanation option="autoRetry" />}

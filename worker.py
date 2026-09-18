@@ -56,13 +56,16 @@ def current_stage(directory):
     except Exception:
         return None
     stage, pages = progress.get("stage"), progress.get("pages")
+    detail = progress.get("detail")
     if stage == RECOGNITION and pages and pages > 1:
         page = audiveris_page(directory / "work")
         if page:
             # A retry run re-reads selected sheets and keeps their original
             # numbers, so the reported page can exceed the count on its own.
-            return f"{stage} (page {min(page, pages)} of {pages})"
-    return stage
+            stage = f"{stage} (page {min(page, pages)} of {pages})"
+    # The stage name stays exactly what processor.py published, so the test
+    # above keeps matching; anything extra is appended rather than folded in.
+    return f"{stage} · {detail}" if stage and detail else stage
 
 
 def event_jobs(body):

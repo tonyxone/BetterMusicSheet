@@ -52,5 +52,5 @@ test('direct upload sends signed fields before file and tolerates lost completio
 
 test('invalid upload options render a readable validation error', async () => {
   const api = load(async () => Response.json({ detail: [{ msg: 'invalid dpi' }] }, { status: 422 }), () => {});
-  await assert.rejects(api.uploadSheet(new File(['pdf'], 'a.pdf'), { dpi: 600 }), /Check the file and options/);
+  await assert.rejects(api.uploadSheet(new File(['pdf'], 'a.pdf'), { dpi: 650 }), /Check the file and options/);
 });

@@ -159,6 +159,54 @@ def load_key_timeline(omr_path, sheet_index):
     return result
 
 
+# Audiveris grades each time-signature digit it reads. Across this project's
+# corpus the grades are sharply bimodal: 213 of 248 digits grade 0.4 or above
+# (clustered at 0.7-0.8) and 35 grade 0.2 or below, with nothing in between.
+# Every one of those low-grade digits is a printed "12" collapsed into a single
+# "7" - the most common time-signature error here, and an expensive one. It
+# turns a 12/8 bar into a 7/8 bar, after which every voice overflows and
+# Audiveris discards whatever will not fit, so the mistake costs notes and not
+# merely timing.
+MIN_TIME_GRADE = 0.4
+
+
+def load_time_signatures(omr_path, sheet_index):
+    """Recognized time signatures on a sheet, each with a confidence verdict.
+
+    The composite <time-pair> carries the meter but averages its digits' grades
+    - it scored 0.699 for a pair built from a 0.176 and a 0.799 - so the verdict
+    is taken from the weakest digit rather than from the pair.
+
+    Returns [{staff, x, beats, grade, low_confidence}], x in OMR pixels.
+    """
+    root = _parse_sheet(omr_path, sheet_index)
+    digits = []
+    for number in root.iter('time-number'):
+        bounds = number.find('bounds')
+        if number.get('staff') and bounds is not None and number.get('grade') is not None:
+            digits.append((int(number.get('staff')), float(bounds.get('x')),
+                           float(number.get('grade'))))
+    result = []
+    for pair in root.iter('time-pair'):
+        bounds, rational = pair.find('bounds'), pair.get('time-rational')
+        if not pair.get('staff') or bounds is None or not rational or '/' not in rational:
+            continue
+        try:
+            numerator, denominator = (int(v) for v in rational.split('/', 1))
+        except ValueError:
+            continue
+        if denominator <= 0:
+            continue
+        staff, x = int(pair.get('staff')), float(bounds.get('x'))
+        width = float(bounds.get('w', '0'))
+        # The digits of a signature sit within the pair's own bounds.
+        grades = [g for s, dx, g in digits if s == staff and x - 2 <= dx <= x + width + 2]
+        grade = min(grades, default=float(pair.get('grade', '1')))
+        result.append({'staff': staff, 'x': x, 'beats': numerator * 4 / denominator,
+                       'grade': grade, 'low_confidence': grade < MIN_TIME_GRADE})
+    return result
+
+
 def load_alter_map(omr_path, sheet_index):
     """Return {head_id: accidental_shape} — explicit accidentals attached to heads.
 

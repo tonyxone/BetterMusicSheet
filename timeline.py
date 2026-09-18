@@ -2,7 +2,8 @@
 from collections import defaultdict
 from copy import deepcopy
 import pymupdf
-from pdf_marks import time_signatures
+from audiveris_heads import load_time_signatures
+from pdf_marks import arpeggio_signs, time_signatures
 
 import musicxml
 from labels import step_of, octave_of
@@ -33,8 +34,17 @@ def _printed_sources(mxl_path, num_pages, overrides):
             by_id = defaultdict(list)
             for n in ns:
                 by_id[n['measure_index']].append(n)
-            for m in ms:
-                result.append((dict(m, page=page), by_id[m['measure_index']]))
+            # A page re-read on its own numbers its measures from 1 again,
+            # having never seen the pages before it - so bar 30 comes back
+            # calling itself bar 1. Where the re-read found the same number of
+            # measures, the document's own labels are carried across so the bar
+            # numbers a reader sees stay continuous. Where it did not, the two
+            # disagree about what the measures even are, and inventing labels
+            # would be worse than keeping the ones the re-read reported.
+            original = [m for m in measures if m['page'] == page]
+            labels = [m['label'] for m in (original if len(original) == len(ms) else ms)]
+            for m, label in zip(ms, labels):
+                result.append((dict(m, page=page, label=label), by_id[m['measure_index']]))
         else:
             result.extend((m, by_measure[m['measure_index']]) for m in measures if m['page'] == page)
     # Preserve music with anomalous page metadata, but never assign its geometry
@@ -437,6 +447,56 @@ def _prepare_musicxml_only(mxl_path, num_pages, page_omr_overrides=None):
     return {'resolved': {'pages': {}, 'notes': []}, 'printed': printed, 'stats': stats}
 
 
+def _apply_pdf_arpeggios(notes, signs, measure):
+    """Mark chords the engraving rolls that recognition missed.
+
+    Only ever adds: an arpeggio Audiveris did find is never taken away, so a
+    correct reading cannot be undone by a geometric guess.
+
+    A note matches a sign when it sits just to its right and within the sign's
+    vertical span, both tolerances measured in notehead heights so the test
+    holds at any engraving size. On a real score the gap ran 2.3-3.6pt against
+    a 5.3pt notehead, and the sign stopped a little short of the outermost
+    noteheads' centres, which is what the vertical padding allows for.
+
+    One match then rolls the whole chord rather than only the notes whose own
+    geometry matched. An arpeggio applies to every note of the chord - half a
+    rolled chord with the rest struck on the beat is a worse reading than not
+    rolling it at all - and grouping by onset here is the same grouping the
+    playback stagger uses, so what gets marked is exactly what gets rolled.
+    """
+    if not signs:
+        return 0
+    chords = defaultdict(list)
+    for n in notes:
+        chords[(n['part'], round(n['start_beat_in_measure'], 6))].append(n)
+    recovered = 0
+    for chord in chords.values():
+        if all(n['arpeggiate'] for n in chord):
+            continue
+        if not any(_sits_against_a_sign(n, signs) for n in chord):
+            continue
+        for n in chord:
+            n['arpeggiate'] = True
+        recovered += 1
+    if recovered:
+        measure['warnings'].append(
+            'Arpeggio read from the printed PDF; this chord is rolled low to high.')
+    return recovered
+
+
+def _sits_against_a_sign(note, signs):
+    """Whether this notehead is the one an arpeggio sign is drawn against."""
+    if not note.get('bbox_pt'):
+        return False
+    x0, y0, _, y1 = note['bbox_pt']
+    height = max(1.0, y1 - y0)
+    centre = (y0 + y1) / 2
+    return any(-height * .2 <= x0 - x <= height * 2.5
+               and top - height * 1.5 <= centre <= bottom + height * 1.5
+               for x, top, bottom in signs)
+
+
 def _measure_regions(printed, resolved):
     """Map each MusicXML measure onto the printed measure it was engraved as.
 
@@ -488,7 +548,22 @@ def prepare_score(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=No
     printed = _printed_sources(mxl_path, num_pages, page_omr_overrides)
     with pymupdf.open(pdf_path) as pdf:
         meters = {i + 1: time_signatures(p) for i, p in enumerate(pdf)}
-    pdf_meter = None
+        # Audiveris misses roughly half the arpeggios on a vector engraving that
+        # states every one of them; the marks are read back here instead.
+        arpeggios = {i + 1: arpeggio_signs(p) for i, p in enumerate(pdf)}
+    # Pages where Audiveris's own reading of the printed meter is too weak to
+    # act on. A wrong bar length is not a cosmetic error: the voices overflow
+    # and their excess notes are dropped, so this is worth telling a reader
+    # about rather than presenting the result as a confident reading.
+    unreliable_meter_pages = set()
+    for page in range(1, num_pages + 1):
+        source = (page_omr_overrides or {}).get(page, {}).get('omr', omr_path)
+        try:
+            if any(s['low_confidence'] for s in load_time_signatures(source, page)):
+                unreliable_meter_pages.add(page)
+        except Exception:
+            continue
+    pdf_meter, meter_unreliable = None, False
     stats = {'notes_matched': 0, 'notes_unmatched': 0, 'pitch_corrections': 0,
              'measure_count_mismatch': 0, 'pages_without_regions': 0, 'measures_without_note_positions': 0}
     assigned, mismatched = _measure_regions(printed, resolved)
@@ -510,11 +585,21 @@ def prepare_score(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=No
                       if x0 <= e['x'] < x1 and y0 <= e['y'] <= y1}
             if len(values) == 1:
                 pdf_meter = values.pop()
+        # A signature carries forward until the next one, so the doubt does too.
+        if m['page'] in unreliable_meter_pages:
+            meter_unreliable = True
         if pdf_meter is not None and not m['implicit'] and not m['label'].startswith('X'):
             if abs(m['nominal_length_beats'] - pdf_meter) > 1e-6:
-                m['warnings'].append('Time signature corrected from the printed PDF.')
+                m['warnings'].append(
+                    'Time signature corrected from the printed PDF; the recognized '
+                    'one was read with low confidence.' if meter_unreliable else
+                    'Time signature corrected from the printed PDF.')
                 m['nominal_length_beats'] = pdf_meter
                 m['length_beats'] = max(pdf_meter, m['content_length_beats'])
+        if meter_unreliable and pdf_meter is None:
+            m['warnings'].append(
+                'The printed time signature could not be read confidently and none '
+                'was recoverable from the PDF; bar lengths here may be wrong.')
         for event in page.get('tempo_events', []):
             if event['system'] == m['system'] and event['system_measure'] == m['system_measure']:
                 m['events'] = [e for e in m['events'] if not (e['kind'] == 'tempo' and abs(e['beat'] - event['beat']) < 1e-6)]
@@ -578,6 +663,8 @@ def prepare_score(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=No
         vector_count = _recover_uniform_vector_run(m, notes, candidates, used)
         onset_count = _recover_known_onsets(m, notes, candidates, used)
         tail_count = _recover_measure_tail(m, notes, candidates, used)
+        stats['arpeggios_recovered'] = stats.get('arpeggios_recovered', 0) + _apply_pdf_arpeggios(
+            notes, arpeggios.get(m['page'], ()), m)
         stats['notes_recovered'] = stats.get('notes_recovered', 0) + vector_count + onset_count + tail_count
         stats['notes_recovered_from_vector_pdf'] = (
             stats.get('notes_recovered_from_vector_pdf', 0) + vector_count)

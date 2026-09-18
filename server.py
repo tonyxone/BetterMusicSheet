@@ -12,7 +12,7 @@ import traceback
 import unicodedata
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
@@ -42,13 +42,10 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
 
-# Bounds on the optional "force DPI" upload option. Rasterization cost grows
-# with the square of the DPI, so leaving this open-ended lets one upload eat
-# an unbounded slice of a shared worker. 300 is Audiveris's own default;
-# pages that genuinely need more get it from the automatic sparse-page retry
-# (run.py's RETRY_DPI), which is bounded to the pages that need it.
-MIN_DPI = 150
-MAX_DPI = 300
+# Fixed values keep rasterization cost predictable. Auto leaves the opening
+# pass at Audiveris's 300-DPI default and can selectively re-read unclear
+# pages at run.py's RETRY_DPI, which is bounded to the pages that need it.
+DpiOption = Literal[200, 300, 400, 500, 600]
 
 app = FastAPI(title="Music-Sheet Annotator API")
 
@@ -239,7 +236,7 @@ class UploadRequest(BaseModel):
     style: str = "unicode"
     octave: bool = False
     font_size: float = Field(default=6.5, ge=3, le=20, allow_inf_nan=False)
-    dpi: Optional[int] = Field(default=None, ge=MIN_DPI, le=MAX_DPI)
+    dpi: Optional[DpiOption] = None
     auto_retry: bool = True
     # Validated here rather than at render time, so a bad value is a 422 the
     # uploader can see instead of a job that fails minutes later.
