@@ -295,7 +295,9 @@ def load_score_notes(mxl_path):
         m['length_beats'] = content if irregular or pickup else max(nominal, content)
         m['measure_index'] = index
         if nominal and abs(content - nominal) > 1e-7 and not irregular:
-            m['warnings'].append('Inferred pickup length.' if pickup else 'Recognized duration differs from the time signature.')
+            m['warnings'].append(
+                'Inferred pickup length.' if pickup else
+                'Recognized duration differs from the time signature; playback timing is inferred.')
         measures.append(m)
     for n in notes:
         n['measure_index'] = index_of[n['identity']]

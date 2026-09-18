@@ -4,7 +4,7 @@ import unittest
 import zipfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pymupdf
 import annotate
@@ -12,6 +12,7 @@ import audiveris_heads
 import musicxml
 import timeline
 import pdf_marks
+import run
 from score_notes import resolve_score_notes
 
 
@@ -33,11 +34,15 @@ def mxl(path, body):
     return path
 
 
-def omr(path, pages):
+def omr(path, pages, place_voices=True):
     """Two staves per page, one system, with explicit voice/slot identities.
 
     Each page contains measures of heads: (pitch slot, onset, staff, alter).
     Optional key events are injected by the tests as actual OMR objects.
+
+    ``place_voices=False`` writes the heads without the voice/slot entries that
+    give their chords a time offset - Audiveris's RHYTHMS step failing, which
+    detects every notehead and still drops it from the exported score.
     """
     with zipfile.ZipFile(path, 'w') as z:
         for page_number, ms in enumerate(pages, 1):
@@ -74,17 +79,296 @@ def omr(path, pages):
                         ET.SubElement(rel, 'alter-head')
                     slot = str(i + 1)
                     ET.SubElement(stack, 'slot', id=slot, **{'time-offset': str(onset / 4)})
-                    if staff not in voice_els:
-                        voice_els[staff] = ET.SubElement(ET.SubElement(m, 'voice', id=str(staff)), 'slots')
-                    entry = ET.SubElement(voice_els[staff], 'entry')
-                    ET.SubElement(entry, 'key').text = slot
-                    ET.SubElement(entry, 'value', chord=cid, status='BEGIN')
+                    if place_voices:
+                        if staff not in voice_els:
+                            voice_els[staff] = ET.SubElement(ET.SubElement(m, 'voice', id=str(staff)), 'slots')
+                        entry = ET.SubElement(voice_els[staff], 'entry')
+                        ET.SubElement(entry, 'key').text = slot
+                        ET.SubElement(entry, 'value', chord=cid, status='BEGIN')
                 ET.SubElement(m, 'head-chords').text = ' '.join(ids)
             z.writestr(f'sheet#{page_number}/sheet#{page_number}.xml', ET.tostring(root))
     return path
 
 
 class AccuracyTests(unittest.TestCase):
+    def test_structurally_incomplete_page_is_retried_even_when_not_sparse(self):
+        score = mxl(self.path / 'score.mxl', measure(ATTR + ''.join(note() for _ in range(10))))
+        book = omr(self.path / 'score.omr', [[[(6, i / 2, 1, None) for i in range(20)]]])
+        counts, pages = run.find_sparse_pages(book, 1, score)
+        self.assertEqual(counts, {1: 20})
+        self.assertEqual(pages, [1])
+
+    def test_empty_exported_measure_is_retried(self):
+        score = mxl(self.path / 'score.mxl',
+                    measure(ATTR + ''.join(note() for _ in range(20)), 1) + measure('', 2))
+        book = omr(self.path / 'score.omr', [[[(6, i / 2, 1, None) for i in range(20)]]])
+        self.assertEqual(run.find_sparse_pages(book, 1, score)[1], [1])
+
+    @patch('run.vector_notehead_counts', return_value={1: 20, 2: 100})
+    def test_empty_exported_measure_outranks_a_lower_quality_page(self, _counts):
+        score = mxl(self.path / 'score.mxl',
+                    measure(ATTR + ''.join(note() for _ in range(20)), 1) +
+                    measure('', 2) +
+                    '<measure number="3"><print new-page="yes"/>' + ''.join(note() for _ in range(20)) +
+                    '</measure>')
+        book = omr(self.path / 'score.omr', [
+            [[(6, i / 2, 1, None) for i in range(20)]],
+            [[(6, i / 2, 1, None) for i in range(20)]],
+        ], place_voices=False)
+        self.assertEqual(run.find_sparse_pages(book, 2, score, self.path / 'score.pdf')[1], [1, 2])
+
+    def test_a_full_measure_rest_is_not_mistaken_for_an_export_hole(self):
+        score = mxl(self.path / 'score.mxl',
+                    measure(ATTR + ''.join(note() for _ in range(20)), 1) +
+                    measure('<note><rest/><duration>4</duration></note>', 2))
+        book = omr(self.path / 'score.omr', [[[(6, i / 2, 1, None) for i in range(20)]]])
+        self.assertEqual(run.find_sparse_pages(book, 1, score)[1], [])
+
+    @patch('run.vector_notehead_counts', return_value={1: 100})
+    def test_vector_pdf_deficit_is_retried_even_when_omr_agrees_with_export(self, _counts):
+        score = mxl(self.path / 'score.mxl', measure(ATTR + ''.join(note() for _ in range(50))))
+        book = omr(self.path / 'score.omr', [[[(6, i / 2, 1, None) for i in range(50)]]])
+        self.assertEqual(run.find_sparse_pages(book, 1, score, self.path / 'score.pdf')[1], [1])
+
+    def test_retry_accepts_better_structure_with_the_same_head_count(self):
+        original = self.path / 'score.pdf'
+        work = self.path / 'work'
+        work.mkdir()
+        retry_mxl, retry_omr = self.path / 'retry.mxl', self.path / 'retry.omr'
+        with patch('run.run_audiveris', return_value=(retry_mxl, retry_omr)), \
+             patch('run.load_sheet_heads', return_value=[{}] * 208), \
+             patch('run.placed_head_ratio', return_value=(208, 208)), \
+             patch('run.recognition_quality', side_effect=[.73, .83]):
+            overrides = run.retry_sparse_pages(original, work, {1: 208}, [1])
+        self.assertEqual(overrides[1], {'omr': str(retry_omr), 'mxl': str(retry_mxl)})
+
+    def time_omr(self, name, pairs):
+        """A sheet carrying only time signatures: (rational, top grade, bottom grade)."""
+        path = self.path / name
+        with zipfile.ZipFile(path, 'w') as z:
+            root = ET.Element('sheet')
+            ET.SubElement(root, 'picture', width='200', height='300')
+            sig = ET.SubElement(root, 'sig')
+            for staff, (rational, top, bottom) in enumerate(pairs, 1):
+                for side, value, grade in (('TOP', rational.split('/')[0], top),
+                                           ('BOTTOM', rational.split('/')[1], bottom)):
+                    number = ET.SubElement(sig, 'time-number', side=side, value=value,
+                                           grade=str(grade), staff=str(staff))
+                    ET.SubElement(number, 'bounds', x='320', y='472', w='34', h='42')
+                pair = ET.SubElement(sig, 'time-pair', **{'time-rational': rational},
+                                     grade='.7', staff=str(staff))
+                ET.SubElement(pair, 'bounds', x='320', y='472', w='38', h='85')
+            z.writestr('sheet#1/sheet#1.xml', ET.tostring(root))
+        return path
+
+    def test_a_misread_time_signature_digit_is_reported_as_unreliable(self):
+        """A printed 12/8 collapsed into 7/8: the "7" grades far below its "8"."""
+        book = self.time_omr('meter.omr', [('7/8', .176, .799)])
+        signature, = audiveris_heads.load_time_signatures(book, 1)
+        self.assertEqual(signature['beats'], 3.5)
+        self.assertEqual(signature['grade'], .176)
+        self.assertTrue(signature['low_confidence'])
+
+    def test_a_confidently_read_time_signature_is_trusted(self):
+        book = self.time_omr('good.omr', [('2/4', .786, .769)])
+        signature, = audiveris_heads.load_time_signatures(book, 1)
+        self.assertEqual(signature['beats'], 2.0)
+        self.assertFalse(signature['low_confidence'])
+
+    def test_the_verdict_comes_from_the_weakest_digit_not_the_pair(self):
+        """The composite pair averages its digits and grades .7 either way."""
+        book = self.time_omr('mixed.omr', [('7/8', .176, .799), ('6/8', .80, .79)])
+        weak, strong = audiveris_heads.load_time_signatures(book, 1)
+        self.assertTrue(weak['low_confidence'])
+        self.assertFalse(strong['low_confidence'])
+
+    def test_detected_heads_never_placed_in_a_voice_are_flagged(self):
+        """The failure a head count cannot see: every notehead found, none playable."""
+        heads = [[[(6, i / 2, 1 + i % 2, None) for i in range(60)]]]
+        placed = omr(self.path / 'placed.omr', heads)
+        dropped = omr(self.path / 'dropped.omr', heads, place_voices=False)
+        self.assertEqual(run.placed_head_ratio(placed, 1), (60, 60))
+        self.assertEqual(run.placed_head_ratio(dropped, 1), (60, 0))
+        self.assertEqual(run.find_sparse_pages(dropped, 1)[1], [1])
+        self.assertEqual(run.find_sparse_pages(placed, 1)[1], [])
+
+    def test_a_page_too_small_to_judge_is_not_reprocessed(self):
+        """At 20 heads a single unplaced chord already reads as 75%; that is noise."""
+        few = omr(self.path / 'few.omr', [[[(6, i / 2, 1, None) for i in range(30)]]],
+                  place_voices=False)
+        self.assertEqual(run.placed_head_ratio(few, 1), (30, 0))
+        self.assertEqual(run.find_sparse_pages(few, 1)[1], [])
+
+    def test_reprocessing_tries_isolation_then_tuplets_and_skips_dpi(self):
+        """Normal engraving: a higher DPI is a measured no-op, so it is never queued."""
+        with patch('run.staff_interline_pt', return_value=5.0):
+            variants = list(run.retry_variants(self.path / 'score.pdf', 3))
+        self.assertEqual([label for label, _ in variants],
+                         ['the page on its own', 'inferred tuplets'])
+        self.assertEqual([options for _, options in variants],
+                         [{'sheets': [3]},
+                          {'sheets': [3], 'switches': {'implicitTuplets': True}}])
+
+    def test_reprocessing_keeps_a_user_selected_dpi(self):
+        with patch('run.staff_interline_pt', return_value=5.0):
+            variants = list(run.retry_variants(self.path / 'score.pdf', 3, base_dpi=500))
+        self.assertEqual(variants, [
+            ('the page on its own', {'sheets': [3], 'dpi': 500}),
+            ('inferred tuplets', {'sheets': [3], 'dpi': 500,
+                                  'switches': {'implicitTuplets': True}}),
+        ])
+
+    def blank_pdf(self, name, pages=2, width=595, height=842):
+        path = self.path / name
+        with pymupdf.open() as doc:
+            for _ in range(pages):
+                doc.new_page(width=width, height=height)
+            doc.save(path)
+        return path
+
+    def test_recognition_time_is_estimated_from_page_area(self):
+        """Fitted over 35 scores: cost tracks rasterized area and the notehead
+        count falls out of the fit entirely."""
+        a4 = self.blank_pdf('a4.pdf', pages=1)
+        # A4 at 300 DPI is 2479x3508 = 8.7 megapixels.
+        self.assertAlmostEqual(run.estimated_seconds(a4), 8.7 * run.SECONDS_PER_MEGAPIXEL, delta=.5)
+        self.assertAlmostEqual(run.estimated_seconds(self.blank_pdf('two.pdf', pages=2)),
+                               2 * run.estimated_seconds(a4), delta=.5)
+        # Doubling the resolution quadruples the pixels, and the cost with them.
+        self.assertAlmostEqual(run.estimated_seconds(a4, 600),
+                               4 * run.estimated_seconds(a4), delta=.5)
+
+    def test_a_single_page_reread_carries_its_own_setup_cost(self):
+        """One page on its own pays for starting the engine and opening the
+        book that a whole-book pass spreads across every page."""
+        pdf = self.blank_pdf('one.pdf', pages=1)
+        share = run.estimated_seconds(pdf)
+        alone = run.estimated_seconds(pdf, pages=[1], single_page=True)
+        self.assertAlmostEqual(alone / share, run.RETRY_PASS_OVERHEAD, places=3)
+
+    def test_reread_estimate_is_a_range_because_the_ladder_stops_early(self):
+        pdf = self.blank_pdf('sparse.pdf', pages=4)
+        low, high = run.estimated_retry_seconds(pdf, [1, 2], poor_recall_pages=[1])
+        self.assertLess(low, high)
+        # A page short of noteheads leads with resolution, so it costs more
+        # than one whose heads were found but never voiced.
+        detection, = run.estimated_retry_seconds(pdf, [1], poor_recall_pages=[1])[:1]
+        placement, = run.estimated_retry_seconds(pdf, [1])[:1]
+        self.assertGreater(detection, placement)
+
+    def test_reread_estimate_respects_the_page_cap(self):
+        """Only the worst pages are re-read, so only those are charged for."""
+        pdf = self.blank_pdf('many.pdf', pages=8)
+        capped = run.estimated_retry_seconds(pdf, list(range(1, 9)))
+        exactly = run.estimated_retry_seconds(pdf, list(range(1, run.MAX_RETRY_PAGES + 1)))
+        self.assertEqual(capped, exactly)
+
+    def test_durations_are_described_the_way_someone_waiting_thinks(self):
+        self.assertEqual(run.describe_duration(20), 'less than a minute')
+        self.assertEqual(run.describe_duration(60), 'about a minute')
+        self.assertEqual(run.describe_duration(167), 'about 3 minutes')
+        self.assertEqual(run.describe_duration(260, 556), '4-9 minutes')
+        # A range that rounds to one number is not shown as a range.
+        self.assertEqual(run.describe_duration(400, 420), 'about 7 minutes')
+
+    def test_dense_engraving_escalates_dpi_despite_healthy_staves(self):
+        """The failure the interline test cannot see: staves of an entirely
+        normal size whose notes are packed too tightly to separate. A Liszt
+        page printing 738 noteheads yielded 74 at 300 DPI and 715 at 600.
+        """
+        with patch('run.staff_interline_pt', return_value=5.0):
+            healthy = list(run.retry_variants(self.path / 'score.pdf', 7, None, False))
+            dense = list(run.retry_variants(self.path / 'score.pdf', 7, None, True))
+        self.assertEqual(len(healthy), 2)
+        self.assertEqual(len(dense), 4)
+        # Resolution leads when noteheads are missing outright - the cheap
+        # passes cannot recover a notehead that was never detected, and running
+        # them first only delays the one attempt that can.
+        self.assertTrue(all(v['dpi'] == run.RETRY_DPI for _, v in dense[:2]))
+        self.assertFalse(any('dpi' in v for _, v in dense[2:]))
+
+    def test_small_engraving_still_escalates_to_a_higher_dpi(self):
+        with patch('run.staff_interline_pt', return_value=3.0):
+            variants = list(run.retry_variants(self.path / 'score.pdf', 1))
+        self.assertEqual(len(variants), 4)
+        self.assertTrue(all(v['dpi'] == run.RETRY_DPI for _, v in variants[2:]))
+
+    def test_a_scan_with_no_vector_staff_lines_still_escalates(self):
+        with patch('run.staff_interline_pt', return_value=None):
+            self.assertEqual(len(list(run.retry_variants(self.path / 'scan.pdf', 1))), 4)
+
+    def test_a_reread_that_finds_more_heads_but_plays_fewer_is_rejected(self):
+        """More detections are not more music; this is the trap being avoided."""
+        before = {'count': 200, 'placed': .95, 'longest_bar': 6.0, 'quality': .8}
+        noisier = {'count': 260, 'placed': .60, 'longest_bar': 6.0, 'quality': .8}
+        self.assertFalse(run._recovered_more_music(noisier, before))
+        recovered = {'count': 200, 'placed': .99, 'longest_bar': 6.0, 'quality': .8}
+        self.assertTrue(run._recovered_more_music(recovered, before))
+
+    def test_a_reread_that_only_adds_unverified_notes_is_rejected(self):
+        """The retry must not turn missing notes into a larger amber backlog."""
+        before = {'count': 297, 'placed': .81, 'longest_bar': 5.0, 'quality': .80,
+                  'positioned': 226, 'unverified': 59}
+        amber_only = {'count': 297, 'placed': .87, 'longest_bar': 5.5, 'quality': .82,
+                      'positioned': 226, 'unverified': 76}
+        self.assertFalse(run._recovered_more_music(amber_only, before))
+
+    def test_a_reread_can_add_a_small_number_of_unverified_notes_with_positions(self):
+        before = {'count': 200, 'placed': .80, 'longest_bar': 4.0, 'quality': .80,
+                  'positioned': 180, 'unverified': 20}
+        recovered = {'count': 200, 'placed': .90, 'longest_bar': 4.5, 'quality': .84,
+                     'positioned': 188, 'unverified': 25}
+        self.assertTrue(run._recovered_more_music(recovered, before))
+
+    def test_a_retry_without_alignment_cannot_replace_an_aligned_page(self):
+        before = {'count': 200, 'placed': .80, 'longest_bar': 4.0, 'quality': .80,
+                  'positioned': 180, 'unverified': 20}
+        unaligned = {'count': 200, 'placed': .95, 'longest_bar': 4.0, 'quality': .90}
+        self.assertFalse(run._recovered_more_music(unaligned, before))
+
+    def test_a_reread_that_loses_noteheads_is_rejected_whatever_else_improved(self):
+        before = {'count': 200, 'placed': .70, 'longest_bar': 6.0, 'quality': .70}
+        lossy = {'count': 150, 'placed': 1.0, 'longest_bar': 6.0, 'quality': .95}
+        self.assertFalse(run._recovered_more_music(lossy, before))
+
+    def test_a_reread_that_wrecks_the_bar_lengths_is_rejected(self):
+        """Observed for real: 86% placed to 100%, with 30- and 45-beat measures
+        in a score whose bars hold 6. Music adrift is worse than music missing."""
+        before = {'count': 214, 'placed': .86, 'longest_bar': 6.0, 'quality': .80}
+        unbarred = {'count': 214, 'placed': 1.0, 'longest_bar': 30.0, 'quality': .79}
+        self.assertFalse(run._recovered_more_music(unbarred, before))
+        # The same recovery with the bar lengths intact is still accepted.
+        sane = {'count': 214, 'placed': 1.0, 'longest_bar': 6.5, 'quality': .80}
+        self.assertTrue(run._recovered_more_music(sane, before))
+
+    def test_a_bar_that_grows_within_reason_is_still_accepted(self):
+        """A re-read reinterprets the page, so bars move; good ones reached 1.5x."""
+        before = {'count': 208, 'placed': .69, 'longest_bar': 6.0, 'quality': .80}
+        stretched = {'count': 208, 'placed': .91, 'longest_bar': 9.0, 'quality': .83}
+        self.assertTrue(run._recovered_more_music(stretched, before))
+
+    def test_an_isolated_page_with_no_known_meter_is_not_blocked(self):
+        """A page re-read alone never sees the time signature printed on page 1,
+        so the guard compares written bar lengths, which survive that loss."""
+        before = {'count': 271, 'placed': .81, 'longest_bar': 6.0, 'quality': .78}
+        better = {'count': 271, 'placed': .94, 'longest_bar': 6.0, 'quality': .84}
+        self.assertTrue(run._recovered_more_music(better, before))
+
+    def test_reprocessing_stops_once_the_page_is_recovered(self):
+        original, work = self.path / 'score.pdf', self.path / 'stopwork'
+        work.mkdir()
+        retry = (self.path / 'r.mxl', self.path / 'r.omr')
+        audiveris = MagicMock(return_value=retry)
+        with patch('run.run_audiveris', audiveris), \
+             patch('run.staff_interline_pt', return_value=5.0), \
+             patch('run.placed_head_ratio', side_effect=[(208, 150), (208, 208)]), \
+             patch('run.recognition_quality', side_effect=[.70, .90]):
+            overrides = run.retry_sparse_pages(original, work, {1: 208}, [1])
+        self.assertEqual(overrides[1]['omr'], str(retry[1]))
+        # Isolation alone recovered the page, so the tuplet pass never runs.
+        self.assertEqual(audiveris.call_count, 1)
+        self.assertEqual(audiveris.call_args.kwargs, {'sheets': [1]})
+
     def tail_fixture(self):
         body = ATTR.replace('<beats>4</beats>', '<beats>7</beats>').replace('<beat-type>4', '<beat-type>8')
         body += ''.join(note(s, 5, .5, alter=-1 if s in 'BE' else 0) for s in 'FEFBFEFEF')
@@ -143,6 +427,71 @@ class AccuracyTests(unittest.TestCase):
             def get_text(self, kind):
                 return {'blocks': [{'lines': [{'spans': list(spans)}]}]}
         return Page()
+
+    def test_arpeggio_tiles_in_one_column_are_a_single_sign(self):
+        """An engraver tiles one wiggle glyph down the height of the chord."""
+        column = {'font': 'Leland', 'chars': [{'c': chr(0xEAA9), 'origin': (100, 200), 'bbox': (0, 0, 80, 4)}, {'c': chr(0xEAA9), 'origin': (100, 204.4), 'bbox': (0, 0, 80, 4)}, {'c': chr(0xEAA9), 'origin': (100, 208.8), 'bbox': (0, 0, 80, 4)}, {'c': chr(0xEAA9), 'origin': (100, 213.2), 'bbox': (0, 0, 80, 4)}, {'c': chr(0xEAA9), 'origin': (100, 217.6), 'bbox': (0, 0, 80, 4)}]}
+        signs = pdf_marks.arpeggio_signs(self._page(column))
+        self.assertEqual(len(signs), 1)
+        x, top, bottom = signs[0]
+        self.assertAlmostEqual(x, 100)
+        self.assertAlmostEqual(top, 200)
+        self.assertAlmostEqual(bottom, 217.6)
+
+    def test_a_gap_down_the_column_separates_two_arpeggios(self):
+        """Two chords rolled at the same horizontal position in different
+        systems are two signs, not one enormous one."""
+        column = {'font': 'Leland', 'chars': [{'c': chr(0xEAA9), 'origin': (100, 200), 'bbox': (0, 0, 80, 4)}, {'c': chr(0xEAA9), 'origin': (100, 204.4), 'bbox': (0, 0, 80, 4)}, {'c': chr(0xEAA9), 'origin': (100, 208.8), 'bbox': (0, 0, 80, 4)}, {'c': chr(0xEAA9), 'origin': (100, 500), 'bbox': (0, 0, 80, 4)}, {'c': chr(0xEAA9), 'origin': (100, 504.4), 'bbox': (0, 0, 80, 4)}, {'c': chr(0xEAA9), 'origin': (100, 508.8), 'bbox': (0, 0, 80, 4)}]}
+        signs = sorted(pdf_marks.arpeggio_signs(self._page(column)))
+        self.assertEqual(len(signs), 2)
+        self.assertAlmostEqual(signs[0][2], 208.8)
+        self.assertAlmostEqual(signs[1][1], 500)
+
+    def test_arpeggio_position_ignores_the_rotated_bounding_box(self):
+        """These glyphs are placed rotated, so a 6pt-wide mark reports an
+        80pt-wide box. Only the origin says where it actually sits."""
+        column = {'font': 'Leland', 'chars': [{'c': chr(0xEAA9), 'origin': (100, 200), 'bbox': (60, 196, 140, 200)}, {'c': chr(0xEAA9), 'origin': (100, 204.4), 'bbox': (60, 196, 140, 200)}, {'c': chr(0xEAA9), 'origin': (100, 208.8), 'bbox': (60, 196, 140, 200)}]}
+        x, _, _ = pdf_marks.arpeggio_signs(self._page(column))[0]
+        self.assertAlmostEqual(x, 100)
+
+    def arpeggio_chord(self, arpeggiate=False):
+        # A three-note chord whose noteheads sit just right of a sign at x=100
+        # spanning y 200-218, laid out as real engraving does.
+        return [{'part': 0, 'start_beat_in_measure': 0.0, 'arpeggiate': arpeggiate,
+                 'bbox_pt': [103.0, y - 2.6, 108.3, y + 2.7]} for y in (202, 210, 217)]
+
+    def test_one_matching_notehead_rolls_the_whole_chord(self):
+        """Half a rolled chord with the rest struck on the beat is a worse
+        reading than not rolling it at all."""
+        chord = self.arpeggio_chord()
+        # Only the lowest notehead is squarely against the sign.
+        chord[2]['bbox_pt'] = [103.0, 260.0, 108.3, 265.3]
+        measure = {'warnings': []}
+        rolled = timeline._apply_pdf_arpeggios(chord, [(100, 200, 218)], measure)
+        self.assertEqual(rolled, 1)
+        self.assertTrue(all(n['arpeggiate'] for n in chord))
+        self.assertTrue(any('Arpeggio read from the printed PDF' in w
+                            for w in measure['warnings']))
+
+    def test_a_chord_with_no_sign_beside_it_is_left_alone(self):
+        chord = self.arpeggio_chord()
+        measure = {'warnings': []}
+        # Same vertical span, but the sign is a system away horizontally.
+        self.assertEqual(timeline._apply_pdf_arpeggios(chord, [(400, 200, 218)], measure), 0)
+        self.assertFalse(any(n['arpeggiate'] for n in chord))
+        self.assertEqual(measure['warnings'], [])
+
+    def test_an_already_recognized_arpeggio_is_not_recounted(self):
+        """Recovery only ever adds; it never re-reports what OMR already had."""
+        chord = self.arpeggio_chord(arpeggiate=True)
+        measure = {'warnings': []}
+        self.assertEqual(timeline._apply_pdf_arpeggios(chord, [(100, 200, 218)], measure), 0)
+        self.assertEqual(measure['warnings'], [])
+
+    def test_a_note_with_no_position_cannot_be_matched_to_a_sign(self):
+        """Recovery is capped by note positioning: no notehead, no evidence."""
+        chord = [{'part': 0, 'start_beat_in_measure': 0.0, 'arpeggiate': False, 'bbox_pt': None}]
+        self.assertEqual(timeline._apply_pdf_arpeggios(chord, [(100, 200, 218)], {'warnings': []}), 0)
 
     def test_pdf_meter_reads_ascii_digits_only_from_a_music_font(self):
         # MuseScore's own font maps time digits to plain ASCII rather than the

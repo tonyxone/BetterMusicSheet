@@ -238,7 +238,7 @@ function SheetPicker({ onPick }: { onPick: (jobId: string) => void }) {
   }, []);
 
   return (
-    <div className="wrap medium">
+    <div className="wrap medium history-page">
       <div className="page-title-row">
         <BackButton />
         <h1 className="serif">Practice</h1>
@@ -270,6 +270,16 @@ function SheetPicker({ onPick }: { onPick: (jobId: string) => void }) {
           ))}
         </div>
       )}
+
+      {/* Same floating button as the Library: a sheet has to be annotated
+          before it can be practised, so the way to add one belongs on the
+          page that tells you there is nothing to play yet. */}
+      <Link href="/upload" className="upload-fab" title="Upload a sheet" aria-label="Upload a sheet">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 5v14M5 12h14" />
+        </svg>
+        Upload
+      </Link>
     </div>
   );
 }

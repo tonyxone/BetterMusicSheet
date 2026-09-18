@@ -52,11 +52,37 @@ def generate(raw, directory, options):
     except Exception as exc:
         raise InvalidSheet(f"Upload a valid, unencrypted PDF or image with at most {MAX_PAGES} pages.") from exc
 
+    # Both are known before any recognition runs: one from the page geometry,
+    # the other from the noteheads a vector engraving prints itself. Neither
+    # costs an OMR pass, so a reader can be told what is coming immediately.
+    from run import describe_duration, estimated_seconds, printed_notehead_total
+    estimate = estimated_seconds(pdf)
+    expected = printed_notehead_total(pdf, pages)
+
+    def detail_for(prefix, rest):
+        """The half of the status line that says how much and how long."""
+        if prefix == "[1/3]":
+            parts = [describe_duration(estimate)]
+            if expected:
+                parts.append(f"{expected:,} notes to read")
+            return " · ".join(parts)
+        if prefix == "[1b/3]":
+            # run.py has already worked out the cost, and only it knows which
+            # pages need what; the wording it logged is carried through rather
+            # than recomputed here.
+            _, _, tail = rest.partition("; ")
+            detail = tail.rstrip(":") or None
+            return f"{detail} · thanks for your patience" if detail else None
+        if prefix == "[2b/3]" and "notes" in rest:
+            return rest.partition(": ")[2].rstrip()
+        return None
+
     def log(message):
         print(message, flush=True)
-        stage = STAGES.get(message.split(" ", 1)[0])
+        prefix, _, rest = message.partition(" ")
+        stage = STAGES.get(prefix)
         if stage:
-            publish(directory, stage=stage, pages=pages)
+            publish(directory, stage=stage, pages=pages, detail=detail_for(prefix, rest))
 
     timeline = directory / "timeline.json"
     count = annotate_pdf(pdf, directory / "annotated.pdf", directory / "work",

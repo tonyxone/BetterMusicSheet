@@ -202,9 +202,9 @@ class ServerlessTests(unittest.TestCase):
 
     def test_direct_upload_policy_and_input_validation(self):
         body = {"filename": "Summer.pdf", "size": 10, **OPTIONS}
-        self.assertEqual(self.client.post("/api/uploads", json={**body, "dpi": 600}, headers=self.headers).status_code, 422)
+        self.assertEqual(self.client.post("/api/uploads", json={**body, "dpi": 650}, headers=self.headers).status_code, 422)
         self.assertEqual(self.client.post("/api/uploads", json={**body, "size": 30 * 1024 * 1024}, headers=self.headers).status_code, 422)
-        response = self.client.post("/api/uploads", json=body, headers=self.headers)
+        response = self.client.post("/api/uploads", json={**body, "dpi": 600}, headers=self.headers)
         self.assertEqual(response.status_code, 201, response.text)
         import base64
         policy = json.loads(base64.b64decode(response.json()["upload"]["fields"]["policy"]))
@@ -268,6 +268,18 @@ class ServerlessTests(unittest.TestCase):
             self.assertEqual(worker.current_stage(directory), "Drawing the annotated sheet")
             processor.publish(directory, stage=processor.RECOGNITION, pages=1)
             self.assertEqual(worker.current_stage(directory), "Reading sheet music")
+
+            # An estimate and a count ride alongside the stage without
+            # disturbing the page counter, which keys off the stage name alone.
+            processor.publish(directory, stage=processor.RECOGNITION, pages=5,
+                              detail="about 3 minutes · 4,198 notes to read")
+            self.assertEqual(
+                worker.current_stage(directory),
+                "Reading sheet music (page 3 of 5) · about 3 minutes · 4,198 notes to read")
+            # A stage with nothing extra to say reads exactly as it did before.
+            processor.publish(directory, stage="Drawing the annotated sheet", pages=5,
+                              detail=None)
+            self.assertEqual(worker.current_stage(directory), "Drawing the annotated sheet")
 
             # A half-written progress file costs an update, never the job.
             (directory / "progress.json").write_text("{ truncated")

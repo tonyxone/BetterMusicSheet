@@ -19,6 +19,48 @@ METRONOMES = {0xECA2: 4, 0xECA3: 2, 0xECA4: 2, 0xECA5: 1,
               0xECAA: .25, ord('♩'): 1, ord('♪'): .5}
 
 
+# The wavy vertical line before a chord, meaning roll it rather than strike it
+# together. Engravers build one sign by tiling a single wiggle glyph down the
+# height of the chord, and draw it rotated, so each tile reports a wide
+# unrotated bounding box and only its origin says where it actually sits.
+ARPEGGIO_TILES = {0xEAA9, 0xEAAA}
+
+
+def arpeggio_signs(page):
+    """Arpeggio marks the engraving draws, as [(x, top, bottom)] in points.
+
+    Tiles are grouped into one sign per column of touching glyphs: two chords
+    rolled at the same horizontal position in different systems are separate
+    signs, and a gap down the column is what separates them.
+
+    Positions come from glyph origins, never bounding boxes - these glyphs are
+    placed rotated, so a tile reports an 80pt-wide box for a 6pt-wide mark.
+    """
+    # rawdict, not text_spans: only the raw form carries per-character
+    # origins, and a span's own box is useless for a rotated glyph.
+    columns = {}
+    for block in page.get_text('rawdict')['blocks']:
+        for line in block.get('lines', []):
+            for span in line.get('spans', []):
+                for char in span.get('chars', []):
+                    if ord(char['c']) in ARPEGGIO_TILES:
+                        x, y = char['origin']
+                        columns.setdefault(round(x / 2), []).append((x, y))
+    signs = []
+    for tiles in columns.values():
+        tiles.sort(key=lambda t: t[1])
+        run = [tiles[0]]
+        for tile in tiles[1:]:
+            # Tiles of one sign abut; anything looser is a different chord.
+            if tile[1] - run[-1][1] <= 8:
+                run.append(tile)
+            else:
+                signs.append(run)
+                run = [tile]
+        signs.append(run)
+    return [(sum(t[0] for t in run) / len(run), run[0][1], run[-1][1]) for run in signs]
+
+
 def text_spans(page):
     return [s for b in page.get_text('dict')['blocks'] for line in b.get('lines', []) for s in line['spans']]
 
