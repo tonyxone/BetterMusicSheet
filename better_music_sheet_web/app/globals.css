@@ -748,6 +748,25 @@ button.history-row { width: 100%; font-family: inherit; cursor: pointer; text-al
 }
 
 /* ---- Legal / prose pages ---- */
+/* ---- Landing page ----
+   The front page carries real prose now, so it borrows the reading styles the
+   policy pages use rather than inventing a second set. */
+.landing-title { font-size: 2rem; margin: 6px 0 10px; }
+.landing-lead {
+  color: var(--ink-soft); font-size: 1.05rem; line-height: 1.7; max-width: 46rem;
+  margin-bottom: 30px;
+}
+.landing-section { margin-top: 42px; }
+.landing-section h2 { font-size: 1.15rem; margin: 0 0 12px; color: var(--ink); }
+.landing-section p { color: var(--ink); line-height: 1.7; margin-bottom: 12px; }
+.landing-steps, .landing-list { margin: 0 0 12px 1.1rem; }
+.landing-steps { list-style: decimal; }
+.landing-list { list-style: disc; }
+.landing-steps li, .landing-list li {
+  color: var(--ink); line-height: 1.7; margin-bottom: 10px;
+}
+@media (max-width: 640px) { .landing-title { font-size: 1.6rem; } }
+
 .legal h2 {
   font-size: 1.15rem;
   margin: 34px 0 10px;

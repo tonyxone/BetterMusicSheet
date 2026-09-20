@@ -25,7 +25,10 @@ const LABEL_COLORS = [
   { value: "#6a3fb5", name: "Purple" },
 ];
 
-export function UploadForm() {
+/** ``heading`` off when the page around it already has a title of its own -
+ *  the landing page introduces the site before the form, and two headlines
+ *  saying the same thing is worse than either alone. */
+export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
   const router = useRouter();
   const [file, setFile] = useState<File | null>(null);
   const [style, setStyle] = useState<"unicode" | "ascii">("unicode");
@@ -60,11 +63,15 @@ export function UploadForm() {
 
   return (
     <div className="wrap">
-      <h1 className="upload-h1">Upload your sheet music</h1>
-      <p className="upload-sub">
-        We read every note on your piano sheet music and pencil in the letter name so you can
-        practice without guessing.
-      </p>
+      {heading && (
+        <>
+          <h1 className="upload-h1">Upload your sheet music</h1>
+          <p className="upload-sub">
+            We read every note on your piano sheet music and pencil in the letter name so you can
+            practice without guessing.
+          </p>
+        </>
+      )}
 
       <form onSubmit={handleSubmit} style={{ marginTop: 40 }}>
         <label className={`dropzone${file ? " has-file" : ""}`}>

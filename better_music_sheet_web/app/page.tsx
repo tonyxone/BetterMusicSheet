@@ -2,7 +2,7 @@
 
 import { useAuth } from "./auth-context";
 import { LibraryView } from "./library-view";
-import { UploadForm } from "./upload-form";
+import { Landing } from "./landing";
 
 // The root page shows whichever is the visitor's starting point.
 //
@@ -20,9 +20,14 @@ import { UploadForm } from "./upload-form";
 export default function Home() {
   const { user, loading } = useAuth();
 
-  // Nothing until the session check settles - rendering the upload form first
-  // and swapping it for the Library a moment later is the flash the header
-  // already takes care to avoid.
-  if (loading) return null;
-  return user ? <LibraryView /> : <UploadForm />;
+  // The landing page is what an unsettled session gets, not nothing. This page
+  // is a static export: whatever renders here at build time is the HTML served
+  // to anyone who asks for the domain, so returning null meant the site's front
+  // page had no content in it at all - no headline, no description, nothing a
+  // reader or a crawler could tell the site's purpose from.
+  //
+  // A signed-in visitor therefore sees the landing for the moment the session
+  // check takes, where before they saw blank. That is the trade: a brief flash
+  // of the right page instead of a fast flash of an empty one.
+  return user && !loading ? <LibraryView /> : <Landing />;
 }
