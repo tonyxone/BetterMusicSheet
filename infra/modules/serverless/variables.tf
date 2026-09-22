@@ -19,6 +19,7 @@ variable "vpc_id" { type = string }
 variable "subnets" { type = list(string) }
 variable "legacy_bucket" { type = string }
 variable "users_table" { type = string }
+variable "subscriptions_table" { type = string }
 variable "sheets_table" { type = string }
 variable "jobs_table" { type = string }
 variable "secret_parameter" { type = string }
@@ -45,6 +46,7 @@ locals {
     JOB_FILES_BUCKET      = var.legacy_bucket
     NEW_JOB_FILES_BUCKET  = aws_s3_bucket.files.id
     USERS_TABLE           = var.users_table
+    SUBSCRIPTIONS_TABLE   = var.subscriptions_table
     MUSIC_SHEET_TABLE     = var.sheets_table
     ANNOTATION_JOB_TABLE  = var.jobs_table
     JOB_CONTROL_TABLE     = aws_dynamodb_table.control.name
@@ -57,6 +59,6 @@ locals {
     MAX_PAGES             = "50"
     MAX_JOB_SECONDS       = "1800"
   }
-  table_arns = [for name in [var.users_table, var.sheets_table, var.jobs_table, aws_dynamodb_table.control.name] :
+  table_arns = [for name in [var.users_table, var.subscriptions_table, var.sheets_table, var.jobs_table, aws_dynamodb_table.control.name] :
   "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${name}"]
 }

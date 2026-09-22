@@ -67,6 +67,34 @@ BACKEND_JWT_LIFETIME_SECONDS = 3600
 
 GUEST_USER_ID = "guest"
 
+
+def get_entitlement(user_id, is_guest=False):
+    """Return the account's subscription fields, or the free entitlement.
+
+    Guest identifiers are intentionally never looked up: they identify
+    anonymous uploads, not an account that can own a subscription.
+    """
+    free = {
+        "tier": "free", "plan": None, "status": None,
+        "current_period_end": None, "cancel_at_period_end": False,
+        "platform": None,
+    }
+    if is_guest:
+        return free
+
+    from db import get_subscription
+    subscription = get_subscription(user_id)
+    if subscription is None or subscription["status"] not in ("active", "trialing"):
+        return free
+    return {
+        "tier": "premium",
+        "plan": subscription["plan"],
+        "status": subscription["status"],
+        "current_period_end": subscription["current_period_end"],
+        "cancel_at_period_end": subscription["cancel_at_period_end"],
+        "platform": subscription["platform"],
+    }
+
 _jwks_cache = None  # fetched lazily, cached for the process lifetime
 
 
@@ -259,6 +287,18 @@ def get_signed_in_user_id(authorization: str = Header(None)):
     if authorization and authorization.startswith("Bearer "):
         return _user_id_from_backend_token(authorization.removeprefix("Bearer "))
     return None
+
+
+def require_premium(authorization: str = Header(None), x_guest_id: str = Header(None)):
+    """FastAPI dependency that admits only signed-in premium accounts."""
+    if not authorization or not authorization.startswith("Bearer "):
+        # An X-Guest-Id never grants entitlement, regardless of its value.
+        raise HTTPException(403, {"code": "premium_required", "tier": "free"})
+    user_id = _user_id_from_backend_token(authorization.removeprefix("Bearer "))
+    entitlement = get_entitlement(user_id)
+    if entitlement["tier"] != "premium":
+        raise HTTPException(403, {"code": "premium_required", "tier": entitlement["tier"]})
+    return user_id
 
 
 def delete_cognito_user(sub):

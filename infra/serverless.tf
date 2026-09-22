@@ -55,6 +55,7 @@ module "serverless" {
   subnets          = var.existing_public_subnet_ids
   legacy_bucket    = "annotated-music-sheet"
   users_table      = aws_dynamodb_table.users.name
+  subscriptions_table = aws_dynamodb_table.subscriptions.name
   sheets_table     = aws_dynamodb_table.music_sheet.name
   jobs_table       = aws_dynamodb_table.annotation_job.name
   secret_parameter = aws_ssm_parameter.backend_jwt_secret.arn

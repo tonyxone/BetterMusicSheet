@@ -40,6 +40,7 @@ class ServerlessTests(unittest.TestCase):
             "AWS_REGION": "us-west-1", "AWS_ACCESS_KEY_ID": "testing", "AWS_SECRET_ACCESS_KEY": "testing",
             "USERS_TABLE": "test-users", "MUSIC_SHEET_TABLE": "test-sheets",
             "ANNOTATION_JOB_TABLE": "test-jobs", "JOB_CONTROL_TABLE": "test-control",
+            "SUBSCRIPTIONS_TABLE": "test-subscriptions",
             "JOB_FILES_BUCKET": "legacy-files", "NEW_JOB_FILES_BUCKET": "new-files",
             "BACKEND_JWT_SECRET": "test-only", "COGNITO_USER_POOL_ID": "us-west-1_test",
             "COGNITO_APP_CLIENT_ID": "test-client",
@@ -48,7 +49,7 @@ class ServerlessTests(unittest.TestCase):
         self.aws = mock_aws()
         self.aws.start()
         self.ddb = boto3.client("dynamodb")
-        for name, key in [("test-users", "user_id"), ("test-sheets", "music_sheet_id"),
+        for name, key in [("test-users", "user_id"), ("test-subscriptions", "user_id"), ("test-sheets", "music_sheet_id"),
                           ("test-jobs", "job_id"), ("test-control", "user_id")]:
             attrs = [{"AttributeName": key, "AttributeType": "S"}]
             indexes = []
@@ -99,6 +100,14 @@ class ServerlessTests(unittest.TestCase):
         self.assertIsNone(db.get_music_sheet("b"))
         self.assertTrue(worker.process_job("a", runner=fake_runner))
         self.assertEqual(job_state.create("b", USER, "Second.pdf", OPTIONS, 1)["status"], "uploading")
+
+    def test_subscription_store_round_trips_through_dynamodb(self):
+        db.upsert_subscription(USER, "trialing", "monthly", "apple", 100, 200, True,
+                               apple_original_transaction_id="original_123")
+        subscription = db.get_subscription(USER)
+        self.assertEqual(subscription["status"], "trialing")
+        self.assertEqual(subscription["plan"], "monthly")
+        self.assertEqual(subscription["apple_original_transaction_id"], "original_123")
 
     def test_replaced_worker_cannot_publish_or_renew_lease(self):
         self.upload()

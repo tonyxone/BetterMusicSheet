@@ -50,3 +50,18 @@ MAX_JOB_SECONDS = int(os.environ.get("MAX_JOB_SECONDS", "1800"))
 MAX_ATTEMPTS = 3
 LEASE_SECONDS = 180
 UPLOAD_SECONDS = 900
+
+# Subscription records are optional in local development, where db.py uses an
+# in-memory store. Production must name the DynamoDB table explicitly.
+if IS_PRODUCTION:
+    SUBSCRIPTIONS_TABLE = os.environ["SUBSCRIPTIONS_TABLE"]
+else:
+    SUBSCRIPTIONS_TABLE = os.environ.get("SUBSCRIPTIONS_TABLE")
+
+# Stripe is optional until somebody starts a checkout, cancels a subscription,
+# or Stripe calls the webhook. Keeping these nullable lets the rest of the API
+# start in local development without billing credentials.
+STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY")
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET")
+STRIPE_PRICE_MONTHLY = os.environ.get("STRIPE_PRICE_MONTHLY")
+STRIPE_PRICE_YEARLY = os.environ.get("STRIPE_PRICE_YEARLY")

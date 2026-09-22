@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Literal, Optional
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -23,11 +23,13 @@ from pydantic import BaseModel, Field
 
 import db
 import storage
+import stripe_billing
 from auth import (
     BACKEND_JWT_LIFETIME_SECONDS,
     delete_cognito_user,
     exchange_authorization_code,
     get_current_user_id,
+    get_entitlement,
     get_signed_in_user_id,
     mint_backend_token,
     verify_cognito_id_token,
@@ -132,6 +134,12 @@ class SocialTokenRequest(BaseModel):
     redirect_uri: str = Field(min_length=1, max_length=2048)
 
 
+class StripeCheckoutRequest(BaseModel):
+    success_url: str = Field(min_length=1, max_length=2048)
+    cancel_url: str = Field(min_length=1, max_length=2048)
+    plan: Literal["monthly", "yearly"]
+
+
 def _session_from_id_token(id_token):
     """Verify a Cognito ID token and turn it into one of our own sessions.
 
@@ -198,6 +206,35 @@ def me(user_id: str = Depends(get_signed_in_user_id)):
         db.create_user_if_missing(user_id, None, None)
         user = db.get_user(user_id)
     return user
+
+
+@app.get("/api/me/subscription")
+def subscription(user_id: str = Depends(get_signed_in_user_id)):
+    """The signed-in account's current subscription state."""
+    if user_id is None:
+        raise HTTPException(401, "not signed in")
+    return get_entitlement(user_id)
+
+
+@app.post("/api/subscriptions/stripe/checkout")
+def stripe_checkout(body: StripeCheckoutRequest, user_id: str = Depends(get_signed_in_user_id)):
+    if user_id is None:
+        raise HTTPException(401, "not signed in")
+    return stripe_billing.create_checkout(user_id, body.plan, body.success_url, body.cancel_url)
+
+
+@app.post("/api/webhooks/stripe")
+async def stripe_webhook(request: Request):
+    return stripe_billing.handle_webhook(
+        await request.body(), request.headers.get("stripe-signature"),
+    )
+
+
+@app.post("/api/subscriptions/stripe/cancel")
+def cancel_stripe_subscription(user_id: str = Depends(get_signed_in_user_id)):
+    if user_id is None:
+        raise HTTPException(401, "not signed in")
+    return stripe_billing.cancel_subscription(user_id)
 
 
 @app.delete("/api/me", status_code=204)
