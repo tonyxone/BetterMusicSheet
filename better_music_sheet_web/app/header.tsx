@@ -10,12 +10,9 @@ import { SignInIcon } from "./sign-in-icon";
 import { useAuth } from "./auth-context";
 import { isAuthConfigured } from "@/lib/auth";
 import { clientApiFetch } from "@/lib/client-api";
-import { useSubscription } from "@/lib/subscription";
 
 export function Header() {
   const { user, loading, openSignIn, signOut } = useAuth();
-  const { subscription } = useSubscription();
-  const practiceHref = subscription?.tier === "premium" ? "/play" : "/subscription/upgrade";
 
   return (
     <header className="site-header">
@@ -23,12 +20,14 @@ export function Header() {
         <Logo />
       </Link>
       <nav className="flex items-center gap-3">
-        {/* Practice is available to members with an active subscription. */}
+        {/* Practice opens for everyone - a non-subscriber gets a limited
+            preview and a prompt to subscribe, rather than being turned away
+            before ever seeing the page (see play-view.tsx). */}
         <Link
-          href={practiceHref}
+          href="/play"
           className="icon-link"
-          title={subscription?.tier === "premium" ? "Practice with the keyboard" : "Unlock practice mode"}
-          aria-label={subscription?.tier === "premium" ? "Practice with the keyboard" : "Unlock practice mode"}
+          title="Practice with the keyboard"
+          aria-label="Practice with the keyboard"
         >
           <KeyboardIcon size={44} />
         </Link>
@@ -140,6 +139,15 @@ function UserMenu({ name, email, onSignOut }: { name: string; email: string | nu
       </button>
       {open && (
         <div className="nav-menu" role="menu">
+          <Link
+            href="/subscription"
+            className="nav-menu-item"
+            role="menuitem"
+            title="Manage your subscription"
+            onClick={() => setOpen(false)}
+          >
+            Manage subscription
+          </Link>
           <button
             type="button"
             className="nav-menu-item"

@@ -94,7 +94,7 @@ main {
 .nav-menu-item {
   display: block; width: 100%; text-align: left; background: transparent; border: none;
   padding: 9px 12px; border-radius: 8px; font-size: 14.5px; font-weight: 600;
-  font-family: inherit; color: var(--ink); cursor: pointer;
+  font-family: inherit; color: var(--ink); cursor: pointer; text-decoration: none;
 }
 .nav-menu-item:hover { background: var(--paper-deep); }
 .nav-menu-item.danger { color: var(--danger); }

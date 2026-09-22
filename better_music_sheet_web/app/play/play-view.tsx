@@ -16,8 +16,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { clientApiFetch } from "@/lib/client-api";
 import { fetchSheetAssets, fetchSheetFile } from "@/lib/sheet-files";
 import { SheetToggle, type SheetVariant } from "../sheet-toggle";
-import { useAuth } from "../auth-context";
-import { Paywall } from "../subscription/paywall";
+import { SubscribePrompt } from "../subscription/subscribe-prompt";
 import { useSubscription } from "@/lib/subscription";
 import { BackButton } from "../back-button";
 import type { AnnotationJob } from "@/lib/api";
@@ -217,18 +216,24 @@ function MoreIcon() {
   );
 }
 
-/** How many printed lines (systems) a signed-out visitor can play before
- * being asked to sign in. Lines rather than measures because that is the unit
- * someone reading the sheet actually sees. */
-const FREE_LINES = 2;
+/** How many printed lines (systems) a non-subscriber can play before playback
+ * stops and the subscribe prompt appears. Lines rather than measures because
+ * that is the unit someone reading the sheet actually sees. The allowance
+ * doubles once that prompt has been closed once (see subscribePromptSeen in
+ * Player), so a visitor who dismisses it gets a slightly bigger taste on the
+ * next try rather than hitting the exact same wall. */
+const FREE_LINES_FIRST_PLAY = 1;
+const FREE_LINES_AFTER_PROMPT = 2;
 
 export function PlayView() {
   const router = useRouter();
   const jobId = useSearchParams().get("job");
   const { subscription, loading } = useSubscription();
   if (loading) return <div className="wrap"><div className="page-title-row"><BackButton /><p style={{ color: "var(--ink-soft)", margin: 0 }}>Loading subscription…</p></div></div>;
-  if (subscription?.tier !== "premium") return <Paywall />;
-  return jobId ? <Player jobId={jobId} /> : <SheetPicker onPick={(id) => router.push(`/play?job=${id}`)} />;
+  const isPremium = subscription?.tier === "premium";
+  return jobId
+    ? <Player jobId={jobId} isPremium={isPremium} />
+    : <SheetPicker onPick={(id) => router.push(`/play?job=${id}`)} />;
 }
 
 /** Landing state: which of your annotated sheets do you want to play? */
@@ -301,7 +306,7 @@ function clampSplit(wantedSheetPx: number, totalPx: number) {
 /** What is sounding at a beat, straight from the timeline. Mirrors
  * Playback.notesAt for the case where nothing has been played yet and so no
  * audio graph exists to ask - scrubbing has to work before the first play. */
-function Player({ jobId }: { jobId: string }) {
+function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
   const [timeline, setTimeline] = useState<Timeline | null>(null);
   const [baseBpm, setBaseBpm] = useState<number | null>(null);
   const [pdfData, setPdfData] = useState<ArrayBuffer | null>(null);
@@ -340,14 +345,23 @@ function Player({ jobId }: { jobId: string }) {
   /** The measure sounding right now, from the playback clock. */
   const [playingMeasure, setPlayingMeasure] = useState<number | null>(null);
 
-  const { user, openSignIn } = useAuth();
-
   const ctxRef = useRef<AudioContext | null>(null);
   const synthRef = useRef<SynthEngine | null>(null);
   const playbackRef = useRef<Playback | null>(null);
-  /** Set when the current run is the signed-out preview, so reaching the end
-   * asks for a sign-in rather than just stopping. */
+  /** Set when the current run is a non-subscriber's preview, so reaching the
+   * end pops the subscribe prompt rather than just stopping. */
   const previewRef = useRef(false);
+
+  /** Whether the subscribe prompt is open right now. */
+  const [subscribePromptOpen, setSubscribePromptOpen] = useState(false);
+  /** Whether it has already been shown and closed once this visit - unlocks
+   * FREE_LINES_AFTER_PROMPT (see there). */
+  const [subscribePromptSeen, setSubscribePromptSeen] = useState(false);
+  const openSubscribePrompt = useCallback(() => setSubscribePromptOpen(true), []);
+  const closeSubscribePrompt = useCallback(() => {
+    setSubscribePromptOpen(false);
+    setSubscribePromptSeen(true);
+  }, []);
 
   /** Index of the first measure past the free lines, or null when a visitor
    * can play everything.
@@ -356,20 +370,21 @@ function Player({ jobId }: { jobId: string }) {
    * same vertical extent, so grouping on that recovers the lines without the
    * backend having to label them. */
   const lockedFrom = useMemo(() => {
-    if (user || !timeline) return null;
+    if (isPremium || !timeline) return null;
+    const allowedLines = subscribePromptSeen ? FREE_LINES_AFTER_PROMPT : FREE_LINES_FIRST_PLAY;
     const seen: string[] = [];
     for (const m of timeline.measures) {
       if (!m.bbox_pt || m.page === null) continue;
       const line = `${m.page}:${Math.round(m.bbox_pt[1])}`;
       if (!seen.includes(line)) {
         seen.push(line);
-        if (seen.length > FREE_LINES) return m.index;
+        if (seen.length > allowedLines) return m.index;
       }
     }
     return null;
-  }, [user, timeline]);
+  }, [isPremium, timeline, subscribePromptSeen]);
 
-  /** A signed-out visitor can play up to here and no further. */
+  /** A non-subscriber can play up to here and no further. */
   const freeEndBeat = useMemo(() => {
     if (!timeline) return 0;
     if (lockedFrom === null) return timeline.total_beats;
@@ -553,7 +568,7 @@ function Player({ jobId }: { jobId: string }) {
             // Reaching the end of the preview is the natural moment to ask.
             if (previewRef.current) {
               previewRef.current = false;
-              openSignIn();
+              openSubscribePrompt();
             }
           },
         });
@@ -561,7 +576,7 @@ function Player({ jobId }: { jobId: string }) {
       playbackRef.current.setTempo(baseBpm);
       return playbackRef.current;
     },
-    [openSignIn, soundOn, baseBpm, instrument],
+    [openSubscribePrompt, soundOn, baseBpm, instrument],
   );
 
   // Warm the sampler as soon as the sheet and instrument choice are known,
@@ -589,14 +604,14 @@ function Player({ jobId }: { jobId: string }) {
       if (!pb) return;
       // Bound the window rather than stopping once it overruns: notes past
       // the limit are then never scheduled, so nothing audible leaks out.
-      previewRef.current = !user;
+      previewRef.current = !isPremium;
       pb.play(speed, {
         ...(fromBeat === undefined ? {} : { fromBeat }),
-        ...(user ? {} : { untilBeat: freeEndBeat }),
+        ...(isPremium ? {} : { untilBeat: freeEndBeat }),
       });
       setPlaying(true);
     },
-    [timeline, ensurePlayback, speed, user, freeEndBeat],
+    [timeline, ensurePlayback, speed, isPremium, freeEndBeat],
   );
 
   /** Jump to a measure and carry on from there. */
@@ -606,12 +621,12 @@ function Player({ jobId }: { jobId: string }) {
       const m = timeline.measures[index];
       if (!m || m.length_beats <= 0) return;
       if (isLocked(index)) {
-        openSignIn();
+        openSubscribePrompt();
         return;
       }
       playWholePiece(m.start_beat);
     },
-    [timeline, isLocked, openSignIn, playWholePiece],
+    [timeline, isLocked, openSubscribePrompt, playWholePiece],
   );
 
   const handlePlayPause = useCallback(() => {
@@ -779,7 +794,7 @@ function Player({ jobId }: { jobId: string }) {
 
     const measure = measureIndexAt(timeline, next);
     if (measure !== null && isLocked(measure)) {
-      openSignIn();
+      openSubscribePrompt();
       return;
     }
 
@@ -804,13 +819,13 @@ function Player({ jobId }: { jobId: string }) {
         synth.noteOn(n.midi, at, at + Math.max(.02, seconds), n.velocity);
       }
     }
-  }, [timeline, ensurePlayback, onsetBeats, beat, isLocked, openSignIn, speed, baseBpm]);
+  }, [timeline, ensurePlayback, onsetBeats, beat, isLocked, openSubscribePrompt, speed, baseBpm]);
 
   const handleStepBack = useCallback(() => step(-1), [step]);
   const handleStepForward = useCallback(() => step(1), [step]);
 
-  /** Drag the playhead. Locked regions clamp back to the free part and ask
-   * for a sign-in, so scrubbing can't be used to walk past the preview. */
+  /** Drag the playhead. Locked regions clamp back to the free part and pop
+   * the subscribe prompt, so scrubbing can't be used to walk past the preview. */
   const handleScrub = useCallback(
     (value: number) => {
       if (!timeline) return;
@@ -823,7 +838,7 @@ function Player({ jobId }: { jobId: string }) {
           setActiveNotes(notesAtBeat(timeline, target));
           setPlayingMeasure(measureIndexAt(timeline, target));
         }
-        openSignIn();
+        openSubscribePrompt();
         return;
       }
       setBeat(target);
@@ -835,7 +850,7 @@ function Player({ jobId }: { jobId: string }) {
         setPlayingMeasure(measureIndexAt(timeline, target));
       }
     },
-    [timeline, lockedFrom, freeEndBeat, openSignIn],
+    [timeline, lockedFrom, freeEndBeat, openSubscribePrompt],
   );
 
   const handleMeasureClick = useCallback(
@@ -1098,6 +1113,8 @@ function Player({ jobId }: { jobId: string }) {
           </div>
         )}
       </div>
+
+      {subscribePromptOpen && <SubscribePrompt onClose={closeSubscribePrompt} />}
     </div>
   );
 }

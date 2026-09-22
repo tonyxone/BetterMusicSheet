@@ -1,13 +1,19 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { useAuth } from "../auth-context";
 import { clientApiFetch } from "@/lib/client-api";
 
+function planFromQuery(value: string | null): "monthly" | "yearly" | null {
+  return value === "monthly" || value === "yearly" ? value : null;
+}
+
 export function Paywall() {
   const { user, loading, openSignIn } = useAuth();
-  const [plan, setPlan] = useState<"monthly" | "yearly">("yearly");
+  const searchParams = useSearchParams();
+  const [plan, setPlan] = useState<"monthly" | "yearly">(planFromQuery(searchParams.get("plan")) ?? "yearly");
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -45,18 +51,32 @@ export function Paywall() {
         <h1 className="serif">Learn with every note lit up</h1>
         <p>Play your annotated sheets with a keyboard that follows every note, measure by measure.</p>
       </div>
-      <div className="plan-toggle" role="group" aria-label="Choose a billing period">
-        <button type="button" className={plan === "monthly" ? "active" : ""} onClick={() => setPlan("monthly")}>Monthly</button>
-        <button type="button" className={plan === "yearly" ? "active" : ""} onClick={() => setPlan("yearly")}>Yearly <span>Save 20%</span></button>
-      </div>
-      <div className="subscription-plans">
-        <article className={`subscription-card${plan === "monthly" ? " selected" : ""}`}>
+      <div className="subscription-plans" role="radiogroup" aria-label="Choose a billing period">
+        <article
+          className={`subscription-card${plan === "monthly" ? " selected" : ""}`}
+          role="radio"
+          aria-checked={plan === "monthly"}
+          tabIndex={0}
+          onClick={() => setPlan("monthly")}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setPlan("monthly"); } }}
+          style={{ cursor: "pointer" }}
+        >
           <h2>Monthly</h2>
           <p className="subscription-price">$1.99 <small>/ month</small></p>
           <p>Flexible practice access, billed monthly.</p>
         </article>
-        <article className={`subscription-card${plan === "yearly" ? " selected" : ""}`}>
-          <h2>Yearly</h2>
+        <article
+          className={`subscription-card${plan === "yearly" ? " selected" : ""}`}
+          role="radio"
+          aria-checked={plan === "yearly"}
+          tabIndex={0}
+          onClick={() => setPlan("yearly")}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setPlan("yearly"); } }}
+          style={{ cursor: "pointer" }}
+        >
+          <h2>
+            Yearly <span style={{ color: "var(--success)", fontSize: 11, fontWeight: 700, marginLeft: 4 }}>Save 20%</span>
+          </h2>
           <p className="subscription-price">$19.99 <small>/ year</small></p>
           <p>Best value for a full year of practice.</p>
         </article>
