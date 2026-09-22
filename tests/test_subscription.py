@@ -1,5 +1,8 @@
+import base64
+import json
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
+from urllib.error import HTTPError
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -7,6 +10,7 @@ from fastapi.testclient import TestClient
 import auth
 import db
 import server
+import apple_billing
 import stripe_billing
 
 
@@ -15,6 +19,24 @@ GUEST = "88888888-8888-4888-8888-888888888888"
 FREE_USER = "77777777-7777-4777-8777-777777777777"
 ACTIVE_USER = "66666666-6666-4666-8666-666666666666"
 STRIPE_USER = "55555555-5555-4555-8555-555555555555"
+APPLE_USER = "44444444-4444-4444-8444-444444444444"
+
+
+def apple_jws(payload):
+    encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
+    return f"header.{encoded}.signature"
+
+
+def apple_transaction(transaction_id="transaction_123", **extra):
+    return {
+        "transactionId": transaction_id,
+        "originalTransactionId": "original_apple_123",
+        "bundleId": "com.test.music",
+        "productId": "apple_monthly",
+        "purchaseDate": 1_700_000_000_000,
+        "expiresDate": 2_000_000_000_000,
+        **extra,
+    }
 
 
 def stripe_subscription(user_id, status="active", price="price_monthly", **extra):
@@ -50,6 +72,28 @@ class SubscriptionTests(unittest.TestCase):
             STRIPE_PRICE_YEARLY="price_yearly",
         )
         return stripe, settings
+
+    def apple(self):
+        settings = patch.multiple(
+            apple_billing,
+            APPLE_KEY_ID="key_123",
+            APPLE_ISSUER_ID="issuer_123",
+            APPLE_APP_ID="123456789",
+            APPLE_BUNDLE_ID="com.test.music",
+            APPLE_PRIVATE_KEY="test-private-key",
+            APPLE_ENV="sandbox",
+            APPLE_PRODUCT_MONTHLY="apple_monthly",
+            APPLE_PRODUCT_YEARLY="apple_yearly",
+        )
+        return settings
+
+    def apple_api_response(self, transaction, renewal=None):
+        response = MagicMock()
+        payload = {"signedTransactionInfo": apple_jws(transaction)}
+        if renewal is not None:
+            payload["signedRenewalInfo"] = apple_jws(renewal)
+        response.__enter__.return_value.read.return_value = json.dumps(payload).encode()
+        return response
 
     def test_local_store_upserts_and_validates_subscription(self):
         db.upsert_subscription(USER, "trialing", "monthly", "stripe", 100, 200, False,
@@ -164,6 +208,95 @@ class SubscriptionTests(unittest.TestCase):
         self.assertEqual(response.json()["status"], "active")
         self.assertTrue(response.json()["cancel_at_period_end"])
         stripe.Subscription.modify.assert_called_once_with("sub_123", cancel_at_period_end=True)
+
+    def test_apple_transaction_maps_active_trial_and_expired_entitlements(self):
+        cases = [
+            (apple_transaction("active_transaction"), "active"),
+            (apple_transaction("trial_transaction", offerType=1), "trialing"),
+            (apple_transaction("expired_transaction", expiresDate=1_000_000_000_000), "expired"),
+        ]
+        for transaction, status in cases:
+            with self.subTest(status=status):
+                headers = self.headers(APPLE_USER)
+                response_mock = self.apple_api_response(transaction, {"autoRenewStatus": 0})
+                with self.apple(), patch.object(apple_billing.jwt, "encode", return_value="client-jwt") as encode, \
+                        patch.object(apple_billing, "urlopen", return_value=response_mock) as urlopen:
+                    response = self.client.post("/api/subscriptions/apple/transaction", json={
+                        "transaction": apple_jws({"transactionId": transaction["transactionId"]}),
+                    }, headers=headers)
+                self.assertEqual(response.status_code, 200, response.text)
+                record = db.get_subscription(APPLE_USER)
+                self.assertEqual(record["status"], status)
+                self.assertEqual(record["plan"], "monthly")
+                self.assertEqual(record["current_period_start"], 1_700_000_000)
+                self.assertEqual(record["current_period_end"], transaction["expiresDate"] // 1000)
+                self.assertTrue(record["cancel_at_period_end"])
+                encode.assert_called_once()
+                urlopen.assert_called_once()
+
+    def test_apple_transaction_rejects_unknown_product_and_apple_404(self):
+        unknown = apple_transaction(productId="unknown_product")
+        headers = self.headers(APPLE_USER)
+        with self.apple(), patch.object(apple_billing.jwt, "encode", return_value="client-jwt"), \
+                patch.object(apple_billing, "urlopen", return_value=self.apple_api_response(unknown)):
+            response = self.client.post("/api/subscriptions/apple/transaction", json={
+                "transaction": apple_jws({"transactionId": "transaction_123"}),
+            }, headers=headers)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("unknown product", response.json()["detail"])
+
+        missing = HTTPError("https://apple.test", 404, "not found", {}, None)
+        headers = self.headers(APPLE_USER)
+        with self.apple(), patch.object(apple_billing.jwt, "encode", return_value="client-jwt"), \
+                patch.object(apple_billing, "urlopen", side_effect=missing):
+            response = self.client.post("/api/subscriptions/apple/transaction", json={
+                "transaction": apple_jws({"transactionId": "missing_transaction"}),
+            }, headers=headers)
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("not found", response.json()["detail"])
+
+    def test_apple_webhook_maps_renewal_status_expired_refund_and_renewal(self):
+        cases = [
+            ("DID_CHANGE_RENEWAL_STATUS", apple_transaction(autoRenewStatus=0), "active", True),
+            ("EXPIRED", apple_transaction(), "expired", False),
+            ("REFUND", apple_transaction(), "expired", False),
+            ("RENEWAL", apple_transaction(), "active", False),
+            ("DID_RENEW", apple_transaction(), "active", False),
+        ]
+        for notification_type, transaction, status, cancelling in cases:
+            with self.subTest(notification_type=notification_type):
+                db.upsert_subscription(APPLE_USER, "active", "monthly", "apple", 100, 200, False,
+                                       apple_original_transaction_id=transaction["originalTransactionId"])
+                notification = {
+                    "notificationType": notification_type,
+                    "data": {"bundleId": "com.test.music", "signedTransactionInfo": apple_jws(transaction)},
+                }
+                with self.apple():
+                    response = self.client.post("/api/webhooks/apple", content=apple_jws(notification))
+                self.assertEqual(response.status_code, 200, response.text)
+                record = db.get_subscription(APPLE_USER)
+                self.assertEqual(record["status"], status)
+                self.assertEqual(record["platform"], "apple")
+                self.assertEqual(record["cancel_at_period_end"], cancelling)
+
+    def test_apple_webhook_fetches_transaction_when_notification_lacks_expiry(self):
+        transaction = apple_transaction()
+        db.upsert_subscription(APPLE_USER, "active", "monthly", "apple", 100, 200, False,
+                               apple_original_transaction_id=transaction["originalTransactionId"])
+        notification = {
+            "notificationType": "DID_RENEW",
+            "data": {"bundleId": "com.test.music", "signedTransactionInfo": apple_jws({
+                "transactionId": transaction["transactionId"],
+                "originalTransactionId": transaction["originalTransactionId"],
+            })},
+        }
+        response_mock = self.apple_api_response(transaction)
+        with self.apple(), patch.object(apple_billing.jwt, "encode", return_value="client-jwt"), \
+                patch.object(apple_billing, "urlopen", return_value=response_mock) as urlopen:
+            response = self.client.post("/api/webhooks/apple", content=apple_jws(notification))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(db.get_subscription(APPLE_USER)["status"], "active")
+        urlopen.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 import db
 import storage
+import apple_billing
 import stripe_billing
 from auth import (
     BACKEND_JWT_LIFETIME_SECONDS,
@@ -140,6 +141,10 @@ class StripeCheckoutRequest(BaseModel):
     plan: Literal["monthly", "yearly"]
 
 
+class AppleTransactionRequest(BaseModel):
+    transaction: str = Field(min_length=1, max_length=32768)
+
+
 def _session_from_id_token(id_token):
     """Verify a Cognito ID token and turn it into one of our own sessions.
 
@@ -235,6 +240,18 @@ def cancel_stripe_subscription(user_id: str = Depends(get_signed_in_user_id)):
     if user_id is None:
         raise HTTPException(401, "not signed in")
     return stripe_billing.cancel_subscription(user_id)
+
+
+@app.post("/api/subscriptions/apple/transaction")
+def apple_transaction(body: AppleTransactionRequest, user_id: str = Depends(get_signed_in_user_id)):
+    if user_id is None:
+        raise HTTPException(401, "not signed in")
+    return apple_billing.record_transaction(user_id, body.transaction)
+
+
+@app.post("/api/webhooks/apple")
+async def apple_webhook(request: Request):
+    return apple_billing.handle_webhook(await request.body())
 
 
 @app.delete("/api/me", status_code=204)

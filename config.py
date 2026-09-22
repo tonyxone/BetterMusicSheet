@@ -65,3 +65,15 @@ STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY")
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET")
 STRIPE_PRICE_MONTHLY = os.environ.get("STRIPE_PRICE_MONTHLY")
 STRIPE_PRICE_YEARLY = os.environ.get("STRIPE_PRICE_YEARLY")
+
+# Apple billing is optional until an App Store transaction or notification is
+# received. These remain nullable so the rest of the API starts without Apple
+# credentials in local development.
+APPLE_KEY_ID = os.environ.get("APPLE_KEY_ID")
+APPLE_ISSUER_ID = os.environ.get("APPLE_ISSUER_ID")
+APPLE_APP_ID = os.environ.get("APPLE_APP_ID")
+APPLE_BUNDLE_ID = os.environ.get("APPLE_BUNDLE_ID")
+APPLE_PRIVATE_KEY = os.environ.get("APPLE_PRIVATE_KEY")
+APPLE_ENV = os.environ.get("APPLE_ENV")
+APPLE_PRODUCT_MONTHLY = os.environ.get("APPLE_PRODUCT_MONTHLY")
+APPLE_PRODUCT_YEARLY = os.environ.get("APPLE_PRODUCT_YEARLY")

@@ -107,6 +107,14 @@ if IS_PRODUCTION:
         item = _subscriptions_table.get_item(Key={"user_id": user_id}).get("Item")
         return _clean(item) if item else None
 
+    def get_subscription_by_apple_original_transaction_id(original_transaction_id):
+        response = _subscriptions_table.scan(
+            FilterExpression="apple_original_transaction_id = :transaction_id",
+            ExpressionAttributeValues={":transaction_id": original_transaction_id},
+        )
+        items = response.get("Items", [])
+        return _clean(items[0]) if items else None
+
     def upsert_subscription(user_id, status, plan, platform, current_period_start,
                             current_period_end, cancel_at_period_end,
                             stripe_subscription_id=None, apple_original_transaction_id=None):
@@ -262,6 +270,13 @@ else:
         with _lock:
             item = _subscriptions.get(user_id)
             return dict(item) if item else None
+
+    def get_subscription_by_apple_original_transaction_id(original_transaction_id):
+        with _lock:
+            for item in _subscriptions.values():
+                if item.get("apple_original_transaction_id") == original_transaction_id:
+                    return dict(item)
+            return None
 
     def upsert_subscription(user_id, status, plan, platform, current_period_start,
                             current_period_end, cancel_at_period_end,
