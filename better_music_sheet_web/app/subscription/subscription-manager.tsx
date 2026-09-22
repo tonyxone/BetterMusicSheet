@@ -15,6 +15,7 @@ export function SubscriptionManager() {
   const { subscription, loading } = useSubscription();
   const [confirming, setConfirming] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [switching, setSwitching] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function cancel() {
@@ -33,6 +34,25 @@ export function SubscriptionManager() {
     }
   }
 
+  async function switchPlan(plan: "monthly" | "yearly") {
+    setSwitching(true);
+    setError(null);
+    try {
+      const response = await clientApiFetch("/api/subscriptions/stripe/plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan }),
+      });
+      const body = await response.json().catch(() => null) as { detail?: string } | null;
+      if (!response.ok) throw new Error(body?.detail || "Could not switch plans.");
+      await refreshSubscription();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not switch plans.");
+    } finally {
+      setSwitching(false);
+    }
+  }
+
   if (authLoading || loading) return <div className="wrap medium subscription-page"><p className="subscription-muted">Loading subscription…</p></div>;
   if (!user) {
     return <div className="wrap medium subscription-page"><h1 className="serif">Your subscription</h1><p>Sign in to view or manage a subscription.</p><button type="button" className="btn-pill" onClick={() => openSignIn()}>Sign in</button></div>;
@@ -42,6 +62,7 @@ export function SubscriptionManager() {
   }
 
   const pending = subscription.cancel_at_period_end;
+  const otherPlan: "monthly" | "yearly" = subscription.plan === "yearly" ? "monthly" : "yearly";
   return (
     <div className="wrap medium subscription-page">
       <div className="page-title-row"><h1 className="serif">Your subscription</h1></div>
@@ -61,7 +82,14 @@ export function SubscriptionManager() {
               <button type="button" className="btn-pill danger" onClick={cancel} disabled={cancelling}>{cancelling ? "Cancelling…" : "Confirm cancellation"}</button>
               <button type="button" className="btn-pill ghost" onClick={() => setConfirming(false)} disabled={cancelling}>Keep subscription</button>
             </div>
-          ) : <button type="button" className="btn-pill ghost" onClick={() => setConfirming(true)}>Cancel subscription</button>
+          ) : (
+            <div className="subscription-confirm">
+              <button type="button" className="btn-pill ghost" onClick={() => switchPlan(otherPlan)} disabled={switching}>
+                {switching ? "Switching…" : `Switch to ${otherPlan === "yearly" ? "Yearly" : "Monthly"}`}
+              </button>
+              <button type="button" className="btn-pill ghost" onClick={() => setConfirming(true)}>Cancel subscription</button>
+            </div>
+          )
         ) : <p className="subscription-muted">Manage this subscription through Apple.</p>}
         {error && <p className="subscription-error">{error}</p>}
       </section>

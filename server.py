@@ -66,9 +66,14 @@ async def json_errors(request, call_next):
     try:
         return await call_next(request)
     except Exception:
+        # The full traceback goes to the server log for whoever's on call;
+        # the browser gets a plain-English detail instead - frontend error
+        # handling (e.g. paywall.tsx's checkout()) shows `detail` verbatim,
+        # so anything server-log-flavored here would otherwise reach a
+        # visitor as-is.
         traceback.print_exc()
         return JSONResponse(
-            {"detail": "Internal server error - see the server log for the traceback."},
+            {"detail": "Something went wrong on our end. Please try again in a moment."},
             status_code=500,
         )
 
@@ -138,6 +143,14 @@ class SocialTokenRequest(BaseModel):
 class StripeCheckoutRequest(BaseModel):
     success_url: str = Field(min_length=1, max_length=2048)
     cancel_url: str = Field(min_length=1, max_length=2048)
+    plan: Literal["monthly", "yearly"]
+
+
+class StripeConfirmRequest(BaseModel):
+    session_id: str = Field(min_length=1, max_length=255)
+
+
+class StripePlanRequest(BaseModel):
     plan: Literal["monthly", "yearly"]
 
 
@@ -256,6 +269,20 @@ def stripe_checkout(body: StripeCheckoutRequest, user_id: str = Depends(get_sign
     return stripe_billing.create_checkout(user_id, body.plan, body.success_url, body.cancel_url)
 
 
+@app.post("/api/subscriptions/stripe/confirm")
+def confirm_stripe_checkout(body: StripeConfirmRequest, user_id: str = Depends(get_signed_in_user_id)):
+    """The success page calls this with the session_id Stripe redirected
+    back with, so entitlement updates immediately rather than waiting on
+    the webhook - which has nowhere reachable to deliver to in local dev,
+    and can otherwise lag the browser's own redirect here even in
+    production. Returns the account's current entitlement, same shape as
+    GET /api/me/subscription."""
+    if user_id is None:
+        raise HTTPException(401, "not signed in")
+    stripe_billing.confirm_checkout(user_id, body.session_id)
+    return get_entitlement(user_id)
+
+
 @app.post("/api/webhooks/stripe")
 async def stripe_webhook(request: Request):
     return stripe_billing.handle_webhook(
@@ -268,6 +295,16 @@ def cancel_stripe_subscription(user_id: str = Depends(get_signed_in_user_id)):
     if user_id is None:
         raise HTTPException(401, "not signed in")
     return stripe_billing.cancel_subscription(user_id)
+
+
+@app.post("/api/subscriptions/stripe/plan")
+def change_stripe_plan(body: StripePlanRequest, user_id: str = Depends(get_signed_in_user_id)):
+    """Move an existing Stripe subscription to the other billing period
+    (e.g. monthly to yearly), rather than starting a second subscription."""
+    if user_id is None:
+        raise HTTPException(401, "not signed in")
+    stripe_billing.change_plan(user_id, body.plan)
+    return get_entitlement(user_id)
 
 
 @app.post("/api/subscriptions/apple/transaction")

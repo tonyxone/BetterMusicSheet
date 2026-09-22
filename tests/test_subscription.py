@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import MagicMock, Mock, patch
 from urllib.error import HTTPError
 
+import stripe
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
@@ -157,6 +158,113 @@ class SubscriptionTests(unittest.TestCase):
             metadata={"user_id": STRIPE_USER},
             subscription_data={"metadata": {"user_id": STRIPE_USER}},
         )
+
+    def test_stripe_checkout_failure_reaches_the_visitor_as_a_plain_message(self):
+        # Reproduces a misconfigured price id (STRIPE_PRICE_MONTHLY/YEARLY set
+        # to a Payment Link id instead of a Price id): Stripe rejects the
+        # session, and that must not reach the browser as a bare 500 with a
+        # server-log-flavored detail (see server.py's json_errors and
+        # stripe_billing.create_checkout).
+        mocked, settings = self.stripe()
+        mocked.checkout.Session.create.side_effect = stripe.error.InvalidRequestError(
+            "No such price: 'plink_bad'", param="line_items[0][price]",
+        )
+        with settings, patch.object(stripe_billing, "stripe", mocked):
+            response = self.client.post("/api/subscriptions/stripe/checkout", json={
+                "success_url": "https://site.test/success",
+                "cancel_url": "https://site.test/cancel",
+                "plan": "monthly",
+            }, headers=self.headers(STRIPE_USER))
+        self.assertEqual(response.status_code, 502)
+        detail = response.json()["detail"]
+        self.assertNotIn("plink_bad", detail)
+        self.assertNotIn("Traceback", detail)
+        self.assertIn("try again", detail)
+
+    def test_stripe_confirm_syncs_entitlement_from_a_completed_session(self):
+        # This is what the success page calls right after Stripe redirects
+        # back with ?session_id=... - it must not depend on the webhook,
+        # which has nowhere reachable to reach in local dev.
+        stripe, settings = self.stripe()
+        stripe.checkout.Session.retrieve.return_value = {
+            "client_reference_id": STRIPE_USER,
+            "subscription": stripe_subscription(STRIPE_USER, "active", "price_yearly"),
+        }
+        with settings, patch.object(stripe_billing, "stripe", stripe):
+            response = self.client.post("/api/subscriptions/stripe/confirm",
+                json={"session_id": "cs_test_123"}, headers=self.headers(STRIPE_USER))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), {
+            "tier": "premium", "plan": "yearly", "status": "active",
+            "current_period_end": 2_000_000_000, "cancel_at_period_end": False,
+            "platform": "stripe",
+        })
+        stripe.checkout.Session.retrieve.assert_called_once_with("cs_test_123", expand=["subscription"])
+
+    def test_stripe_confirm_rejects_a_different_accounts_session(self):
+        stripe, settings = self.stripe()
+        stripe.checkout.Session.retrieve.return_value = {
+            "client_reference_id": "someone-else",
+            "subscription": stripe_subscription(STRIPE_USER),
+        }
+        with settings, patch.object(stripe_billing, "stripe", stripe):
+            response = self.client.post("/api/subscriptions/stripe/confirm",
+                json={"session_id": "cs_test_123"}, headers=self.headers(STRIPE_USER))
+        self.assertEqual(response.status_code, 403)
+
+    def test_stripe_confirm_treats_an_incomplete_checkout_as_not_ready(self):
+        stripe, settings = self.stripe()
+        stripe.checkout.Session.retrieve.return_value = {
+            "client_reference_id": STRIPE_USER, "subscription": None,
+        }
+        with settings, patch.object(stripe_billing, "stripe", stripe):
+            response = self.client.post("/api/subscriptions/stripe/confirm",
+                json={"session_id": "cs_test_123"}, headers=self.headers(STRIPE_USER))
+        self.assertEqual(response.status_code, 409)
+
+    def test_stripe_plan_switch_moves_an_existing_subscription(self):
+        db.upsert_subscription(STRIPE_USER, "active", "monthly", "stripe", 100, 2_000_000_000,
+                               False, stripe_subscription_id="sub_123")
+        stripe, settings = self.stripe()
+        stripe.Subscription.retrieve.return_value = {
+            "items": {"data": [{"id": "si_123", "price": {"id": "price_monthly"}}]},
+        }
+        stripe.Subscription.modify.return_value = stripe_subscription(STRIPE_USER, "active", "price_yearly")
+        with settings, patch.object(stripe_billing, "stripe", stripe):
+            response = self.client.post("/api/subscriptions/stripe/plan",
+                json={"plan": "yearly"}, headers=self.headers(STRIPE_USER))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["plan"], "yearly")
+        stripe.Subscription.modify.assert_called_once_with(
+            "sub_123", items=[{"id": "si_123", "price": "price_yearly"}],
+            proration_behavior="create_prorations",
+        )
+
+    def test_stripe_plan_switch_requires_an_existing_stripe_subscription(self):
+        response = self.client.post("/api/subscriptions/stripe/plan",
+            json={"plan": "yearly"}, headers=self.headers(FREE_USER))
+        self.assertEqual(response.status_code, 404)
+
+    def test_stripe_plan_switch_rejects_the_plan_already_in_use(self):
+        db.upsert_subscription(STRIPE_USER, "active", "monthly", "stripe", 100, 2_000_000_000,
+                               False, stripe_subscription_id="sub_123")
+        settings = patch.multiple(
+            stripe_billing, STRIPE_PRICE_MONTHLY="price_monthly", STRIPE_PRICE_YEARLY="price_yearly",
+        )
+        with settings:
+            response = self.client.post("/api/subscriptions/stripe/plan",
+                json={"plan": "monthly"}, headers=self.headers(STRIPE_USER))
+        self.assertEqual(response.status_code, 409)
+
+    def test_stripe_cancel_failure_reaches_the_visitor_as_a_plain_message(self):
+        db.upsert_subscription(STRIPE_USER, "active", "monthly", "stripe", 100, 2_000_000_000,
+                               False, stripe_subscription_id="sub_123")
+        mocked, settings = self.stripe()
+        mocked.Subscription.modify.side_effect = stripe.error.APIConnectionError("Could not reach Stripe")
+        with settings, patch.object(stripe_billing, "stripe", mocked):
+            response = self.client.post("/api/subscriptions/stripe/cancel", headers=self.headers(STRIPE_USER))
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("try again", response.json()["detail"])
 
     def test_stripe_webhook_maps_created_updated_and_deleted_subscriptions(self):
         stripe, settings = self.stripe()

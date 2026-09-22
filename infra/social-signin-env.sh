@@ -1,6 +1,8 @@
-# Load the social sign-in credentials out of AWS Secrets Manager and into the
-# TF_VAR_* environment variables Terraform reads, so the values never sit on
-# disk in a .tfvars file.
+# Load the social sign-in AND Stripe billing credentials out of AWS Secrets
+# Manager and into the TF_VAR_* environment variables Terraform reads, so the
+# values never sit on disk in a .tfvars file. Despite the filename, this
+# secret now holds both - they're loaded together because they already live
+# in the one secret; nothing here treats them differently.
 #
 # SOURCE it, do not run it - exports have to land in your own shell:
 #
@@ -8,7 +10,7 @@
 #   terraform -chdir=infra apply -var-file=serverless.tfvars
 #
 # The secret must be a JSON object whose keys are the Terraform variable names
-# from cognito-idp.tf, e.g.
+# from cognito-idp.tf and stripe.tf, e.g.
 #
 #   {
 #     "google_client_id": "...",
@@ -16,7 +18,11 @@
 #     "apple_services_id": "com.bettermusicsheet.signin",
 #     "apple_team_id": "ABCDE12345",
 #     "apple_key_id": "KEY1234567",
-#     "apple_private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+#     "apple_private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",
+#     "STRIPE_SECRET_KEY": "sk_...",
+#     "STRIPE_WEBHOOK_SECRET": "whsec_...",
+#     "STRIPE_PRICE_MONTHLY": "price_...",
+#     "STRIPE_PRICE_YEARLY": "price_..."
 #   }
 #
 # Only keys naming a real variable are exported; anything else is reported by
@@ -53,12 +59,14 @@ _bms_load_social_secret() {
         return 1
     fi
 
-    # Exactly the variables cognito-idp.tf declares. A provider switches on in
-    # Terraform the moment its id is non-empty, so exporting a stray TF_VAR_
-    # would quietly try to create a provider with no credentials.
+    # The variables cognito-idp.tf and stripe.tf declare. A social provider
+    # switches on in Terraform the moment its id is non-empty, so exporting a
+    # stray TF_VAR_ would quietly try to create a provider with no
+    # credentials.
     local known=" google_client_id google_client_secret \
 facebook_app_id facebook_app_secret \
-apple_services_id apple_team_id apple_key_id apple_private_key "
+apple_services_id apple_team_id apple_key_id apple_private_key \
+STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET STRIPE_PRICE_MONTHLY STRIPE_PRICE_YEARLY "
 
     local loaded=() skipped=() key value
     while IFS= read -r key; do

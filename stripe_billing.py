@@ -6,6 +6,11 @@ non-billing routes without Stripe credentials configured.
 import time
 
 import stripe
+# Imported by name, not read off the `stripe` module at call time: tests
+# patch stripe_billing.stripe with a Mock() (see test_subscription.py), and
+# `except stripe.error.StripeError` would then try to match against a Mock
+# attribute instead of a real exception class.
+from stripe.error import StripeError
 from fastapi import HTTPException
 
 import db
@@ -50,17 +55,24 @@ def create_checkout(user_id, plan, success_url, cancel_url):
     prices = _prices()
     if plan not in prices:
         raise HTTPException(422, "plan must be monthly or yearly")
-    session = stripe.checkout.Session.create(
-        mode="subscription",
-        line_items=[{"price": prices[plan], "quantity": 1}],
-        success_url=success_url,
-        cancel_url=cancel_url,
-        client_reference_id=user_id,
-        metadata={"user_id": user_id},
-        # Session metadata does not automatically appear on the subscription.
-        # The webhook sees the subscription, so store the owner there too.
-        subscription_data={"metadata": {"user_id": user_id}},
-    )
+    try:
+        session = stripe.checkout.Session.create(
+            mode="subscription",
+            line_items=[{"price": prices[plan], "quantity": 1}],
+            success_url=success_url,
+            cancel_url=cancel_url,
+            client_reference_id=user_id,
+            metadata={"user_id": user_id},
+            # Session metadata does not automatically appear on the subscription.
+            # The webhook sees the subscription, so store the owner there too.
+            subscription_data={"metadata": {"user_id": user_id}},
+        )
+    except StripeError as exc:
+        # A bad price id (e.g. STRIPE_PRICE_MONTHLY/YEARLY misconfigured -
+        # they must be Price ids, not Payment Link ids), a revoked key, or
+        # Stripe itself being briefly unreachable would otherwise surface as
+        # a bare 500 - not something a visitor trying to subscribe can act on.
+        raise HTTPException(502, "We couldn't start checkout with Stripe. Please try again in a moment.") from exc
     url = _value(session, "url")
     if not url:
         raise HTTPException(502, "Stripe did not return a checkout URL.")
@@ -104,6 +116,55 @@ def _sync_subscription(subscription, deleted=False):
     return db.get_subscription(user_id)
 
 
+def confirm_checkout(user_id, session_id):
+    """Sync entitlement right away from a just-completed Checkout Session,
+    rather than waiting on customer.subscription.created to arrive by
+    webhook. In local dev Stripe has no reachable URL to deliver it to at
+    all; even in production the browser's own redirect back to /success can
+    beat the webhook there. success_url already carries {CHECKOUT_SESSION_ID}
+    (see paywall.tsx's checkout()), so the success page has this for free.
+    """
+    _configure_api()
+    try:
+        session = stripe.checkout.Session.retrieve(session_id, expand=["subscription"])
+    except StripeError as exc:
+        raise HTTPException(502, "We couldn't confirm that checkout with Stripe. Please try again in a moment.") from exc
+    if _value(session, "client_reference_id") != user_id:
+        raise HTTPException(403, "This checkout session belongs to a different account.")
+    subscription = _value(session, "subscription")
+    if not subscription:
+        raise HTTPException(409, "That checkout hasn't finished yet. Please try again in a moment.")
+    return _sync_subscription(subscription)
+
+
+def change_plan(user_id, plan):
+    """Move an existing, active Stripe subscription onto the other recurring
+    price - e.g. monthly to yearly - rather than starting a second one."""
+    subscription = db.get_subscription(user_id)
+    if (not subscription or subscription.get("platform") != "stripe"
+            or subscription.get("status") not in ("active", "trialing")
+            or not subscription.get("stripe_subscription_id")):
+        raise HTTPException(404, "No active Stripe subscription found.")
+    prices = _prices()
+    if plan not in prices:
+        raise HTTPException(422, "plan must be monthly or yearly")
+    if subscription.get("plan") == plan:
+        raise HTTPException(409, f"Already on the {plan} plan.")
+    _configure_api()
+    try:
+        current = stripe.Subscription.retrieve(subscription["stripe_subscription_id"])
+        items = _value(_value(current, "items", {}), "data", [])
+        item_id = _value(items[0], "id") if items else None
+        updated = stripe.Subscription.modify(
+            subscription["stripe_subscription_id"],
+            items=[{"id": item_id, "price": prices[plan]}],
+            proration_behavior="create_prorations",
+        )
+    except StripeError as exc:
+        raise HTTPException(502, "We couldn't reach Stripe to change your plan. Please try again in a moment.") from exc
+    return _sync_subscription(updated)
+
+
 def handle_webhook(payload, signature):
     _require(("STRIPE_WEBHOOK_SECRET", STRIPE_WEBHOOK_SECRET))
     try:
@@ -133,7 +194,10 @@ def cancel_subscription(user_id):
             or not subscription.get("stripe_subscription_id")):
         raise HTTPException(404, "No active Stripe subscription found.")
     _configure_api()
-    updated = stripe.Subscription.modify(
-        subscription["stripe_subscription_id"], cancel_at_period_end=True,
-    )
+    try:
+        updated = stripe.Subscription.modify(
+            subscription["stripe_subscription_id"], cancel_at_period_end=True,
+        )
+    except StripeError as exc:
+        raise HTTPException(502, "We couldn't reach Stripe to cancel your subscription. Please try again in a moment.") from exc
     return _sync_subscription(updated)
