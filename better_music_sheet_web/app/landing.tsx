@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { UploadForm } from "./upload-form";
+import { DemoSampleCard } from "./demo-sample-card";
 
 // What a first-time visitor - and a crawler, which is always a first-time
 // visitor - gets at "/". It has to be real content in the served HTML rather
@@ -25,6 +26,12 @@ export function Landing() {
       </p>
 
       <UploadForm heading={false} />
+
+      <section className="landing-section">
+        <h2>Or try it first</h2>
+        <p>No file to hand? Play a sample sheet right away - no upload, no account.</p>
+        <DemoSampleCard />
+      </section>
 
       <section className="landing-section">
         <h2>How it works</h2>

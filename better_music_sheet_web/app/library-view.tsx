@@ -5,6 +5,7 @@ import Link from "next/link";
 import { clientApiFetch } from "@/lib/client-api";
 import { KeyboardIcon } from "./keyboard-icon";
 import { BackButton } from "./back-button";
+import { DemoSampleCard } from "./demo-sample-card";
 import type { AnnotationJob } from "@/lib/api";
 import { useSubscription } from "@/lib/subscription";
 
@@ -88,6 +89,8 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
         <h1 className="serif">Library</h1>
       </div>
       <div className="sub" style={{ marginBottom: 30 }}>Sheets you&apos;ve annotated.</div>
+
+      <DemoSampleCard />
 
       {jobs === null ? (
         <p style={{ color: "var(--ink-soft)" }}>Loading…</p>

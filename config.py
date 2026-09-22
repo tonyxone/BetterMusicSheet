@@ -77,3 +77,13 @@ APPLE_PRIVATE_KEY = os.environ.get("APPLE_PRIVATE_KEY")
 APPLE_ENV = os.environ.get("APPLE_ENV")
 APPLE_PRODUCT_MONTHLY = os.environ.get("APPLE_PRODUCT_MONTHLY")
 APPLE_PRODUCT_YEARLY = os.environ.get("APPLE_PRODUCT_YEARLY")
+
+# The bundled sample (see demo-sheet/) every visitor can play without an
+# account or a subscription - see server.py's read carve-out, _seed_local.py's
+# seed_demo, and better_music_sheet_web/lib/api.ts's copy of DEMO_JOB_ID,
+# which must name the same job. DEMO_OWNER_ID is deliberately not
+# hex-and-dashes-only, so it can never be supplied as an X-Guest-Id (see
+# auth.py's _UUID_RE) and "become" the demo's owner that way.
+DEMO_JOB_ID = "demo-ode-to-joy"
+DEMO_OWNER_ID = "demo-owner"
+DEMO_SHEET_NAME = "Ode to Joy - Beethoven.pdf"

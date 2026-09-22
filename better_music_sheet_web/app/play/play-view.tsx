@@ -19,7 +19,7 @@ import { SheetToggle, type SheetVariant } from "../sheet-toggle";
 import { SubscribePrompt } from "../subscription/subscribe-prompt";
 import { useSubscription } from "@/lib/subscription";
 import { BackButton } from "../back-button";
-import type { AnnotationJob } from "@/lib/api";
+import { DEMO_JOB_ID, type AnnotationJob } from "@/lib/api";
 import type { Timeline, TimelineNote } from "@/lib/timeline";
 import { notesAtBeat, measureIndexAt } from "@/lib/timeline";
 import { applyCorrections, validCorrection } from "@/lib/corrections";
@@ -307,6 +307,12 @@ function clampSplit(wantedSheetPx: number, totalPx: number) {
  * Playback.notesAt for the case where nothing has been played yet and so no
  * audio graph exists to ask - scrubbing has to work before the first play. */
 function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
+  // The bundled demo sheet plays in full for everyone, subscribed or not -
+  // that's the point of it (see app/demo-sample-card.tsx and server.py's
+  // read carve-out for the same job id).
+  const isDemo = jobId === DEMO_JOB_ID;
+  const unlimited = isPremium || isDemo;
+
   const [timeline, setTimeline] = useState<Timeline | null>(null);
   const [baseBpm, setBaseBpm] = useState<number | null>(null);
   const [pdfData, setPdfData] = useState<ArrayBuffer | null>(null);
@@ -370,7 +376,7 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
    * same vertical extent, so grouping on that recovers the lines without the
    * backend having to label them. */
   const lockedFrom = useMemo(() => {
-    if (isPremium || !timeline) return null;
+    if (unlimited || !timeline) return null;
     const allowedLines = subscribePromptSeen ? FREE_LINES_AFTER_PROMPT : FREE_LINES_FIRST_PLAY;
     const seen: string[] = [];
     for (const m of timeline.measures) {
@@ -382,7 +388,7 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
       }
     }
     return null;
-  }, [isPremium, timeline, subscribePromptSeen]);
+  }, [unlimited, timeline, subscribePromptSeen]);
 
   /** A non-subscriber can play up to here and no further. */
   const freeEndBeat = useMemo(() => {
@@ -604,14 +610,14 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
       if (!pb) return;
       // Bound the window rather than stopping once it overruns: notes past
       // the limit are then never scheduled, so nothing audible leaks out.
-      previewRef.current = !isPremium;
+      previewRef.current = !unlimited;
       pb.play(speed, {
         ...(fromBeat === undefined ? {} : { fromBeat }),
-        ...(isPremium ? {} : { untilBeat: freeEndBeat }),
+        ...(unlimited ? {} : { untilBeat: freeEndBeat }),
       });
       setPlaying(true);
     },
-    [timeline, ensurePlayback, speed, isPremium, freeEndBeat],
+    [timeline, ensurePlayback, speed, unlimited, freeEndBeat],
   );
 
   /** Jump to a measure and carry on from there. */

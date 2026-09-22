@@ -2,6 +2,13 @@
 // auth.ts can reach it too without importing the module that imports auth.
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE!;
 
+// The bundled sample job every visitor can play with no account and no
+// subscription (see app/demo-sample-card.tsx and app/play/play-view.tsx).
+// Must name the same job as the backend's config.DEMO_JOB_ID - the backend
+// grants this one job id a read-only, no-auth carve-out (see server.py's
+// _readable_job_or_404), and _seed_local.py's seed_demo() is what creates it.
+export const DEMO_JOB_ID = "demo-ode-to-joy";
+
 export type AnnotationJob = {
   job_id: string;
   music_sheet_id: string;

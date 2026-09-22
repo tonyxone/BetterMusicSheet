@@ -35,7 +35,7 @@ from auth import (
     mint_backend_token,
     verify_cognito_id_token,
 )
-from config import IS_PRODUCTION, SERVERLESS, MAX_UPLOAD_BYTES
+from config import DEMO_JOB_ID, IS_PRODUCTION, SERVERLESS, MAX_UPLOAD_BYTES
 import job_state
 
 JOBS_DIR = Path(__file__).parent / "server_jobs"
@@ -396,6 +396,26 @@ def _owned_job_or_404(job_id, user_id):
     return job
 
 
+def _readable_job_or_404(job_id, user_id):
+    """Like _owned_job_or_404, but the bundled demo sheet (see
+    config.DEMO_JOB_ID) is additionally readable by anyone, signed in or not -
+    it is the one sheet every visitor can try without an account.
+
+    Narrow and read-only by construction: only the status/assets/download/
+    original/timeline routes below call this. The routes that change
+    anything - delete_job, complete_upload - keep calling _owned_job_or_404
+    (delete_job also refuses the demo job outright, so no spoofed X-Guest-Id
+    can delete it either)."""
+    job = db.get_annotation_job(job_id)
+    if job is None or job["status"] == "deleted":
+        raise HTTPException(404, "no such job")
+    if job_id == DEMO_JOB_ID:
+        return job
+    if job["user_id"] != user_id:
+        raise HTTPException(404, "no such job")
+    return job
+
+
 @app.get("/api/sheets")
 def job_history(user_id: str = Depends(get_current_user_id)):
     jobs = [j for j in db.list_annotation_jobs(user_id) if j["status"] not in ("deleting", "deleted")]
@@ -405,7 +425,7 @@ def job_history(user_id: str = Depends(get_current_user_id)):
 
 @app.get("/api/sheets/{job_id}")
 def job_status(job_id: str, user_id: str = Depends(get_current_user_id)):
-    job = _owned_job_or_404(job_id, user_id)
+    job = _readable_job_or_404(job_id, user_id)
     sheet = db.get_music_sheet(job["music_sheet_id"])
     return {**job, "sheet_name": sheet["sheet_name"] if sheet else None}
 
@@ -419,6 +439,11 @@ def delete_job(job_id: str, user_id: str = Depends(get_current_user_id)):
     share storage keys by design, so those files are retained while another
     history item still needs them.
     """
+    if job_id == DEMO_JOB_ID:
+        # Explicit, regardless of who's asking: the demo's read carve-out
+        # (see _readable_job_or_404) must never be mistaken for a mutation
+        # right, even by a request that spoofs the demo's own owner id.
+        raise HTTPException(403, "The demo sheet can't be deleted.")
     job = _owned_job_or_404(job_id, user_id)
     if job["status"] in ("uploading", "queued", "processing"):
         raise HTTPException(409, "Wait for this sheet to finish processing before deleting it.")
@@ -497,7 +522,7 @@ def with_sheet_name(job):
 
 @app.get("/api/sheets/{job_id}/assets")
 def job_assets(job_id: str, user_id: str = Depends(get_current_user_id)):
-    job = with_sheet_name(_owned_job_or_404(job_id, user_id))
+    job = with_sheet_name(_readable_job_or_404(job_id, user_id))
     if job["status"] != "done":
         raise HTTPException(409, "The sheet is not ready yet.")
     # "original" is the file as uploaded, for the viewer's original/annotated
@@ -541,7 +566,7 @@ def new_artifact_response(job, kind, disposition=None):
 
 @app.get("/api/sheets/{job_id}/download")
 def job_download(job_id: str, inline: bool = False, user_id: str = Depends(get_current_user_id)):
-    job = _owned_job_or_404(job_id, user_id)
+    job = _readable_job_or_404(job_id, user_id)
     if job["status"] != "done":
         raise HTTPException(409, f"job is '{job['status']}', not done yet")
     sheet = db.get_music_sheet(job["music_sheet_id"])
@@ -581,7 +606,7 @@ def job_original(job_id: str, user_id: str = Depends(get_current_user_id)):
     offered as a download - the Download button hands over the annotated copy,
     which is the thing the site made. 404 rather than 500 when the upload is
     gone, since a sheet can outlive its input and the toggle simply hides."""
-    job = with_sheet_name(_owned_job_or_404(job_id, user_id))
+    job = with_sheet_name(_readable_job_or_404(job_id, user_id))
     if job["status"] != "done":
         raise HTTPException(409, f"job is '{job['status']}', not done yet")
     if SERVERLESS:
@@ -613,7 +638,7 @@ def job_timeline(job_id: str, user_id: str = Depends(get_current_user_id)):
     404 rather than 500 when a finished job has no timeline - building it is
     best-effort (see run.py), so its absence is an expected state meaning
     "Play mode isn't available for this sheet", not a server fault."""
-    job = _owned_job_or_404(job_id, user_id)
+    job = _readable_job_or_404(job_id, user_id)
     if job["status"] != "done":
         raise HTTPException(409, f"job is '{job['status']}', not done yet")
     sheet = db.get_music_sheet(job["music_sheet_id"])
