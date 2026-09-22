@@ -8,6 +8,7 @@ import { BackButton } from "./back-button";
 import { DemoSampleCard } from "./demo-sample-card";
 import type { AnnotationJob } from "@/lib/api";
 import { useSubscription } from "@/lib/subscription";
+import { paginateLibrary } from "@/lib/library-pagination";
 
 const STATUS_LABEL: Record<AnnotationJob["status"], string> = {
   uploading: "Uploading",
@@ -16,8 +17,6 @@ const STATUS_LABEL: Record<AnnotationJob["status"], string> = {
   processing: "Processing",
   queued: "Queued",
 };
-
-const PAGE_SIZE = 10;
 
 // Rendered at two URLs: as the landing page at "/" for a signed-in visitor
 // (see app/page.tsx), and at /history for everyone, which is how a guest -
@@ -41,14 +40,8 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
       .catch(() => setJobs([]));
   }, []);
 
-  const pageCount = jobs && jobs.length ? Math.ceil(jobs.length / PAGE_SIZE) : 1;
-  // Clamp rather than reset to 1: deleting the last item on the last page
-  // should land you on the new last page, not jump back to the start.
-  const currentPage = Math.min(page, pageCount);
-  const pageJobs = useMemo(
-    () => jobs?.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE) ?? [],
-    [jobs, currentPage],
-  );
+  const { pageCount, currentPage, start, end, showDemoLast, emptyLibrary } = paginateLibrary(jobs?.length ?? 0, page);
+  const pageJobs = useMemo(() => jobs?.slice(start, end) ?? [], [jobs, start, end]);
 
   function openDelete(job: AnnotationJob) {
     setDeleteError(null);
@@ -90,14 +83,11 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
       </div>
       <div className="sub" style={{ marginBottom: 30 }}>Sheets you&apos;ve annotated.</div>
 
-      <DemoSampleCard />
-
       {jobs === null ? (
         <p style={{ color: "var(--ink-soft)" }}>Loading…</p>
-      ) : jobs.length === 0 ? (
-        <div className="history-empty">No sheets annotated yet.</div>
       ) : (
         <>
+          {jobs.length > 0 && (
           <div>
             {pageJobs.map((job) => (
               // A plain div, not the link itself: the Play link and delete button
@@ -144,6 +134,11 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
               </div>
             ))}
           </div>
+          )}
+
+          {/* Built-in sample, not user content - always last, and only on
+              the last page, so it never sits in the middle of real sheets. */}
+          {showDemoLast && <DemoSampleCard removable emptyLibrary={emptyLibrary} />}
 
           {pageCount > 1 && (
             <nav className="pagination" aria-label="Library pages">

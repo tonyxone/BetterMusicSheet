@@ -113,7 +113,8 @@ the pending row -> "Request confirmation" sends a fresh one.
 before any DNS change. Against it, confirm:
 
 - [ ] `GET /api/health` returns 200.
-- [ ] A guest upload completes end to end: `POST /api/uploads` → presigned POST
+- [ ] A signed-in upload completes end to end (uploading now requires an
+      account - a guest id is rejected): `POST /api/uploads` → presigned POST
       to S3 → `POST /api/uploads/{job_id}/complete` → status polls to `done`.
 - [ ] The controller wakes a worker from zero. The first job after an idle
       period waits ~1–3 minutes for task start plus image pull; the UI shows

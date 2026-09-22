@@ -14,9 +14,10 @@ import { Landing } from "./landing";
 // hop. Signing in or out re-renders this, since it reads the same context
 // the header does.
 //
-// A guest can still have a library of their own (uploads work signed out,
-// tracked by a guest id); /history is where they find it, and that is why the
-// header's Library icon points there rather than here.
+// A guest can still have a library of their own, from sheets uploaded
+// before uploading required an account (tracked by a guest id) - /history is
+// where they find it, and that is why the header's Library icon points
+// there rather than here.
 export default function Home() {
   const { user, loading } = useAuth();
 

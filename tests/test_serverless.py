@@ -13,6 +13,7 @@ import boto3
 from fastapi.testclient import TestClient
 from moto import mock_aws
 
+import auth
 import config
 import db
 import job_state
@@ -78,6 +79,12 @@ class ServerlessTests(unittest.TestCase):
             importlib.reload(module)
         self.client = TestClient(server.app)
         self.headers = {"X-Guest-Id": USER}
+
+    def signed_in(self, user_id=USER):
+        """A valid signed-in identity - unlike self.headers, this authenticates
+        an upload (see server.py's create_upload/complete_upload/submit_sheet,
+        which no longer accept a guest id)."""
+        return {"Authorization": f"Bearer {auth.mint_backend_token(user_id)}"}
 
     def tearDown(self):
         self.client.close()
@@ -210,16 +217,26 @@ class ServerlessTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/sheets/a/assets", headers=self.headers).status_code, 404)
 
     def test_direct_upload_policy_and_input_validation(self):
+        # Body validation runs ahead of the sign-in check, so these two still
+        # 422 under a guest id - a guest is never a valid reservation either
+        # way, and this pins that the more specific error wins.
         body = {"filename": "Summer.pdf", "size": 10, **OPTIONS}
         self.assertEqual(self.client.post("/api/uploads", json={**body, "dpi": 650}, headers=self.headers).status_code, 422)
         self.assertEqual(self.client.post("/api/uploads", json={**body, "size": 30 * 1024 * 1024}, headers=self.headers).status_code, 422)
-        response = self.client.post("/api/uploads", json={**body, "dpi": 600}, headers=self.headers)
+        response = self.client.post("/api/uploads", json={**body, "dpi": 600}, headers=self.signed_in())
         self.assertEqual(response.status_code, 201, response.text)
         import base64
         policy = json.loads(base64.b64decode(response.json()["upload"]["fields"]["policy"]))
         self.assertIn(["content-length-range", 10, 10], policy["conditions"])
         job_id = response.json()["job_id"]
-        self.assertEqual(self.client.post(f"/api/uploads/{job_id}/complete", headers=self.headers).status_code, 409)
+        self.assertEqual(self.client.post(f"/api/uploads/{job_id}/complete", headers=self.signed_in()).status_code, 409)
+
+    def test_direct_uploads_reject_a_guest_id_and_anonymous_requests(self):
+        body = {"filename": "Summer.pdf", "size": 10, "dpi": 600, **OPTIONS}
+        self.assertEqual(self.client.post("/api/uploads", json=body).status_code, 401)
+        self.assertEqual(self.client.post("/api/uploads", json=body, headers=self.headers).status_code, 401)
+        self.assertEqual(self.client.post("/api/uploads/some-job/complete").status_code, 401)
+        self.assertEqual(self.client.post("/api/uploads/some-job/complete", headers=self.headers).status_code, 401)
 
     def test_presigned_urls_use_the_regional_endpoint(self):
         # A global-endpoint presign answers 307 and the client repeats the

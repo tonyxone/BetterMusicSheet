@@ -103,5 +103,64 @@ class DemoSheetTests(unittest.TestCase):
         self.assertIsNotNone(db.get_annotation_job("other-job"))
 
 
+class DemoHiddenTests(unittest.TestCase):
+    """The per-user "hide the sample" preference - a soft, account-scoped
+    toggle, entirely separate from the hard delete refusal above: it never
+    touches the demo job, another account, or a guest's own localStorage."""
+
+    def setUp(self):
+        self.client = TestClient(server.app)
+
+    def tearDown(self):
+        self.client.close()
+        db.delete_user(OTHER_USER)
+        db.delete_user(OUTSIDER)
+
+    def headers(self, user_id):
+        return {"Authorization": f"Bearer {auth.mint_backend_token(user_id)}"}
+
+    def test_requires_sign_in(self):
+        self.assertEqual(self.client.get("/api/me/demo-hidden").status_code, 401)
+        self.assertEqual(self.client.get("/api/me/demo-hidden", headers={"X-Guest-Id": OUTSIDER}).status_code, 401)
+        self.assertEqual(self.client.put("/api/me/demo-hidden", json={"hidden": True}).status_code, 401)
+
+    def test_defaults_to_not_hidden_then_round_trips(self):
+        response = self.client.get("/api/me/demo-hidden", headers=self.headers(OTHER_USER))
+        self.assertEqual(response.json(), {"hidden": False})
+
+        response = self.client.put("/api/me/demo-hidden", json={"hidden": True}, headers=self.headers(OTHER_USER))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), {"hidden": True})
+        self.assertEqual(
+            self.client.get("/api/me/demo-hidden", headers=self.headers(OTHER_USER)).json(),
+            {"hidden": True},
+        )
+
+        response = self.client.put("/api/me/demo-hidden", json={"hidden": False}, headers=self.headers(OTHER_USER))
+        self.assertEqual(response.json(), {"hidden": False})
+
+    def test_hiding_is_scoped_to_one_account(self):
+        self.client.put("/api/me/demo-hidden", json={"hidden": True}, headers=self.headers(OTHER_USER))
+        self.assertEqual(
+            self.client.get("/api/me/demo-hidden", headers=self.headers(OUTSIDER)).json(),
+            {"hidden": False},
+        )
+
+    def test_hiding_does_not_touch_the_demo_job_or_its_delete_refusal(self):
+        job = job_state.create(config.DEMO_JOB_ID, config.DEMO_OWNER_ID, config.DEMO_SHEET_NAME, OPTIONS, 4)
+        storage._local_path(job["input_key"]).write_bytes(b"source")
+        job_state.ready(job["job_id"], "local")
+        self.assertTrue(worker.process_job(job["job_id"], runner=fake_runner))
+        self.addCleanup(db.delete_annotation_job, config.DEMO_JOB_ID)
+        self.addCleanup(db.delete_music_sheet, config.DEMO_JOB_ID)
+
+        self.client.put("/api/me/demo-hidden", json={"hidden": True}, headers=self.headers(OTHER_USER))
+
+        self.assertEqual(
+            self.client.get(f"/api/sheets/{config.DEMO_JOB_ID}", headers=self.headers(OTHER_USER)).status_code, 200)
+        self.assertEqual(
+            self.client.delete(f"/api/sheets/{config.DEMO_JOB_ID}", headers=self.headers(OTHER_USER)).status_code, 403)
+
+
 if __name__ == "__main__":
     unittest.main()

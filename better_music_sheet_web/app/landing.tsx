@@ -93,8 +93,9 @@ export function Landing() {
       <section className="landing-section">
         <h2>Cost</h2>
         <p>
-          Free, and no account needed. Signing in is optional and only attaches
-          your sheets to you so they survive a change of browser — see the{" "}
+          Trying the sample above is free, with no account needed. Uploading your
+          own sheet music requires an account with an active subscription — see{" "}
+          <Link href="/subscription/plans">plans</Link>, and the{" "}
           <Link href="/privacy">privacy policy</Link> for what is stored.
         </p>
       </section>

@@ -1,10 +1,12 @@
 """Job/user state - DynamoDB in production, an in-memory store in local dev
 (see config.py). Every function takes/returns plain Python dicts.
 
-The `users` table holds only people who actually signed in (see auth.py) -
-guests upload without one, so every lookup here has to tolerate a user_id
-with no matching row. Sheets and jobs, by contrast, exist for guests and
-signed-in users alike, keyed by whichever id identified the request.
+The `users` table holds only people who actually signed in (see auth.py) - a
+guest id never gets a row there, so every lookup here has to tolerate a
+user_id with no matching row. Sheets and jobs, by contrast, exist for guests
+and signed-in users alike (a guest's own history still reads and plays back;
+uploading a new one is the one thing that now requires signing in - see
+server.py), keyed by whichever id identified the request.
 
 Production only: DynamoDB's Decimal numbers are converted to int/float so
 callers (server.py) never touch boto3 types directly.
@@ -100,6 +102,23 @@ if IS_PRODUCTION:
 
     def delete_user(user_id):
         _users_table.delete_item(Key={"user_id": user_id})
+
+    # ---- per-user demo visibility ----
+
+    def is_demo_hidden(user_id):
+        user = get_user(user_id)
+        return bool(user and user.get("hide_demo"))
+
+    def set_demo_hidden(user_id, hidden):
+        """Upsert - a signed-in visitor may hide the demo before /api/me has
+        ever created their row (see server.py's demo_hidden route, which,
+        unlike /api/me, has no reason to create one first just to flip a
+        flag on it)."""
+        _users_table.update_item(
+            Key={"user_id": user_id},
+            UpdateExpression="SET hide_demo = :h",
+            ExpressionAttributeValues={":h": hidden},
+        )
 
     # ---- subscriptions ----
 
@@ -263,6 +282,21 @@ else:
     def delete_user(user_id):
         with _lock:
             _users.pop(user_id, None)
+
+    # ---- per-user demo visibility ----
+
+    def is_demo_hidden(user_id):
+        with _lock:
+            user = _users.get(user_id)
+            return bool(user and user.get("hide_demo"))
+
+    def set_demo_hidden(user_id, hidden):
+        with _lock:
+            row = _users.setdefault(user_id, {
+                "user_id": user_id, "email": None,
+                "display_name": None, "created_at": int(time.time()),
+            })
+            row["hide_demo"] = hidden
 
     # ---- subscriptions ----
 

@@ -17,6 +17,7 @@ import { clientApiFetch } from "@/lib/client-api";
 import { fetchSheetAssets, fetchSheetFile } from "@/lib/sheet-files";
 import { SheetToggle, type SheetVariant } from "../sheet-toggle";
 import { SubscribePrompt } from "../subscription/subscribe-prompt";
+import { DemoSampleCard } from "../demo-sample-card";
 import { useSubscription } from "@/lib/subscription";
 import { BackButton } from "../back-button";
 import { DEMO_JOB_ID, type AnnotationJob } from "@/lib/api";
@@ -280,6 +281,11 @@ function SheetPicker({ onPick }: { onPick: (jobId: string) => void }) {
           ))}
         </div>
       )}
+
+      {/* Not part of the sheets fetch above - it's the bundled sample, not
+          user content, so it always renders after whatever that returned
+          (or alone, once loaded, if there was nothing). */}
+      {jobs !== null && <DemoSampleCard />}
 
       {/* Same floating button as the Library: a sheet has to be annotated
           before it can be practised, so the way to add one belongs on the

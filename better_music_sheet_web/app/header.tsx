@@ -60,7 +60,7 @@ export function Header() {
             className="icon-link"
             title="Sign in"
             aria-label="Sign in"
-            onClick={openSignIn}
+            onClick={() => openSignIn()}
           >
             <SignInIcon />
           </button>

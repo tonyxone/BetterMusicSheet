@@ -35,7 +35,7 @@ export function SubscriptionManager() {
 
   if (authLoading || loading) return <div className="wrap medium subscription-page"><p className="subscription-muted">Loading subscription…</p></div>;
   if (!user) {
-    return <div className="wrap medium subscription-page"><h1 className="serif">Your subscription</h1><p>Sign in to view or manage a subscription.</p><button type="button" className="btn-pill" onClick={openSignIn}>Sign in</button></div>;
+    return <div className="wrap medium subscription-page"><h1 className="serif">Your subscription</h1><p>Sign in to view or manage a subscription.</p><button type="button" className="btn-pill" onClick={() => openSignIn()}>Sign in</button></div>;
   }
   if (!subscription || subscription.tier === "free") {
     return <div className="wrap medium subscription-page"><h1 className="serif">Your subscription</h1><p>You&apos;re on the free plan. Upgrade to unlock practice mode.</p><Link className="btn-pill" href="/subscription/upgrade">Start 7-day free trial</Link></div>;

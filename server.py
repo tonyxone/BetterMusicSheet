@@ -221,6 +221,34 @@ def subscription(user_id: str = Depends(get_signed_in_user_id)):
     return get_entitlement(user_id)
 
 
+class DemoHiddenRequest(BaseModel):
+    hidden: bool
+
+
+@app.get("/api/me/demo-hidden")
+def demo_hidden(user_id: str = Depends(get_signed_in_user_id)):
+    """Whether the signed-in account has hidden the "Try a sample" entry.
+
+    A guest keeps this in their own browser's localStorage instead - there's
+    no account to attach it to, and no server route reads or writes it for
+    them (see better_music_sheet_web/lib/demo-hidden.ts)."""
+    if user_id is None:
+        raise HTTPException(401, "not signed in")
+    return {"hidden": db.is_demo_hidden(user_id)}
+
+
+@app.put("/api/me/demo-hidden")
+def set_demo_hidden(body: DemoHiddenRequest, user_id: str = Depends(get_signed_in_user_id)):
+    """Hide or restore the demo entry for the signed-in account. Purely a
+    per-viewer preference: it never touches the demo job itself (see
+    DEMO_JOB_ID's hard delete refusal below) or any other account's copy of
+    this same flag."""
+    if user_id is None:
+        raise HTTPException(401, "not signed in")
+    db.set_demo_hidden(user_id, body.hidden)
+    return {"hidden": body.hidden}
+
+
 @app.post("/api/subscriptions/stripe/checkout")
 def stripe_checkout(body: StripeCheckoutRequest, user_id: str = Depends(get_signed_in_user_id)):
     if user_id is None:
@@ -315,7 +343,11 @@ def reserve_upload(body, user_id):
 
 
 @app.post("/api/uploads", status_code=201)
-def create_upload(body: UploadRequest, user_id: str = Depends(get_current_user_id)):
+def create_upload(body: UploadRequest, user_id: str = Depends(get_signed_in_user_id)):
+    # Uploading is a members feature - a guest id no longer reserves one (see
+    # get_current_user_id's docstring for what that identifies instead).
+    if user_id is None:
+        raise HTTPException(401, "Sign in to upload a sheet.")
     if not SERVERLESS:
         raise HTTPException(404, "Direct uploads are not enabled on this server.")
     job = reserve_upload(body, user_id)
@@ -333,7 +365,9 @@ def create_upload(body: UploadRequest, user_id: str = Depends(get_current_user_i
 
 
 @app.post("/api/uploads/{job_id}/complete", status_code=202)
-def complete_upload(job_id: str, user_id: str = Depends(get_current_user_id)):
+def complete_upload(job_id: str, user_id: str = Depends(get_signed_in_user_id)):
+    if user_id is None:
+        raise HTTPException(401, "Sign in to upload a sheet.")
     from worker import accept_input
     job = _owned_job_or_404(job_id, user_id)
     if job.get("storage_version") != 2:
@@ -352,8 +386,10 @@ async def submit_sheet(
     octave: bool = Form(False), font_size: float = Form(6.5),
     dpi: Optional[int] = Form(None), auto_retry: bool = Form(True),
     color: str = Form("#000000"),
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_signed_in_user_id),
 ):
+    if user_id is None:
+        raise HTTPException(401, "Sign in to upload a sheet.")
     if SERVERLESS:
         raise HTTPException(409, "Please refresh the page to use the updated upload form.")
     # Compatibility endpoint for local development and the transitional ECS API.
