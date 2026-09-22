@@ -22,6 +22,21 @@ resource "aws_dynamodb_table" "users" {
   }
 }
 
+resource "aws_dynamodb_table" "subscriptions" {
+  name         = "${var.project}-subscriptions"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "user_id"
+
+  attribute {
+    name = "user_id"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+}
+
 resource "aws_dynamodb_table" "music_sheet" {
   name         = "${var.project}-music-sheet"
   billing_mode = "PAY_PER_REQUEST"

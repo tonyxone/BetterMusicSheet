@@ -46,27 +46,32 @@ module "serverless" {
   count  = var.enable_serverless ? 1 : 0
   source = "./modules/serverless"
 
-  project          = var.project
-  region           = var.aws_region
-  api_image        = var.serverless_api_image
-  worker_image     = var.serverless_worker_image
-  cluster_name     = var.existing_ecs_cluster_name
-  vpc_id           = var.existing_vpc_id
-  subnets          = var.existing_public_subnet_ids
-  legacy_bucket    = "annotated-music-sheet"
-  users_table      = aws_dynamodb_table.users.name
-  sheets_table     = aws_dynamodb_table.music_sheet.name
-  jobs_table       = aws_dynamodb_table.annotation_job.name
-  secret_parameter = aws_ssm_parameter.backend_jwt_secret.arn
-  cognito_pool     = aws_cognito_user_pool.users.id
-  cognito_client   = aws_cognito_user_pool_client.web.id
-  cognito_domain   = "https://${aws_cognito_user_pool_domain.users.domain}.auth.${var.aws_region}.amazoncognito.com"
-  api_domain       = var.api_subdomain
-  certificate_arn  = aws_acm_certificate_validation.api.certificate_arn
-  origins          = ["https://${var.domain_name}", "https://www.${var.domain_name}", "http://localhost:3000"]
-  max_workers      = var.serverless_max_workers
-  spot_burst       = var.serverless_spot_burst
-  alert_email      = var.alert_email
+  project               = var.project
+  region                = var.aws_region
+  api_image             = var.serverless_api_image
+  worker_image          = var.serverless_worker_image
+  cluster_name          = var.existing_ecs_cluster_name
+  vpc_id                = var.existing_vpc_id
+  subnets               = var.existing_public_subnet_ids
+  legacy_bucket         = "annotated-music-sheet"
+  users_table           = aws_dynamodb_table.users.name
+  subscriptions_table   = aws_dynamodb_table.subscriptions.name
+  sheets_table          = aws_dynamodb_table.music_sheet.name
+  jobs_table            = aws_dynamodb_table.annotation_job.name
+  secret_parameter      = aws_ssm_parameter.backend_jwt_secret.arn
+  cognito_pool          = aws_cognito_user_pool.users.id
+  cognito_client        = aws_cognito_user_pool_client.web.id
+  cognito_domain        = "https://${aws_cognito_user_pool_domain.users.domain}.auth.${var.aws_region}.amazoncognito.com"
+  api_domain            = var.api_subdomain
+  certificate_arn       = aws_acm_certificate_validation.api.certificate_arn
+  origins               = ["https://${var.domain_name}", "https://www.${var.domain_name}", "http://localhost:3000"]
+  max_workers           = var.serverless_max_workers
+  spot_burst            = var.serverless_spot_burst
+  alert_email           = var.alert_email
+  stripe_secret_key     = var.STRIPE_SECRET_KEY
+  stripe_webhook_secret = var.STRIPE_WEBHOOK_SECRET
+  stripe_price_monthly  = var.STRIPE_PRICE_MONTHLY
+  stripe_price_yearly   = var.STRIPE_PRICE_YEARLY
 }
 
 resource "aws_budgets_budget" "monthly" {

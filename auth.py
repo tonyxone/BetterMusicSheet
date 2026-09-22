@@ -1,9 +1,12 @@
 """Identity: optionally signed in via Cognito, otherwise an anonymous guest.
 
-Sign-in is NOT required to use the app - uploading works fine as a guest.
-Signing in just gives a visitor a stable identity that outlives their
-browser cookie (and, once signed in, their files are stored under their
-Cognito user id rather than a per-browser guest id - see storage.py).
+Sign-in is NOT required to use most of the app - a guest id still reads
+their own history and plays sheets uploaded under it. Uploading itself is a
+members feature (see server.py's upload routes): a guest id authenticates
+reads, never a new upload. Signing in also gives a visitor a stable identity
+that outlives their browser cookie, and files uploaded while signed in are
+stored under their Cognito user id rather than a per-browser guest id - see
+storage.py.
 
 Two separate JWT concerns, deliberately not shared code:
 
@@ -66,6 +69,34 @@ BACKEND_JWT_ALGORITHM = "HS256"
 BACKEND_JWT_LIFETIME_SECONDS = 3600
 
 GUEST_USER_ID = "guest"
+
+
+def get_entitlement(user_id, is_guest=False):
+    """Return the account's subscription fields, or the free entitlement.
+
+    Guest identifiers are intentionally never looked up: they identify
+    anonymous uploads, not an account that can own a subscription.
+    """
+    free = {
+        "tier": "free", "plan": None, "status": None,
+        "current_period_end": None, "cancel_at_period_end": False,
+        "platform": None,
+    }
+    if is_guest:
+        return free
+
+    from db import get_subscription
+    subscription = get_subscription(user_id)
+    if subscription is None or subscription["status"] not in ("active", "trialing"):
+        return free
+    return {
+        "tier": "premium",
+        "plan": subscription["plan"],
+        "status": subscription["status"],
+        "current_period_end": subscription["current_period_end"],
+        "cancel_at_period_end": subscription["cancel_at_period_end"],
+        "platform": subscription["platform"],
+    }
 
 _jwks_cache = None  # fetched lazily, cached for the process lifetime
 
@@ -244,8 +275,12 @@ def get_current_user_id(authorization: str = Header(None), x_guest_id: str = Hea
     3. A single shared GUEST_USER_ID, if neither is present (e.g. direct API
        calls with no client-side JS involved at all).
 
-    Signing in therefore changes which id a visitor's uploads are filed
-    under; work done as a guest is not retroactively moved (see server.py)."""
+    Used by every route that reads or manages a job a visitor already owns
+    (history, status, assets, delete) - not by the upload routes, which
+    require a real sign-in (get_signed_in_user_id) and treat any of the
+    guest identities above as anonymous. A visitor who signs in after
+    uploading as a guest keeps reading their guest-owned jobs under the old
+    id; work is not retroactively moved (see server.py)."""
     if authorization and authorization.startswith("Bearer "):
         return _user_id_from_backend_token(authorization.removeprefix("Bearer "))
     if x_guest_id and _UUID_RE.match(x_guest_id):
@@ -259,6 +294,18 @@ def get_signed_in_user_id(authorization: str = Header(None)):
     if authorization and authorization.startswith("Bearer "):
         return _user_id_from_backend_token(authorization.removeprefix("Bearer "))
     return None
+
+
+def require_premium(authorization: str = Header(None), x_guest_id: str = Header(None)):
+    """FastAPI dependency that admits only signed-in premium accounts."""
+    if not authorization or not authorization.startswith("Bearer "):
+        # An X-Guest-Id never grants entitlement, regardless of its value.
+        raise HTTPException(403, {"code": "premium_required", "tier": "free"})
+    user_id = _user_id_from_backend_token(authorization.removeprefix("Bearer "))
+    entitlement = get_entitlement(user_id)
+    if entitlement["tier"] != "premium":
+        raise HTTPException(403, {"code": "premium_required", "tier": entitlement["tier"]})
+    return user_id
 
 
 def delete_cognito_user(sub):

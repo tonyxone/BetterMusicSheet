@@ -8,11 +8,13 @@ import { fetchSheetAssets, fetchSheetFile } from "@/lib/sheet-files";
 import { SheetToggle, type SheetVariant } from "../sheet-toggle";
 import { KeyboardIcon } from "../keyboard-icon";
 import { BackButton } from "../back-button";
-import type { AnnotationJob } from "@/lib/api";
+import { DEMO_JOB_ID, type AnnotationJob } from "@/lib/api";
+import { useSubscription } from "@/lib/subscription";
 
 const POLL_INTERVAL_MS = 2500;
 
 export function JobStatus() {
+  const { subscription } = useSubscription();
   const jobId = useSearchParams().get("job");
   const [job, setJob] = useState<AnnotationJob | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -110,6 +112,10 @@ export function JobStatus() {
   }
 
   // done
+  // The bundled demo plays in full for everyone (see server.py's read
+  // carve-out and play-view.tsx's exemption for this same job id), so its
+  // practice link skips the subscription gate real sheets go through.
+  const practiceUnlocked = jobId === DEMO_JOB_ID || subscription?.tier === "premium";
   return (
     <div className="wrap wide">
       <div className="result-head">
@@ -120,10 +126,10 @@ export function JobStatus() {
         <div className="result-actions">
           <SheetToggle value={variant} onChange={setVariant} unavailable={originalMissing} />
           <Link
-            href={`/play?job=${jobId}`}
+            href={practiceUnlocked ? `/play?job=${jobId}` : "/subscription/upgrade"}
             className="icon-link"
-            title="Practice with the keyboard"
-            aria-label="Practice with the keyboard"
+            title={practiceUnlocked ? "Practice with the keyboard" : "Unlock practice mode"}
+            aria-label={practiceUnlocked ? "Practice with the keyboard" : "Unlock practice mode"}
           >
             <KeyboardIcon size={44} />
           </Link>

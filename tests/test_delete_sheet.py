@@ -5,12 +5,16 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
+import config
 import server
 import storage
+import job_state
+import worker
 import db
 
 
 USER_ID = "11111111-1111-4111-8111-111111111111"
+OPTIONS = {"style": "unicode", "octave": False, "font_size": 6.5, "dpi": None, "auto_retry": True, "color": "#000000"}
 
 
 def _job(status="done", *, user_id=USER_ID, sheet_id="sheet-1", job_id="job-1"):
@@ -20,6 +24,14 @@ def _job(status="done", *, user_id=USER_ID, sheet_id="sheet-1", job_id="job-1"):
         "music_sheet_id": sheet_id,
         "status": status,
     }
+
+
+def fake_runner(job, directory, tick):
+    """Stands in for processor.py/Audiveris - see test_serverless.py."""
+    tick()
+    (directory / "annotated.pdf").write_bytes(b"%PDF-annotated")
+    (directory / "timeline.json").write_text('{"version": 1, "notes": []}')
+    return 5
 
 
 class DeleteSheetTests(unittest.TestCase):
@@ -123,6 +135,84 @@ class DeleteSheetTests(unittest.TestCase):
         delete_files.assert_not_called()
         delete_sheet.assert_not_called()
         delete_job.assert_called_once_with("job-1")
+
+
+class DeleteStorageVersion2Tests(unittest.TestCase):
+    """Real jobs are all storage_version 2 now (see job_state.create) - the
+    class above only ever exercises the legacy branch, since _job() builds a
+    plain dict with no storage_version field."""
+
+    def setUp(self):
+        self.addCleanup(db.delete_annotation_job, "v2-job")
+        self.addCleanup(db.delete_music_sheet, "v2-job")
+
+    def _seed(self, job_id="v2-job", user_id=USER_ID):
+        job = job_state.create(job_id, user_id, "Song.pdf", OPTIONS, 4)
+        storage._local_path(job["input_key"]).write_bytes(b"source")
+        job_state.ready(job["job_id"], "local")
+        self.assertTrue(worker.process_job(job["job_id"], runner=fake_runner))
+        return db.get_annotation_job(job_id)
+
+    def test_delete_removes_every_storage_key_for_the_job(self):
+        job = self._seed()
+        with patch.object(server.storage, "delete_job_files") as delete_files:
+            response = server.delete_job("v2-job", USER_ID)
+        self.assertEqual(response.status_code, 204)
+        delete_files.assert_called_once_with(job)
+        self.assertEqual(db.get_annotation_job("v2-job")["status"], "deleted")
+
+    def test_delete_actually_removes_the_files_on_disk(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(storage, "_LOCAL_DIR", Path(directory)):
+            job = self._seed()
+            input_path = storage._local_path(job["input_key"])
+            output_path = storage._local_path(job["output_key"])
+            timeline_path = storage._local_path(job["timeline_key"])
+            self.assertTrue(input_path.exists() and output_path.exists() and timeline_path.exists())
+
+            server.delete_job("v2-job", USER_ID)
+
+            self.assertFalse(input_path.exists())
+            self.assertFalse(output_path.exists())
+            self.assertFalse(timeline_path.exists())
+
+    def test_delete_never_touches_a_different_jobs_files(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(storage, "_LOCAL_DIR", Path(directory)):
+            job = self._seed()
+            self.addCleanup(db.delete_annotation_job, "v2-other-job")
+            self.addCleanup(db.delete_music_sheet, "v2-other-job")
+            other = self._seed(job_id="v2-other-job")
+            other_output = storage._local_path(other["output_key"])
+
+            server.delete_job("v2-job", USER_ID)
+
+            self.assertTrue(other_output.exists())
+            self.assertEqual(db.get_annotation_job("v2-other-job")["status"], "done")
+        db.delete_annotation_job("v2-other-job")
+        db.delete_music_sheet("v2-other-job")
+
+    def test_the_demo_job_is_refused_and_its_files_are_never_touched(self):
+        job = job_state.create(config.DEMO_JOB_ID, config.DEMO_OWNER_ID, config.DEMO_SHEET_NAME, OPTIONS, 4)
+        storage._local_path(job["input_key"]).write_bytes(b"source")
+        job_state.ready(job["job_id"], "local")
+        self.assertTrue(worker.process_job(job["job_id"], runner=fake_runner))
+        self.addCleanup(db.delete_annotation_job, config.DEMO_JOB_ID)
+        self.addCleanup(db.delete_music_sheet, config.DEMO_JOB_ID)
+
+        with (
+            patch.object(server.storage, "delete_job_files") as delete_files,
+            patch.object(server.storage, "delete_sheet_files") as delete_sheet_files,
+        ):
+            with self.assertRaises(HTTPException) as error:
+                server.delete_job(config.DEMO_JOB_ID, config.DEMO_OWNER_ID)
+            # Spoofing the demo's own owner id doesn't help either.
+            with self.assertRaises(HTTPException) as error_spoofed:
+                server.delete_job(config.DEMO_JOB_ID, "anyone-at-all")
+
+        self.assertEqual(error.exception.status_code, 403)
+        self.assertEqual(error_spoofed.exception.status_code, 403)
+        delete_files.assert_not_called()
+        delete_sheet_files.assert_not_called()
+        self.assertEqual(db.get_annotation_job(config.DEMO_JOB_ID)["status"], "done")
 
 
 if __name__ == "__main__":

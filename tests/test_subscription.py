@@ -1,0 +1,411 @@
+import base64
+import json
+import unittest
+from unittest.mock import MagicMock, Mock, patch
+from urllib.error import HTTPError
+
+import stripe
+from fastapi import HTTPException
+from fastapi.testclient import TestClient
+
+import auth
+import db
+import server
+import apple_billing
+import stripe_billing
+
+
+USER = "99999999-9999-4999-8999-999999999999"
+GUEST = "88888888-8888-4888-8888-888888888888"
+FREE_USER = "77777777-7777-4777-8777-777777777777"
+ACTIVE_USER = "66666666-6666-4666-8666-666666666666"
+STRIPE_USER = "55555555-5555-4555-8555-555555555555"
+APPLE_USER = "44444444-4444-4444-8444-444444444444"
+
+
+def apple_jws(payload):
+    encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
+    return f"header.{encoded}.signature"
+
+
+def apple_transaction(transaction_id="transaction_123", **extra):
+    return {
+        "transactionId": transaction_id,
+        "originalTransactionId": "original_apple_123",
+        "bundleId": "com.test.music",
+        "productId": "apple_monthly",
+        "purchaseDate": 1_700_000_000_000,
+        "expiresDate": 2_000_000_000_000,
+        **extra,
+    }
+
+
+def stripe_subscription(user_id, status="active", price="price_monthly", **extra):
+    return {
+        "id": "sub_123",
+        "status": status,
+        "metadata": {"user_id": user_id},
+        "items": {"data": [{"price": {"id": price}}]},
+        "current_period_start": 100,
+        "current_period_end": 2_000_000_000,
+        "cancel_at_period_end": False,
+        **extra,
+    }
+
+
+class SubscriptionTests(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(server.app)
+
+    def tearDown(self):
+        self.client.close()
+
+    def headers(self, user_id=USER):
+        return {"Authorization": f"Bearer {auth.mint_backend_token(user_id)}"}
+
+    def stripe(self):
+        stripe = Mock()
+        settings = patch.multiple(
+            stripe_billing,
+            STRIPE_SECRET_KEY="sk_test",
+            STRIPE_WEBHOOK_SECRET="whsec_test",
+            STRIPE_PRICE_MONTHLY="price_monthly",
+            STRIPE_PRICE_YEARLY="price_yearly",
+        )
+        return stripe, settings
+
+    def apple(self):
+        settings = patch.multiple(
+            apple_billing,
+            APPLE_KEY_ID="key_123",
+            APPLE_ISSUER_ID="issuer_123",
+            APPLE_APP_ID="123456789",
+            APPLE_BUNDLE_ID="com.test.music",
+            APPLE_PRIVATE_KEY="test-private-key",
+            APPLE_ENV="sandbox",
+            APPLE_PRODUCT_MONTHLY="apple_monthly",
+            APPLE_PRODUCT_YEARLY="apple_yearly",
+        )
+        return settings
+
+    def apple_api_response(self, transaction, renewal=None):
+        response = MagicMock()
+        payload = {"signedTransactionInfo": apple_jws(transaction)}
+        if renewal is not None:
+            payload["signedRenewalInfo"] = apple_jws(renewal)
+        response.__enter__.return_value.read.return_value = json.dumps(payload).encode()
+        return response
+
+    def test_local_store_upserts_and_validates_subscription(self):
+        db.upsert_subscription(USER, "trialing", "monthly", "stripe", 100, 200, False,
+                               stripe_subscription_id="sub_123")
+        subscription = db.get_subscription(USER)
+        self.assertEqual(subscription["status"], "trialing")
+        self.assertEqual(subscription["stripe_subscription_id"], "sub_123")
+        self.assertIn("updated_at", subscription)
+        with self.assertRaises(ValueError):
+            db.upsert_subscription(USER, "unknown", "monthly", "stripe", 100, 200, False)
+
+    def test_subscription_endpoint_defaults_to_free(self):
+        response = self.client.get("/api/me/subscription", headers=self.headers(FREE_USER))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {
+            "tier": "free", "plan": None, "status": None,
+            "current_period_end": None, "cancel_at_period_end": False,
+            "platform": None,
+        })
+
+    def test_subscription_endpoint_returns_active_entitlement(self):
+        db.upsert_subscription(ACTIVE_USER, "active", "yearly", "apple", 100, 200, True,
+                               apple_original_transaction_id="original_123")
+        response = self.client.get("/api/me/subscription", headers=self.headers(ACTIVE_USER))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {
+            "tier": "premium", "plan": "yearly", "status": "active",
+            "current_period_end": 200, "cancel_at_period_end": True,
+            "platform": "apple",
+        })
+
+    def test_guests_are_free_and_premium_dependency_has_machine_code(self):
+        db.upsert_subscription(GUEST, "active", "monthly", "stripe", 100, 200, False)
+        self.assertEqual(auth.get_entitlement(GUEST, is_guest=True)["tier"], "free")
+        with self.assertRaises(HTTPException) as error:
+            auth.require_premium(authorization=None, x_guest_id=GUEST)
+        self.assertEqual(error.exception.status_code, 403)
+        self.assertEqual(error.exception.detail, {"code": "premium_required", "tier": "free"})
+
+    def test_trialing_passes_premium_dependency(self):
+        db.upsert_subscription(USER, "trialing", "monthly", "stripe", 100, 200, False)
+        self.assertEqual(auth.require_premium(authorization=self.headers()["Authorization"]), USER)
+
+    def test_stripe_checkout_creates_selected_plan_session(self):
+        stripe, settings = self.stripe()
+        stripe.checkout.Session.create.return_value = {"url": "https://checkout.stripe.test/session"}
+        with settings, patch.object(stripe_billing, "stripe", stripe):
+            response = self.client.post("/api/subscriptions/stripe/checkout", json={
+                "success_url": "https://site.test/success",
+                "cancel_url": "https://site.test/cancel",
+                "plan": "yearly",
+            }, headers=self.headers(STRIPE_USER))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), {"checkout_url": "https://checkout.stripe.test/session"})
+        stripe.checkout.Session.create.assert_called_once_with(
+            mode="subscription",
+            line_items=[{"price": "price_yearly", "quantity": 1}],
+            success_url="https://site.test/success",
+            cancel_url="https://site.test/cancel",
+            client_reference_id=STRIPE_USER,
+            metadata={"user_id": STRIPE_USER},
+            subscription_data={"metadata": {"user_id": STRIPE_USER}},
+        )
+
+    def test_stripe_checkout_failure_reaches_the_visitor_as_a_plain_message(self):
+        # Reproduces a misconfigured price id (STRIPE_PRICE_MONTHLY/YEARLY set
+        # to a Payment Link id instead of a Price id): Stripe rejects the
+        # session, and that must not reach the browser as a bare 500 with a
+        # server-log-flavored detail (see server.py's json_errors and
+        # stripe_billing.create_checkout).
+        mocked, settings = self.stripe()
+        mocked.checkout.Session.create.side_effect = stripe.error.InvalidRequestError(
+            "No such price: 'plink_bad'", param="line_items[0][price]",
+        )
+        with settings, patch.object(stripe_billing, "stripe", mocked):
+            response = self.client.post("/api/subscriptions/stripe/checkout", json={
+                "success_url": "https://site.test/success",
+                "cancel_url": "https://site.test/cancel",
+                "plan": "monthly",
+            }, headers=self.headers(STRIPE_USER))
+        self.assertEqual(response.status_code, 502)
+        detail = response.json()["detail"]
+        self.assertNotIn("plink_bad", detail)
+        self.assertNotIn("Traceback", detail)
+        self.assertIn("try again", detail)
+
+    def test_stripe_confirm_syncs_entitlement_from_a_completed_session(self):
+        # This is what the success page calls right after Stripe redirects
+        # back with ?session_id=... - it must not depend on the webhook,
+        # which has nowhere reachable to reach in local dev.
+        stripe, settings = self.stripe()
+        stripe.checkout.Session.retrieve.return_value = {
+            "client_reference_id": STRIPE_USER,
+            "subscription": stripe_subscription(STRIPE_USER, "active", "price_yearly"),
+        }
+        with settings, patch.object(stripe_billing, "stripe", stripe):
+            response = self.client.post("/api/subscriptions/stripe/confirm",
+                json={"session_id": "cs_test_123"}, headers=self.headers(STRIPE_USER))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), {
+            "tier": "premium", "plan": "yearly", "status": "active",
+            "current_period_end": 2_000_000_000, "cancel_at_period_end": False,
+            "platform": "stripe",
+        })
+        stripe.checkout.Session.retrieve.assert_called_once_with("cs_test_123", expand=["subscription"])
+
+    def test_stripe_confirm_rejects_a_different_accounts_session(self):
+        stripe, settings = self.stripe()
+        stripe.checkout.Session.retrieve.return_value = {
+            "client_reference_id": "someone-else",
+            "subscription": stripe_subscription(STRIPE_USER),
+        }
+        with settings, patch.object(stripe_billing, "stripe", stripe):
+            response = self.client.post("/api/subscriptions/stripe/confirm",
+                json={"session_id": "cs_test_123"}, headers=self.headers(STRIPE_USER))
+        self.assertEqual(response.status_code, 403)
+
+    def test_stripe_confirm_treats_an_incomplete_checkout_as_not_ready(self):
+        stripe, settings = self.stripe()
+        stripe.checkout.Session.retrieve.return_value = {
+            "client_reference_id": STRIPE_USER, "subscription": None,
+        }
+        with settings, patch.object(stripe_billing, "stripe", stripe):
+            response = self.client.post("/api/subscriptions/stripe/confirm",
+                json={"session_id": "cs_test_123"}, headers=self.headers(STRIPE_USER))
+        self.assertEqual(response.status_code, 409)
+
+    def test_stripe_plan_switch_moves_an_existing_subscription(self):
+        db.upsert_subscription(STRIPE_USER, "active", "monthly", "stripe", 100, 2_000_000_000,
+                               False, stripe_subscription_id="sub_123")
+        stripe, settings = self.stripe()
+        stripe.Subscription.retrieve.return_value = {
+            "items": {"data": [{"id": "si_123", "price": {"id": "price_monthly"}}]},
+        }
+        stripe.Subscription.modify.return_value = stripe_subscription(STRIPE_USER, "active", "price_yearly")
+        with settings, patch.object(stripe_billing, "stripe", stripe):
+            response = self.client.post("/api/subscriptions/stripe/plan",
+                json={"plan": "yearly"}, headers=self.headers(STRIPE_USER))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["plan"], "yearly")
+        stripe.Subscription.modify.assert_called_once_with(
+            "sub_123", items=[{"id": "si_123", "price": "price_yearly"}],
+            proration_behavior="create_prorations",
+        )
+
+    def test_stripe_plan_switch_requires_an_existing_stripe_subscription(self):
+        response = self.client.post("/api/subscriptions/stripe/plan",
+            json={"plan": "yearly"}, headers=self.headers(FREE_USER))
+        self.assertEqual(response.status_code, 404)
+
+    def test_stripe_plan_switch_rejects_the_plan_already_in_use(self):
+        db.upsert_subscription(STRIPE_USER, "active", "monthly", "stripe", 100, 2_000_000_000,
+                               False, stripe_subscription_id="sub_123")
+        settings = patch.multiple(
+            stripe_billing, STRIPE_PRICE_MONTHLY="price_monthly", STRIPE_PRICE_YEARLY="price_yearly",
+        )
+        with settings:
+            response = self.client.post("/api/subscriptions/stripe/plan",
+                json={"plan": "monthly"}, headers=self.headers(STRIPE_USER))
+        self.assertEqual(response.status_code, 409)
+
+    def test_stripe_cancel_failure_reaches_the_visitor_as_a_plain_message(self):
+        db.upsert_subscription(STRIPE_USER, "active", "monthly", "stripe", 100, 2_000_000_000,
+                               False, stripe_subscription_id="sub_123")
+        mocked, settings = self.stripe()
+        mocked.Subscription.modify.side_effect = stripe.error.APIConnectionError("Could not reach Stripe")
+        with settings, patch.object(stripe_billing, "stripe", mocked):
+            response = self.client.post("/api/subscriptions/stripe/cancel", headers=self.headers(STRIPE_USER))
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("try again", response.json()["detail"])
+
+    def test_stripe_webhook_maps_created_updated_and_deleted_subscriptions(self):
+        stripe, settings = self.stripe()
+        with settings, patch.object(stripe_billing, "stripe", stripe):
+            cases = [
+                ("customer.subscription.created", stripe_subscription(STRIPE_USER, "trialing"), "trialing", "monthly"),
+                ("customer.subscription.updated", stripe_subscription(STRIPE_USER, "active", "price_yearly"), "active", "yearly"),
+                ("customer.subscription.deleted", stripe_subscription(STRIPE_USER, "canceled"), "expired", "monthly"),
+            ]
+            for event_type, subscription, status, plan in cases:
+                with self.subTest(event_type=event_type):
+                    stripe.Webhook.construct_event.return_value = {
+                        "type": event_type, "data": {"object": subscription},
+                    }
+                    response = self.client.post("/api/webhooks/stripe", content=b"{}", headers={
+                        "stripe-signature": "test-signature",
+                    })
+                    self.assertEqual(response.status_code, 200, response.text)
+                    record = db.get_subscription(STRIPE_USER)
+                    self.assertEqual(record["status"], status)
+                    self.assertEqual(record["plan"], plan)
+                    self.assertEqual(record["platform"], "stripe")
+                    self.assertEqual(record["stripe_subscription_id"], "sub_123")
+
+    def test_stripe_webhook_maps_payment_failure_from_retrieved_subscription(self):
+        stripe, settings = self.stripe()
+        stripe.Subscription.retrieve.return_value = stripe_subscription(STRIPE_USER, "past_due")
+        stripe.Webhook.construct_event.return_value = {
+            "type": "invoice.payment_failed", "data": {"object": {"subscription": "sub_123"}},
+        }
+        with settings, patch.object(stripe_billing, "stripe", stripe):
+            response = self.client.post("/api/webhooks/stripe", content=b"{}", headers={
+                "stripe-signature": "test-signature",
+            })
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(db.get_subscription(STRIPE_USER)["status"], "past_due")
+        stripe.Subscription.retrieve.assert_called_once_with("sub_123")
+
+    def test_stripe_cancel_marks_subscription_for_period_end(self):
+        db.upsert_subscription(STRIPE_USER, "active", "monthly", "stripe", 100, 2_000_000_000,
+                               False, stripe_subscription_id="sub_123")
+        stripe, settings = self.stripe()
+        stripe.Subscription.modify.return_value = stripe_subscription(
+            STRIPE_USER, cancel_at_period_end=True,
+        )
+        with settings, patch.object(stripe_billing, "stripe", stripe):
+            response = self.client.post("/api/subscriptions/stripe/cancel", headers=self.headers(STRIPE_USER))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["status"], "active")
+        self.assertTrue(response.json()["cancel_at_period_end"])
+        stripe.Subscription.modify.assert_called_once_with("sub_123", cancel_at_period_end=True)
+
+    def test_apple_transaction_maps_active_trial_and_expired_entitlements(self):
+        cases = [
+            (apple_transaction("active_transaction"), "active"),
+            (apple_transaction("trial_transaction", offerType=1), "trialing"),
+            (apple_transaction("expired_transaction", expiresDate=1_000_000_000_000), "expired"),
+        ]
+        for transaction, status in cases:
+            with self.subTest(status=status):
+                headers = self.headers(APPLE_USER)
+                response_mock = self.apple_api_response(transaction, {"autoRenewStatus": 0})
+                with self.apple(), patch.object(apple_billing.jwt, "encode", return_value="client-jwt") as encode, \
+                        patch.object(apple_billing, "urlopen", return_value=response_mock) as urlopen:
+                    response = self.client.post("/api/subscriptions/apple/transaction", json={
+                        "transaction": apple_jws({"transactionId": transaction["transactionId"]}),
+                    }, headers=headers)
+                self.assertEqual(response.status_code, 200, response.text)
+                record = db.get_subscription(APPLE_USER)
+                self.assertEqual(record["status"], status)
+                self.assertEqual(record["plan"], "monthly")
+                self.assertEqual(record["current_period_start"], 1_700_000_000)
+                self.assertEqual(record["current_period_end"], transaction["expiresDate"] // 1000)
+                self.assertTrue(record["cancel_at_period_end"])
+                encode.assert_called_once()
+                urlopen.assert_called_once()
+
+    def test_apple_transaction_rejects_unknown_product_and_apple_404(self):
+        unknown = apple_transaction(productId="unknown_product")
+        headers = self.headers(APPLE_USER)
+        with self.apple(), patch.object(apple_billing.jwt, "encode", return_value="client-jwt"), \
+                patch.object(apple_billing, "urlopen", return_value=self.apple_api_response(unknown)):
+            response = self.client.post("/api/subscriptions/apple/transaction", json={
+                "transaction": apple_jws({"transactionId": "transaction_123"}),
+            }, headers=headers)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("unknown product", response.json()["detail"])
+
+        missing = HTTPError("https://apple.test", 404, "not found", {}, None)
+        headers = self.headers(APPLE_USER)
+        with self.apple(), patch.object(apple_billing.jwt, "encode", return_value="client-jwt"), \
+                patch.object(apple_billing, "urlopen", side_effect=missing):
+            response = self.client.post("/api/subscriptions/apple/transaction", json={
+                "transaction": apple_jws({"transactionId": "missing_transaction"}),
+            }, headers=headers)
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("not found", response.json()["detail"])
+
+    def test_apple_webhook_maps_renewal_status_expired_refund_and_renewal(self):
+        cases = [
+            ("DID_CHANGE_RENEWAL_STATUS", apple_transaction(autoRenewStatus=0), "active", True),
+            ("EXPIRED", apple_transaction(), "expired", False),
+            ("REFUND", apple_transaction(), "expired", False),
+            ("RENEWAL", apple_transaction(), "active", False),
+            ("DID_RENEW", apple_transaction(), "active", False),
+        ]
+        for notification_type, transaction, status, cancelling in cases:
+            with self.subTest(notification_type=notification_type):
+                db.upsert_subscription(APPLE_USER, "active", "monthly", "apple", 100, 200, False,
+                                       apple_original_transaction_id=transaction["originalTransactionId"])
+                notification = {
+                    "notificationType": notification_type,
+                    "data": {"bundleId": "com.test.music", "signedTransactionInfo": apple_jws(transaction)},
+                }
+                with self.apple():
+                    response = self.client.post("/api/webhooks/apple", content=apple_jws(notification))
+                self.assertEqual(response.status_code, 200, response.text)
+                record = db.get_subscription(APPLE_USER)
+                self.assertEqual(record["status"], status)
+                self.assertEqual(record["platform"], "apple")
+                self.assertEqual(record["cancel_at_period_end"], cancelling)
+
+    def test_apple_webhook_fetches_transaction_when_notification_lacks_expiry(self):
+        transaction = apple_transaction()
+        db.upsert_subscription(APPLE_USER, "active", "monthly", "apple", 100, 200, False,
+                               apple_original_transaction_id=transaction["originalTransactionId"])
+        notification = {
+            "notificationType": "DID_RENEW",
+            "data": {"bundleId": "com.test.music", "signedTransactionInfo": apple_jws({
+                "transactionId": transaction["transactionId"],
+                "originalTransactionId": transaction["originalTransactionId"],
+            })},
+        }
+        response_mock = self.apple_api_response(transaction)
+        with self.apple(), patch.object(apple_billing.jwt, "encode", return_value="client-jwt"), \
+                patch.object(apple_billing, "urlopen", return_value=response_mock) as urlopen:
+            response = self.client.post("/api/webhooks/apple", content=apple_jws(notification))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(db.get_subscription(APPLE_USER)["status"], "active")
+        urlopen.assert_called_once()
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,8 +1,12 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { uploadSheet } from "@/lib/sheet-files";
+import { useAuth } from "./auth-context";
+import { refreshSubscription } from "@/lib/subscription";
+import { resolveUploadAttempt } from "@/lib/upload-gate";
 
 type UploadOption = "style" | "fontSize" | "color" | "dpi" | "octave" | "autoRetry";
 
@@ -30,6 +34,7 @@ const LABEL_COLORS = [
  *  saying the same thing is worse than either alone. */
 export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
   const router = useRouter();
+  const { user, openSignIn } = useAuth();
   const [file, setFile] = useState<File | null>(null);
   const [style, setStyle] = useState<"unicode" | "ascii">("unicode");
   const [octave, setOctave] = useState(false);
@@ -41,13 +46,20 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  // Uploading is a members feature (see server.py's upload routes) - a
+  // signed-in account with an active subscription, checked fresh here
+  // rather than trusted from whatever was cached before sign-in.
+  async function checkAccountAndUpload() {
     if (!file) return;
     setSubmitting(true);
     setError(null);
-
     try {
+      const subscription = await refreshSubscription();
+      const attempt = resolveUploadAttempt(subscription);
+      if (!attempt.proceed) {
+        router.push(attempt.redirectTo);
+        return;
+      }
       const job_id = await uploadSheet(file, {
         style, octave, font_size: fontSize, auto_retry: autoRetry, dpi: dpi ? Number(dpi) : null,
         color,
@@ -55,8 +67,19 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
       router.push(`/sheets?job=${job_id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
       setSubmitting(false);
     }
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!file) return;
+    if (!user) {
+      openSignIn(() => void checkAccountAndUpload());
+      return;
+    }
+    void checkAccountAndUpload();
   }
 
   const ready = !!file && !submitting;
@@ -72,6 +95,11 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
           </p>
         </>
       )}
+
+      <p className="upload-sub" style={{ marginTop: heading ? 6 : 0 }}>
+        Uploading requires an account with an active subscription -{" "}
+        <Link href="/subscription/plans" style={{ color: "var(--accent)" }}>see plans</Link>.
+      </p>
 
       <form onSubmit={handleSubmit} style={{ marginTop: 40 }}>
         <label className={`dropzone${file ? " has-file" : ""}`}>
@@ -184,9 +212,14 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
           type="submit"
           className={`btn-block${ready ? " ready" : ""}`}
           disabled={!file || submitting}
-          title={!file ? "Choose a PDF or photo first" : submitting ? "Your sheet is being uploaded" : "Upload and annotate this sheet"}
+          title={
+            !file ? "Choose a PDF or photo first"
+            : submitting ? "Your sheet is being uploaded"
+            : !user ? "Sign in to upload and annotate this sheet"
+            : "Upload and annotate this sheet"
+          }
         >
-          {submitting ? "Uploading…" : "Upload"}
+          {submitting ? "Uploading…" : !user && file ? "Sign in to upload" : "Upload"}
         </button>
       </form>
     </div>

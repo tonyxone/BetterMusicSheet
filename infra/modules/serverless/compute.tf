@@ -14,12 +14,17 @@ resource "aws_lambda_function" "api" {
   timeout                        = 25
   reserved_concurrent_executions = 10
   environment {
-    # COGNITO_DOMAIN is set here rather than in local.environment because only
-    # the API completes a sign-in; giving it to the worker too would churn a
-    # task-definition revision for a variable it never reads.
+    # COGNITO_DOMAIN and the Stripe secrets are set here rather than in
+    # local.environment because only the API serves sign-in and billing
+    # routes - giving them to the controller or worker too would churn a
+    # task-definition revision for variables neither reads, and hand the
+    # worker (the component that parses untrusted uploaded files) a real
+    # Stripe credential it has no use for.
     variables = merge(local.environment, {
       BACKEND_JWT_SECRET_PARAMETER = var.secret_parameter
       COGNITO_DOMAIN               = var.cognito_domain
+      STRIPE_SECRET_KEY            = var.stripe_secret_key
+      STRIPE_WEBHOOK_SECRET        = var.stripe_webhook_secret
     })
   }
   logging_config {

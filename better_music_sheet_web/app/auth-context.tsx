@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { clientApiFetch } from "@/lib/client-api";
 import { getAccessToken, readSession, signOut } from "@/lib/auth";
 import { SignInModal } from "./sign-in-modal";
@@ -11,8 +11,11 @@ type AuthState = {
   /** True only until the first session check settles - the header uses it to
    * avoid flashing "Sign in" at someone who is already signed in. */
   loading: boolean;
-  /** Open the sign-in modal. */
-  openSignIn: () => void;
+  /** Open the sign-in modal. `onSuccess`, if given, runs once sign-in
+   * completes - only for the in-place password/confirm-code flows, which
+   * close the modal without navigating; a social sign-in redirects the
+   * whole page instead and never comes back to call it. */
+  openSignIn: (onSuccess?: () => void) => void;
   signOut: typeof signOut;
   /** Re-read the session from scratch. */
   refresh: () => Promise<void>;
@@ -67,12 +70,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     refresh();
   }, [refresh]);
 
-  const openSignIn = useCallback(() => setModalOpen(true), []);
-  const closeSignIn = useCallback(() => setModalOpen(false), []);
+  // A ref, not state: it's read once from an event handler (handleSignedIn),
+  // never rendered, so it doesn't need to trigger a re-render on its own.
+  const onSignInSuccess = useRef<(() => void) | null>(null);
+
+  const openSignIn = useCallback((onSuccess?: () => void) => {
+    onSignInSuccess.current = onSuccess ?? null;
+    setModalOpen(true);
+  }, []);
+  const closeSignIn = useCallback(() => {
+    onSignInSuccess.current = null;
+    setModalOpen(false);
+  }, []);
 
   const handleSignedIn = useCallback(() => {
     setModalOpen(false);
     refresh();
+    const onSuccess = onSignInSuccess.current;
+    onSignInSuccess.current = null;
+    onSuccess?.();
   }, [refresh]);
 
   return (

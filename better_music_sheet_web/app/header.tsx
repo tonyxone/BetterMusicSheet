@@ -20,8 +20,9 @@ export function Header() {
         <Logo />
       </Link>
       <nav className="flex items-center gap-3">
-        {/* Open to everyone: signed-out visitors get the first few measures,
-            and are asked to sign in only when they reach past them. */}
+        {/* Practice opens for everyone - a non-subscriber gets a limited
+            preview and a prompt to subscribe, rather than being turned away
+            before ever seeing the page (see play-view.tsx). */}
         <Link
           href="/play"
           className="icon-link"
@@ -59,7 +60,7 @@ export function Header() {
             className="icon-link"
             title="Sign in"
             aria-label="Sign in"
-            onClick={openSignIn}
+            onClick={() => openSignIn()}
           >
             <SignInIcon />
           </button>
@@ -138,6 +139,15 @@ function UserMenu({ name, email, onSignOut }: { name: string; email: string | nu
       </button>
       {open && (
         <div className="nav-menu" role="menu">
+          <Link
+            href="/subscription"
+            className="nav-menu-item"
+            role="menuitem"
+            title="Manage your subscription"
+            onClick={() => setOpen(false)}
+          >
+            Manage subscription
+          </Link>
           <button
             type="button"
             className="nav-menu-item"

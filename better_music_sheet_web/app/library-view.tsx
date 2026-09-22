@@ -5,7 +5,10 @@ import Link from "next/link";
 import { clientApiFetch } from "@/lib/client-api";
 import { KeyboardIcon } from "./keyboard-icon";
 import { BackButton } from "./back-button";
+import { DemoSampleCard } from "./demo-sample-card";
 import type { AnnotationJob } from "@/lib/api";
+import { useSubscription } from "@/lib/subscription";
+import { paginateLibrary } from "@/lib/library-pagination";
 
 const STATUS_LABEL: Record<AnnotationJob["status"], string> = {
   uploading: "Uploading",
@@ -15,8 +18,6 @@ const STATUS_LABEL: Record<AnnotationJob["status"], string> = {
   queued: "Queued",
 };
 
-const PAGE_SIZE = 10;
-
 // Rendered at two URLs: as the landing page at "/" for a signed-in visitor
 // (see app/page.tsx), and at /history for everyone, which is how a guest -
 // who has a library of their own under a guest id, but gets the upload form
@@ -25,6 +26,7 @@ const PAGE_SIZE = 10;
 // showBack: on /history there is a page above to return to; at the root there
 // is not, so the caller decides rather than this component guessing.
 export function LibraryView({ showBack = false }: { showBack?: boolean }) {
+  const { subscription } = useSubscription();
   const [jobs, setJobs] = useState<AnnotationJob[] | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AnnotationJob | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -38,14 +40,8 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
       .catch(() => setJobs([]));
   }, []);
 
-  const pageCount = jobs && jobs.length ? Math.ceil(jobs.length / PAGE_SIZE) : 1;
-  // Clamp rather than reset to 1: deleting the last item on the last page
-  // should land you on the new last page, not jump back to the start.
-  const currentPage = Math.min(page, pageCount);
-  const pageJobs = useMemo(
-    () => jobs?.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE) ?? [],
-    [jobs, currentPage],
-  );
+  const { pageCount, currentPage, start, end, showDemoLast, emptyLibrary } = paginateLibrary(jobs?.length ?? 0, page);
+  const pageJobs = useMemo(() => jobs?.slice(start, end) ?? [], [jobs, start, end]);
 
   function openDelete(job: AnnotationJob) {
     setDeleteError(null);
@@ -89,10 +85,9 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
 
       {jobs === null ? (
         <p style={{ color: "var(--ink-soft)" }}>Loading…</p>
-      ) : jobs.length === 0 ? (
-        <div className="history-empty">No sheets annotated yet.</div>
       ) : (
         <>
+          {jobs.length > 0 && (
           <div>
             {pageJobs.map((job) => (
               // A plain div, not the link itself: the Play link and delete button
@@ -111,10 +106,10 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
                   {/* Only a finished sheet has a timeline to play back. */}
                   {job.status === "done" && (
                     <Link
-                      href={`/play?job=${job.job_id}`}
+                      href={subscription?.tier === "premium" ? `/play?job=${job.job_id}` : "/subscription/upgrade"}
                       className="history-action history-play"
-                      title="Practice with the keyboard"
-                      aria-label="Practice with the keyboard"
+                      title={subscription?.tier === "premium" ? "Practice with the keyboard" : "Unlock practice mode"}
+                      aria-label={subscription?.tier === "premium" ? "Practice with the keyboard" : "Unlock practice mode"}
                     >
                       <KeyboardIcon size={40} />
                     </Link>
@@ -139,6 +134,11 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
               </div>
             ))}
           </div>
+          )}
+
+          {/* Built-in sample, not user content - always last, and only on
+              the last page, so it never sits in the middle of real sheets. */}
+          {showDemoLast && <DemoSampleCard removable emptyLibrary={emptyLibrary} />}
 
           {pageCount > 1 && (
             <nav className="pagination" aria-label="Library pages">

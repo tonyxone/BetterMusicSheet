@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Literal, Optional
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -23,16 +23,19 @@ from pydantic import BaseModel, Field
 
 import db
 import storage
+import apple_billing
+import stripe_billing
 from auth import (
     BACKEND_JWT_LIFETIME_SECONDS,
     delete_cognito_user,
     exchange_authorization_code,
     get_current_user_id,
+    get_entitlement,
     get_signed_in_user_id,
     mint_backend_token,
     verify_cognito_id_token,
 )
-from config import IS_PRODUCTION, SERVERLESS, MAX_UPLOAD_BYTES
+from config import DEMO_JOB_ID, IS_PRODUCTION, SERVERLESS, MAX_UPLOAD_BYTES
 import job_state
 
 JOBS_DIR = Path(__file__).parent / "server_jobs"
@@ -63,9 +66,14 @@ async def json_errors(request, call_next):
     try:
         return await call_next(request)
     except Exception:
+        # The full traceback goes to the server log for whoever's on call;
+        # the browser gets a plain-English detail instead - frontend error
+        # handling (e.g. paywall.tsx's checkout()) shows `detail` verbatim,
+        # so anything server-log-flavored here would otherwise reach a
+        # visitor as-is.
         traceback.print_exc()
         return JSONResponse(
-            {"detail": "Internal server error - see the server log for the traceback."},
+            {"detail": "Something went wrong on our end. Please try again in a moment."},
             status_code=500,
         )
 
@@ -130,6 +138,24 @@ class SocialTokenRequest(BaseModel):
     """What the callback page posts back after a hosted-UI round trip."""
     code: str = Field(min_length=1, max_length=4096)
     redirect_uri: str = Field(min_length=1, max_length=2048)
+
+
+class StripeCheckoutRequest(BaseModel):
+    success_url: str = Field(min_length=1, max_length=2048)
+    cancel_url: str = Field(min_length=1, max_length=2048)
+    plan: Literal["monthly", "yearly"]
+
+
+class StripeConfirmRequest(BaseModel):
+    session_id: str = Field(min_length=1, max_length=255)
+
+
+class StripePlanRequest(BaseModel):
+    plan: Literal["monthly", "yearly"]
+
+
+class AppleTransactionRequest(BaseModel):
+    transaction: str = Field(min_length=1, max_length=32768)
 
 
 def _session_from_id_token(id_token):
@@ -200,6 +226,99 @@ def me(user_id: str = Depends(get_signed_in_user_id)):
     return user
 
 
+@app.get("/api/me/subscription")
+def subscription(user_id: str = Depends(get_signed_in_user_id)):
+    """The signed-in account's current subscription state."""
+    if user_id is None:
+        raise HTTPException(401, "not signed in")
+    return get_entitlement(user_id)
+
+
+class DemoHiddenRequest(BaseModel):
+    hidden: bool
+
+
+@app.get("/api/me/demo-hidden")
+def demo_hidden(user_id: str = Depends(get_signed_in_user_id)):
+    """Whether the signed-in account has hidden the "Try a sample" entry.
+
+    A guest keeps this in their own browser's localStorage instead - there's
+    no account to attach it to, and no server route reads or writes it for
+    them (see better_music_sheet_web/lib/demo-hidden.ts)."""
+    if user_id is None:
+        raise HTTPException(401, "not signed in")
+    return {"hidden": db.is_demo_hidden(user_id)}
+
+
+@app.put("/api/me/demo-hidden")
+def set_demo_hidden(body: DemoHiddenRequest, user_id: str = Depends(get_signed_in_user_id)):
+    """Hide or restore the demo entry for the signed-in account. Purely a
+    per-viewer preference: it never touches the demo job itself (see
+    DEMO_JOB_ID's hard delete refusal below) or any other account's copy of
+    this same flag."""
+    if user_id is None:
+        raise HTTPException(401, "not signed in")
+    db.set_demo_hidden(user_id, body.hidden)
+    return {"hidden": body.hidden}
+
+
+@app.post("/api/subscriptions/stripe/checkout")
+def stripe_checkout(body: StripeCheckoutRequest, user_id: str = Depends(get_signed_in_user_id)):
+    if user_id is None:
+        raise HTTPException(401, "not signed in")
+    return stripe_billing.create_checkout(user_id, body.plan, body.success_url, body.cancel_url)
+
+
+@app.post("/api/subscriptions/stripe/confirm")
+def confirm_stripe_checkout(body: StripeConfirmRequest, user_id: str = Depends(get_signed_in_user_id)):
+    """The success page calls this with the session_id Stripe redirected
+    back with, so entitlement updates immediately rather than waiting on
+    the webhook - which has nowhere reachable to deliver to in local dev,
+    and can otherwise lag the browser's own redirect here even in
+    production. Returns the account's current entitlement, same shape as
+    GET /api/me/subscription."""
+    if user_id is None:
+        raise HTTPException(401, "not signed in")
+    stripe_billing.confirm_checkout(user_id, body.session_id)
+    return get_entitlement(user_id)
+
+
+@app.post("/api/webhooks/stripe")
+async def stripe_webhook(request: Request):
+    return stripe_billing.handle_webhook(
+        await request.body(), request.headers.get("stripe-signature"),
+    )
+
+
+@app.post("/api/subscriptions/stripe/cancel")
+def cancel_stripe_subscription(user_id: str = Depends(get_signed_in_user_id)):
+    if user_id is None:
+        raise HTTPException(401, "not signed in")
+    return stripe_billing.cancel_subscription(user_id)
+
+
+@app.post("/api/subscriptions/stripe/plan")
+def change_stripe_plan(body: StripePlanRequest, user_id: str = Depends(get_signed_in_user_id)):
+    """Move an existing Stripe subscription to the other billing period
+    (e.g. monthly to yearly), rather than starting a second subscription."""
+    if user_id is None:
+        raise HTTPException(401, "not signed in")
+    stripe_billing.change_plan(user_id, body.plan)
+    return get_entitlement(user_id)
+
+
+@app.post("/api/subscriptions/apple/transaction")
+def apple_transaction(body: AppleTransactionRequest, user_id: str = Depends(get_signed_in_user_id)):
+    if user_id is None:
+        raise HTTPException(401, "not signed in")
+    return apple_billing.record_transaction(user_id, body.transaction)
+
+
+@app.post("/api/webhooks/apple")
+async def apple_webhook(request: Request):
+    return apple_billing.handle_webhook(await request.body())
+
+
 @app.delete("/api/me", status_code=204)
 def delete_account(user_id: str = Depends(get_signed_in_user_id)):
     """Delete the signed-in user's account - required by Apple's App Store
@@ -261,7 +380,11 @@ def reserve_upload(body, user_id):
 
 
 @app.post("/api/uploads", status_code=201)
-def create_upload(body: UploadRequest, user_id: str = Depends(get_current_user_id)):
+def create_upload(body: UploadRequest, user_id: str = Depends(get_signed_in_user_id)):
+    # Uploading is a members feature - a guest id no longer reserves one (see
+    # get_current_user_id's docstring for what that identifies instead).
+    if user_id is None:
+        raise HTTPException(401, "Sign in to upload a sheet.")
     if not SERVERLESS:
         raise HTTPException(404, "Direct uploads are not enabled on this server.")
     job = reserve_upload(body, user_id)
@@ -279,7 +402,9 @@ def create_upload(body: UploadRequest, user_id: str = Depends(get_current_user_i
 
 
 @app.post("/api/uploads/{job_id}/complete", status_code=202)
-def complete_upload(job_id: str, user_id: str = Depends(get_current_user_id)):
+def complete_upload(job_id: str, user_id: str = Depends(get_signed_in_user_id)):
+    if user_id is None:
+        raise HTTPException(401, "Sign in to upload a sheet.")
     from worker import accept_input
     job = _owned_job_or_404(job_id, user_id)
     if job.get("storage_version") != 2:
@@ -298,8 +423,10 @@ async def submit_sheet(
     octave: bool = Form(False), font_size: float = Form(6.5),
     dpi: Optional[int] = Form(None), auto_retry: bool = Form(True),
     color: str = Form("#000000"),
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_signed_in_user_id),
 ):
+    if user_id is None:
+        raise HTTPException(401, "Sign in to upload a sheet.")
     if SERVERLESS:
         raise HTTPException(409, "Please refresh the page to use the updated upload form.")
     # Compatibility endpoint for local development and the transitional ECS API.
@@ -342,6 +469,26 @@ def _owned_job_or_404(job_id, user_id):
     return job
 
 
+def _readable_job_or_404(job_id, user_id):
+    """Like _owned_job_or_404, but the bundled demo sheet (see
+    config.DEMO_JOB_ID) is additionally readable by anyone, signed in or not -
+    it is the one sheet every visitor can try without an account.
+
+    Narrow and read-only by construction: only the status/assets/download/
+    original/timeline routes below call this. The routes that change
+    anything - delete_job, complete_upload - keep calling _owned_job_or_404
+    (delete_job also refuses the demo job outright, so no spoofed X-Guest-Id
+    can delete it either)."""
+    job = db.get_annotation_job(job_id)
+    if job is None or job["status"] == "deleted":
+        raise HTTPException(404, "no such job")
+    if job_id == DEMO_JOB_ID:
+        return job
+    if job["user_id"] != user_id:
+        raise HTTPException(404, "no such job")
+    return job
+
+
 @app.get("/api/sheets")
 def job_history(user_id: str = Depends(get_current_user_id)):
     jobs = [j for j in db.list_annotation_jobs(user_id) if j["status"] not in ("deleting", "deleted")]
@@ -351,7 +498,7 @@ def job_history(user_id: str = Depends(get_current_user_id)):
 
 @app.get("/api/sheets/{job_id}")
 def job_status(job_id: str, user_id: str = Depends(get_current_user_id)):
-    job = _owned_job_or_404(job_id, user_id)
+    job = _readable_job_or_404(job_id, user_id)
     sheet = db.get_music_sheet(job["music_sheet_id"])
     return {**job, "sheet_name": sheet["sheet_name"] if sheet else None}
 
@@ -365,6 +512,11 @@ def delete_job(job_id: str, user_id: str = Depends(get_current_user_id)):
     share storage keys by design, so those files are retained while another
     history item still needs them.
     """
+    if job_id == DEMO_JOB_ID:
+        # Explicit, regardless of who's asking: the demo's read carve-out
+        # (see _readable_job_or_404) must never be mistaken for a mutation
+        # right, even by a request that spoofs the demo's own owner id.
+        raise HTTPException(403, "The demo sheet can't be deleted.")
     job = _owned_job_or_404(job_id, user_id)
     if job["status"] in ("uploading", "queued", "processing"):
         raise HTTPException(409, "Wait for this sheet to finish processing before deleting it.")
@@ -443,7 +595,7 @@ def with_sheet_name(job):
 
 @app.get("/api/sheets/{job_id}/assets")
 def job_assets(job_id: str, user_id: str = Depends(get_current_user_id)):
-    job = with_sheet_name(_owned_job_or_404(job_id, user_id))
+    job = with_sheet_name(_readable_job_or_404(job_id, user_id))
     if job["status"] != "done":
         raise HTTPException(409, "The sheet is not ready yet.")
     # "original" is the file as uploaded, for the viewer's original/annotated
@@ -487,7 +639,7 @@ def new_artifact_response(job, kind, disposition=None):
 
 @app.get("/api/sheets/{job_id}/download")
 def job_download(job_id: str, inline: bool = False, user_id: str = Depends(get_current_user_id)):
-    job = _owned_job_or_404(job_id, user_id)
+    job = _readable_job_or_404(job_id, user_id)
     if job["status"] != "done":
         raise HTTPException(409, f"job is '{job['status']}', not done yet")
     sheet = db.get_music_sheet(job["music_sheet_id"])
@@ -527,7 +679,7 @@ def job_original(job_id: str, user_id: str = Depends(get_current_user_id)):
     offered as a download - the Download button hands over the annotated copy,
     which is the thing the site made. 404 rather than 500 when the upload is
     gone, since a sheet can outlive its input and the toggle simply hides."""
-    job = with_sheet_name(_owned_job_or_404(job_id, user_id))
+    job = with_sheet_name(_readable_job_or_404(job_id, user_id))
     if job["status"] != "done":
         raise HTTPException(409, f"job is '{job['status']}', not done yet")
     if SERVERLESS:
@@ -559,7 +711,7 @@ def job_timeline(job_id: str, user_id: str = Depends(get_current_user_id)):
     404 rather than 500 when a finished job has no timeline - building it is
     best-effort (see run.py), so its absence is an expected state meaning
     "Play mode isn't available for this sheet", not a server fault."""
-    job = _owned_job_or_404(job_id, user_id)
+    job = _readable_job_or_404(job_id, user_id)
     if job["status"] != "done":
         raise HTTPException(409, f"job is '{job['status']}', not done yet")
     sheet = db.get_music_sheet(job["music_sheet_id"])

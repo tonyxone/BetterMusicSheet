@@ -39,6 +39,10 @@ output "users_table" {
   value = aws_dynamodb_table.users.name
 }
 
+output "subscriptions_table" {
+  value = aws_dynamodb_table.subscriptions.name
+}
+
 output "music_sheet_table" {
   value = aws_dynamodb_table.music_sheet.name
 }

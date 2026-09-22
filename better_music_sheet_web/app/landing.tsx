@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { UploadForm } from "./upload-form";
+import { DemoSampleCard } from "./demo-sample-card";
 
 // What a first-time visitor - and a crawler, which is always a first-time
 // visitor - gets at "/". It has to be real content in the served HTML rather
@@ -25,6 +26,12 @@ export function Landing() {
       </p>
 
       <UploadForm heading={false} />
+
+      <section className="landing-section">
+        <h2>Or try it first</h2>
+        <p>No file to hand? Play a sample sheet right away - no upload, no account.</p>
+        <DemoSampleCard />
+      </section>
 
       <section className="landing-section">
         <h2>How it works</h2>
@@ -86,8 +93,9 @@ export function Landing() {
       <section className="landing-section">
         <h2>Cost</h2>
         <p>
-          Free, and no account needed. Signing in is optional and only attaches
-          your sheets to you so they survive a change of browser — see the{" "}
+          Trying the sample above is free, with no account needed. Uploading your
+          own sheet music requires an account with an active subscription — see{" "}
+          <Link href="/subscription/plans">plans</Link>, and the{" "}
           <Link href="/privacy">privacy policy</Link> for what is stored.
         </p>
       </section>

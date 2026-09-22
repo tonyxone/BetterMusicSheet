@@ -1,10 +1,12 @@
 """Job/user state - DynamoDB in production, an in-memory store in local dev
 (see config.py). Every function takes/returns plain Python dicts.
 
-The `users` table holds only people who actually signed in (see auth.py) -
-guests upload without one, so every lookup here has to tolerate a user_id
-with no matching row. Sheets and jobs, by contrast, exist for guests and
-signed-in users alike, keyed by whichever id identified the request.
+The `users` table holds only people who actually signed in (see auth.py) - a
+guest id never gets a row there, so every lookup here has to tolerate a
+user_id with no matching row. Sheets and jobs, by contrast, exist for guests
+and signed-in users alike (a guest's own history still reads and plays back;
+uploading a new one is the one thing that now requires signing in - see
+server.py), keyed by whichever id identified the request.
 
 Production only: DynamoDB's Decimal numbers are converted to int/float so
 callers (server.py) never touch boto3 types directly.
@@ -13,7 +15,22 @@ import threading
 import time
 from decimal import Decimal
 
-from config import IS_PRODUCTION
+from config import IS_PRODUCTION, SUBSCRIPTIONS_TABLE
+
+
+_SUBSCRIPTION_STATUSES = {"trialing", "active", "canceled", "expired", "past_due"}
+_SUBSCRIPTION_PLANS = {"monthly", "yearly"}
+_SUBSCRIPTION_PLATFORMS = {"stripe", "apple"}
+
+
+def _validate_subscription(status, plan, platform):
+    if status not in _SUBSCRIPTION_STATUSES:
+        raise ValueError(f"invalid subscription status: {status}")
+    if plan not in _SUBSCRIPTION_PLANS:
+        raise ValueError(f"invalid subscription plan: {plan}")
+    if platform not in _SUBSCRIPTION_PLATFORMS:
+        raise ValueError(f"invalid subscription platform: {platform}")
+
 
 if IS_PRODUCTION:
     import os
@@ -24,6 +41,7 @@ if IS_PRODUCTION:
     _dynamodb = boto3.resource("dynamodb", region_name=os.environ.get("AWS_REGION", "us-west-1"))
 
     _users_table = _dynamodb.Table(os.environ["USERS_TABLE"])
+    _subscriptions_table = _dynamodb.Table(SUBSCRIPTIONS_TABLE)
     _music_sheet_table = _dynamodb.Table(os.environ["MUSIC_SHEET_TABLE"])
     _annotation_job_table = _dynamodb.Table(os.environ["ANNOTATION_JOB_TABLE"])
 
@@ -84,6 +102,63 @@ if IS_PRODUCTION:
 
     def delete_user(user_id):
         _users_table.delete_item(Key={"user_id": user_id})
+
+    # ---- per-user demo visibility ----
+
+    def is_demo_hidden(user_id):
+        user = get_user(user_id)
+        return bool(user and user.get("hide_demo"))
+
+    def set_demo_hidden(user_id, hidden):
+        """Upsert - a signed-in visitor may hide the demo before /api/me has
+        ever created their row (see server.py's demo_hidden route, which,
+        unlike /api/me, has no reason to create one first just to flip a
+        flag on it)."""
+        _users_table.update_item(
+            Key={"user_id": user_id},
+            UpdateExpression="SET hide_demo = :h",
+            ExpressionAttributeValues={":h": hidden},
+        )
+
+    # ---- subscriptions ----
+
+    def get_subscription(user_id):
+        item = _subscriptions_table.get_item(Key={"user_id": user_id}).get("Item")
+        return _clean(item) if item else None
+
+    def get_subscription_by_apple_original_transaction_id(original_transaction_id):
+        response = _subscriptions_table.scan(
+            FilterExpression="apple_original_transaction_id = :transaction_id",
+            ExpressionAttributeValues={":transaction_id": original_transaction_id},
+        )
+        items = response.get("Items", [])
+        return _clean(items[0]) if items else None
+
+    def upsert_subscription(user_id, status, plan, platform, current_period_start,
+                            current_period_end, cancel_at_period_end,
+                            stripe_subscription_id=None, apple_original_transaction_id=None):
+        _validate_subscription(status, plan, platform)
+        fields = {
+            "status": status,
+            "plan": plan,
+            "platform": platform,
+            "current_period_start": current_period_start,
+            "current_period_end": current_period_end,
+            "cancel_at_period_end": cancel_at_period_end,
+            "updated_at": int(time.time()),
+        }
+        for key, value in (("stripe_subscription_id", stripe_subscription_id),
+                           ("apple_original_transaction_id", apple_original_transaction_id)):
+            if value is not None:
+                fields[key] = value
+        names = {f"#{key}": key for key in fields}
+        values = {f":{key}": value for key, value in fields.items()}
+        _subscriptions_table.update_item(
+            Key={"user_id": user_id},
+            UpdateExpression="SET " + ", ".join(f"#{key} = :{key}" for key in fields),
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=values,
+        )
 
     # ---- music_sheet ----
 
@@ -166,6 +241,7 @@ else:
     # job state. Not persisted across restarts - fine for local dev.
     _lock = threading.Lock()
     _users = {}
+    _subscriptions = {}
     _music_sheets = {}
     _annotation_jobs = {}
 
@@ -206,6 +282,55 @@ else:
     def delete_user(user_id):
         with _lock:
             _users.pop(user_id, None)
+
+    # ---- per-user demo visibility ----
+
+    def is_demo_hidden(user_id):
+        with _lock:
+            user = _users.get(user_id)
+            return bool(user and user.get("hide_demo"))
+
+    def set_demo_hidden(user_id, hidden):
+        with _lock:
+            row = _users.setdefault(user_id, {
+                "user_id": user_id, "email": None,
+                "display_name": None, "created_at": int(time.time()),
+            })
+            row["hide_demo"] = hidden
+
+    # ---- subscriptions ----
+
+    def get_subscription(user_id):
+        with _lock:
+            item = _subscriptions.get(user_id)
+            return dict(item) if item else None
+
+    def get_subscription_by_apple_original_transaction_id(original_transaction_id):
+        with _lock:
+            for item in _subscriptions.values():
+                if item.get("apple_original_transaction_id") == original_transaction_id:
+                    return dict(item)
+            return None
+
+    def upsert_subscription(user_id, status, plan, platform, current_period_start,
+                            current_period_end, cancel_at_period_end,
+                            stripe_subscription_id=None, apple_original_transaction_id=None):
+        _validate_subscription(status, plan, platform)
+        with _lock:
+            row = _subscriptions.setdefault(user_id, {"user_id": user_id})
+            row.update({
+                "status": status,
+                "plan": plan,
+                "platform": platform,
+                "current_period_start": current_period_start,
+                "current_period_end": current_period_end,
+                "cancel_at_period_end": cancel_at_period_end,
+                "updated_at": int(time.time()),
+            })
+            if stripe_subscription_id is not None:
+                row["stripe_subscription_id"] = stripe_subscription_id
+            if apple_original_transaction_id is not None:
+                row["apple_original_transaction_id"] = apple_original_transaction_id
 
     # ---- music_sheet ----
 

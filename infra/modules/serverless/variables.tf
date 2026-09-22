@@ -19,6 +19,7 @@ variable "vpc_id" { type = string }
 variable "subnets" { type = list(string) }
 variable "legacy_bucket" { type = string }
 variable "users_table" { type = string }
+variable "subscriptions_table" { type = string }
 variable "sheets_table" { type = string }
 variable "jobs_table" { type = string }
 variable "secret_parameter" { type = string }
@@ -33,6 +34,20 @@ variable "origins" { type = list(string) }
 variable "max_workers" { type = number }
 variable "spot_burst" { type = bool }
 variable "alert_email" { type = string }
+# Only api reads these (see stripe_billing.py) - kept off local.environment
+# below and out of controller/worker for the same reason COGNITO_DOMAIN is
+# scoped to api alone in compute.tf: a component gets a secret only if it
+# actually has a use for it, not merely because the shared map is convenient.
+variable "stripe_secret_key" {
+  type      = string
+  sensitive = true
+}
+variable "stripe_webhook_secret" {
+  type      = string
+  sensitive = true
+}
+variable "stripe_price_monthly" { type = string }
+variable "stripe_price_yearly" { type = string }
 
 data "aws_caller_identity" "current" {}
 data "aws_ecs_cluster" "existing" { cluster_name = var.cluster_name }
@@ -45,6 +60,9 @@ locals {
     JOB_FILES_BUCKET      = var.legacy_bucket
     NEW_JOB_FILES_BUCKET  = aws_s3_bucket.files.id
     USERS_TABLE           = var.users_table
+    SUBSCRIPTIONS_TABLE   = var.subscriptions_table
+    STRIPE_PRICE_MONTHLY  = var.stripe_price_monthly
+    STRIPE_PRICE_YEARLY   = var.stripe_price_yearly
     MUSIC_SHEET_TABLE     = var.sheets_table
     ANNOTATION_JOB_TABLE  = var.jobs_table
     JOB_CONTROL_TABLE     = aws_dynamodb_table.control.name
@@ -57,6 +75,6 @@ locals {
     MAX_PAGES             = "50"
     MAX_JOB_SECONDS       = "1800"
   }
-  table_arns = [for name in [var.users_table, var.sheets_table, var.jobs_table, aws_dynamodb_table.control.name] :
+  table_arns = [for name in [var.users_table, var.subscriptions_table, var.sheets_table, var.jobs_table, aws_dynamodb_table.control.name] :
   "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${name}"]
 }

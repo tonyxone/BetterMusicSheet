@@ -50,3 +50,40 @@ MAX_JOB_SECONDS = int(os.environ.get("MAX_JOB_SECONDS", "1800"))
 MAX_ATTEMPTS = 3
 LEASE_SECONDS = 180
 UPLOAD_SECONDS = 900
+
+# Subscription records are optional in local development, where db.py uses an
+# in-memory store. Production must name the DynamoDB table explicitly.
+if IS_PRODUCTION:
+    SUBSCRIPTIONS_TABLE = os.environ["SUBSCRIPTIONS_TABLE"]
+else:
+    SUBSCRIPTIONS_TABLE = os.environ.get("SUBSCRIPTIONS_TABLE")
+
+# Stripe is optional until somebody starts a checkout, cancels a subscription,
+# or Stripe calls the webhook. Keeping these nullable lets the rest of the API
+# start in local development without billing credentials.
+STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY")
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET")
+STRIPE_PRICE_MONTHLY = os.environ.get("STRIPE_PRICE_MONTHLY")
+STRIPE_PRICE_YEARLY = os.environ.get("STRIPE_PRICE_YEARLY")
+
+# Apple billing is optional until an App Store transaction or notification is
+# received. These remain nullable so the rest of the API starts without Apple
+# credentials in local development.
+APPLE_KEY_ID = os.environ.get("APPLE_KEY_ID")
+APPLE_ISSUER_ID = os.environ.get("APPLE_ISSUER_ID")
+APPLE_APP_ID = os.environ.get("APPLE_APP_ID")
+APPLE_BUNDLE_ID = os.environ.get("APPLE_BUNDLE_ID")
+APPLE_PRIVATE_KEY = os.environ.get("APPLE_PRIVATE_KEY")
+APPLE_ENV = os.environ.get("APPLE_ENV")
+APPLE_PRODUCT_MONTHLY = os.environ.get("APPLE_PRODUCT_MONTHLY")
+APPLE_PRODUCT_YEARLY = os.environ.get("APPLE_PRODUCT_YEARLY")
+
+# The bundled sample (see demo-sheet/) every visitor can play without an
+# account or a subscription - see server.py's read carve-out, _seed_local.py's
+# seed_demo, and better_music_sheet_web/lib/api.ts's copy of DEMO_JOB_ID,
+# which must name the same job. DEMO_OWNER_ID is deliberately not
+# hex-and-dashes-only, so it can never be supplied as an X-Guest-Id (see
+# auth.py's _UUID_RE) and "become" the demo's owner that way.
+DEMO_JOB_ID = "demo-ode-to-joy"
+DEMO_OWNER_ID = "demo-owner"
+DEMO_SHEET_NAME = "Ode to Joy - Beethoven.pdf"
