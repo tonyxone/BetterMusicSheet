@@ -234,12 +234,28 @@ function PreviewFrame({ jobId, variant }: { jobId: string; variant: SheetVariant
         // navigation cycle (blank, then back to the real content) does, by
         // making the plugin fully reinitialize instead of continuing a
         // first attempt it got stuck on.
+        //
+        // Those navigations must REPLACE the current history entry, not
+        // push new ones: plain src assignments append iframe entries to the
+        // joint session history, so Back first walked back onto the blank
+        // frame (a black page) and only a second click left the page.
+        // location.replace() swaps the entry in place; the blob document is
+        // same-origin, so scripting its location is allowed. If a future
+        // browser refuses that, fall back to the src assignments (the
+        // viewer still recovers; only Back needs the extra click).
         setTimeout(() => {
           if (!frame.isConnected || frame.src !== objectUrl) return;
-          frame.src = "about:blank";
-          setTimeout(() => {
-            if (frame.isConnected) frame.src = objectUrl!;
-          }, 50);
+          try {
+            frame.contentWindow?.location.replace("about:blank");
+            setTimeout(() => {
+              if (frame.isConnected) frame.contentWindow?.location.replace(objectUrl!);
+            }, 50);
+          } catch {
+            frame.src = "about:blank";
+            setTimeout(() => {
+              if (frame.isConnected) frame.src = objectUrl!;
+            }, 50);
+          }
         }, 400);
       })
       .catch((err) => {
