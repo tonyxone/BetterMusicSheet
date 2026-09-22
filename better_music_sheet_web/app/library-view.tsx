@@ -6,6 +6,7 @@ import { clientApiFetch } from "@/lib/client-api";
 import { KeyboardIcon } from "./keyboard-icon";
 import { BackButton } from "./back-button";
 import type { AnnotationJob } from "@/lib/api";
+import { useSubscription } from "@/lib/subscription";
 
 const STATUS_LABEL: Record<AnnotationJob["status"], string> = {
   uploading: "Uploading",
@@ -25,6 +26,7 @@ const PAGE_SIZE = 10;
 // showBack: on /history there is a page above to return to; at the root there
 // is not, so the caller decides rather than this component guessing.
 export function LibraryView({ showBack = false }: { showBack?: boolean }) {
+  const { subscription } = useSubscription();
   const [jobs, setJobs] = useState<AnnotationJob[] | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AnnotationJob | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -111,10 +113,10 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
                   {/* Only a finished sheet has a timeline to play back. */}
                   {job.status === "done" && (
                     <Link
-                      href={`/play?job=${job.job_id}`}
+                      href={subscription?.tier === "premium" ? `/play?job=${job.job_id}` : "/subscription/upgrade"}
                       className="history-action history-play"
-                      title="Practice with the keyboard"
-                      aria-label="Practice with the keyboard"
+                      title={subscription?.tier === "premium" ? "Practice with the keyboard" : "Unlock practice mode"}
+                      aria-label={subscription?.tier === "premium" ? "Practice with the keyboard" : "Unlock practice mode"}
                     >
                       <KeyboardIcon size={40} />
                     </Link>

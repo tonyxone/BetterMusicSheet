@@ -9,10 +9,12 @@ import { SheetToggle, type SheetVariant } from "../sheet-toggle";
 import { KeyboardIcon } from "../keyboard-icon";
 import { BackButton } from "../back-button";
 import type { AnnotationJob } from "@/lib/api";
+import { useSubscription } from "@/lib/subscription";
 
 const POLL_INTERVAL_MS = 2500;
 
 export function JobStatus() {
+  const { subscription } = useSubscription();
   const jobId = useSearchParams().get("job");
   const [job, setJob] = useState<AnnotationJob | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -120,10 +122,10 @@ export function JobStatus() {
         <div className="result-actions">
           <SheetToggle value={variant} onChange={setVariant} unavailable={originalMissing} />
           <Link
-            href={`/play?job=${jobId}`}
+            href={subscription?.tier === "premium" ? `/play?job=${jobId}` : "/subscription/upgrade"}
             className="icon-link"
-            title="Practice with the keyboard"
-            aria-label="Practice with the keyboard"
+            title={subscription?.tier === "premium" ? "Practice with the keyboard" : "Unlock practice mode"}
+            aria-label={subscription?.tier === "premium" ? "Practice with the keyboard" : "Unlock practice mode"}
           >
             <KeyboardIcon size={44} />
           </Link>

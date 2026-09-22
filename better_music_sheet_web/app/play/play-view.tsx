@@ -17,6 +17,8 @@ import { clientApiFetch } from "@/lib/client-api";
 import { fetchSheetAssets, fetchSheetFile } from "@/lib/sheet-files";
 import { SheetToggle, type SheetVariant } from "../sheet-toggle";
 import { useAuth } from "../auth-context";
+import { Paywall } from "../subscription/paywall";
+import { useSubscription } from "@/lib/subscription";
 import { BackButton } from "../back-button";
 import type { AnnotationJob } from "@/lib/api";
 import type { Timeline, TimelineNote } from "@/lib/timeline";
@@ -223,6 +225,9 @@ const FREE_LINES = 2;
 export function PlayView() {
   const router = useRouter();
   const jobId = useSearchParams().get("job");
+  const { subscription, loading } = useSubscription();
+  if (loading) return <div className="wrap"><div className="page-title-row"><BackButton /><p style={{ color: "var(--ink-soft)", margin: 0 }}>Loading subscription…</p></div></div>;
+  if (subscription?.tier !== "premium") return <Paywall />;
   return jobId ? <Player jobId={jobId} /> : <SheetPicker onPick={(id) => router.push(`/play?job=${id}`)} />;
 }
 
