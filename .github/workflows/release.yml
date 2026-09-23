@@ -132,6 +132,14 @@ jobs:
       # below would destroy the real Google/Apple providers. The same secret
       # also carries the Stripe billing credentials (see stripe.tf) - loaded
       # here too, or Stripe would silently apply as unconfigured.
+      #
+      # ::add-mask:: BEFORE the value ever reaches $GITHUB_ENV: every step
+      # from here on - this one included - has these in its resolved `env:`,
+      # which the runner logs regardless of debug mode. Unmasked, that's the
+      # plaintext value sitting in this (public) repo's Actions log. Masking
+      # every value here, not just the ones we currently think are sensitive,
+      # means a future addition to social-signin-env.sh's `known` list is
+      # covered without anyone having to remember to update this loop too.
       - name: Load social sign-in and billing secrets
         run: |
           source infra/social-signin-env.sh
@@ -141,6 +149,14 @@ jobs:
             var="TF_VAR_$name"
             value="${!var:-}"
             if [ -n "$value" ]; then
+              # GitHub's masking matches whole log lines most reliably - a
+              # multi-line value (apple_private_key's PEM) needs each of its
+              # own lines registered separately, or only a masked whole-value
+              # match would catch it and a line-by-line log render wouldn't.
+              while IFS= read -r maskline; do
+                [ -n "$maskline" ] && echo "::add-mask::$maskline"
+              done <<< "$value"
+              echo "::add-mask::$value"
               echo "$var<<BMS_SECRET_EOF" >> "$GITHUB_ENV"
               echo "$value" >> "$GITHUB_ENV"
               echo "BMS_SECRET_EOF" >> "$GITHUB_ENV"
