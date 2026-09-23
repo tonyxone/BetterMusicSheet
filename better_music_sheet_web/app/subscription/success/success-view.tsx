@@ -52,7 +52,7 @@ export function SubscriptionSuccess() {
       <p>
         {loading ? "This only takes a moment."
           : stillFree ? (confirmError || "We're still waiting to hear back from Stripe. This updates as soon as it does.")
-          : "Practice mode is ready whenever you are."}
+          : "Upload your sheet music and start practising whenever you're ready."}
       </p>
       {!loading && (stillFree
         ? <Link className="btn-pill ghost" href="/subscription">Check subscription status</Link>

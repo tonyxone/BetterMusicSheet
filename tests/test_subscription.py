@@ -21,6 +21,8 @@ FREE_USER = "77777777-7777-4777-8777-777777777777"
 ACTIVE_USER = "66666666-6666-4666-8666-666666666666"
 STRIPE_USER = "55555555-5555-4555-8555-555555555555"
 APPLE_USER = "44444444-4444-4444-8444-444444444444"
+FIRST_TIME_USER = "33333333-3333-4333-8333-333333333333"
+REJOINING_USER = "22222222-2222-4222-8222-222222222222"
 
 
 def apple_jws(payload):
@@ -46,6 +48,7 @@ def stripe_subscription(user_id, status="active", price="price_monthly", **extra
         "status": status,
         "metadata": {"user_id": user_id},
         "items": {"data": [{"price": {"id": price}}]},
+        "start_date": 90,
         "current_period_start": 100,
         "current_period_end": 2_000_000_000,
         "cancel_at_period_end": False,
@@ -110,21 +113,28 @@ class SubscriptionTests(unittest.TestCase):
         response = self.client.get("/api/me/subscription", headers=self.headers(FREE_USER))
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {
-            "tier": "free", "plan": None, "status": None,
+            "tier": "free", "plan": None, "status": None, "started_at": None,
             "current_period_end": None, "cancel_at_period_end": False,
-            "platform": None,
+            "platform": None, "trial_eligible": True,
         })
 
     def test_subscription_endpoint_returns_active_entitlement(self):
-        db.upsert_subscription(ACTIVE_USER, "active", "yearly", "apple", 100, 200, True,
+        # Cancelling, but the paid period hasn't ended yet - still premium.
+        db.upsert_subscription(ACTIVE_USER, "active", "yearly", "apple", 100, 2_000_000_000, True,
                                apple_original_transaction_id="original_123")
         response = self.client.get("/api/me/subscription", headers=self.headers(ACTIVE_USER))
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {
-            "tier": "premium", "plan": "yearly", "status": "active",
-            "current_period_end": 200, "cancel_at_period_end": True,
-            "platform": "apple",
+            "tier": "premium", "plan": "yearly", "status": "active", "started_at": None,
+            "current_period_end": 2_000_000_000, "cancel_at_period_end": True,
+            "platform": "apple", "trial_eligible": False,
         })
+
+    def test_scheduled_cancellation_is_free_once_its_period_has_ended(self):
+        # No webhook has marked it expired yet, but the paid period is over.
+        db.upsert_subscription(ACTIVE_USER, "active", "monthly", "stripe", 100, 200, True,
+                               stripe_subscription_id="sub_ended")
+        self.assertEqual(auth.get_entitlement(ACTIVE_USER)["tier"], "free")
 
     def test_guests_are_free_and_premium_dependency_has_machine_code(self):
         db.upsert_subscription(GUEST, "active", "monthly", "stripe", 100, 200, False)
@@ -138,7 +148,7 @@ class SubscriptionTests(unittest.TestCase):
         db.upsert_subscription(USER, "trialing", "monthly", "stripe", 100, 200, False)
         self.assertEqual(auth.require_premium(authorization=self.headers()["Authorization"]), USER)
 
-    def test_stripe_checkout_creates_selected_plan_session(self):
+    def checkout(self, user_id):
         stripe, settings = self.stripe()
         stripe.checkout.Session.create.return_value = {"url": "https://checkout.stripe.test/session"}
         with settings, patch.object(stripe_billing, "stripe", stripe):
@@ -146,18 +156,32 @@ class SubscriptionTests(unittest.TestCase):
                 "success_url": "https://site.test/success",
                 "cancel_url": "https://site.test/cancel",
                 "plan": "yearly",
-            }, headers=self.headers(STRIPE_USER))
+            }, headers=self.headers(user_id))
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json(), {"checkout_url": "https://checkout.stripe.test/session"})
-        stripe.checkout.Session.create.assert_called_once_with(
+        return stripe.checkout.Session.create
+
+    def test_stripe_checkout_gives_a_first_time_subscriber_the_trial(self):
+        self.checkout(FIRST_TIME_USER).assert_called_once_with(
             mode="subscription",
             line_items=[{"price": "price_yearly", "quantity": 1}],
             success_url="https://site.test/success",
             cancel_url="https://site.test/cancel",
-            client_reference_id=STRIPE_USER,
-            metadata={"user_id": STRIPE_USER},
-            subscription_data={"metadata": {"user_id": STRIPE_USER}},
+            client_reference_id=FIRST_TIME_USER,
+            metadata={"user_id": FIRST_TIME_USER},
+            subscription_data={"metadata": {"user_id": FIRST_TIME_USER}, "trial_period_days": 7},
         )
+
+    def test_stripe_checkout_bills_a_rejoining_subscriber_without_a_trial(self):
+        # Any earlier subscription - here one that already expired - uses up
+        # the trial, and the endpoint tells the paywall so it can say so.
+        db.upsert_subscription(REJOINING_USER, "expired", "monthly", "stripe", 100, 200, False,
+                               stripe_subscription_id="sub_old")
+        response = self.client.get("/api/me/subscription", headers=self.headers(REJOINING_USER))
+        self.assertEqual(response.json()["tier"], "free")
+        self.assertFalse(response.json()["trial_eligible"])
+        create = self.checkout(REJOINING_USER)
+        self.assertEqual(create.call_args.kwargs["subscription_data"], {"metadata": {"user_id": REJOINING_USER}})
 
     def test_stripe_checkout_failure_reaches_the_visitor_as_a_plain_message(self):
         # Reproduces a misconfigured price id (STRIPE_PRICE_MONTHLY/YEARLY set
@@ -195,7 +219,7 @@ class SubscriptionTests(unittest.TestCase):
                 json={"session_id": "cs_test_123"}, headers=self.headers(STRIPE_USER))
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json(), {
-            "tier": "premium", "plan": "yearly", "status": "active",
+            "tier": "premium", "plan": "yearly", "status": "active", "started_at": 90,
             "current_period_end": 2_000_000_000, "cancel_at_period_end": False,
             "platform": "stripe",
         })
@@ -288,6 +312,30 @@ class SubscriptionTests(unittest.TestCase):
                     self.assertEqual(record["plan"], plan)
                     self.assertEqual(record["platform"], "stripe")
                     self.assertEqual(record["stripe_subscription_id"], "sub_123")
+
+    def test_stripe_webhook_reads_billing_period_from_item_on_newer_api_versions(self):
+        # API 2025-03-31+ (the webhook endpoint's version) drops the period
+        # from the subscription and carries it on each item instead. A renewal
+        # arrives as customer.subscription.updated with the next period.
+        stripe, settings = self.stripe()
+        with settings, patch.object(stripe_billing, "stripe", stripe):
+            for start, end in ((100, 2_000_000_000), (2_000_000_000, 2_002_592_000)):
+                with self.subTest(end=end):
+                    subscription = stripe_subscription(STRIPE_USER, items={"data": [{
+                        "price": {"id": "price_monthly"},
+                        "current_period_start": start, "current_period_end": end,
+                    }]})
+                    del subscription["current_period_start"], subscription["current_period_end"]
+                    stripe.Webhook.construct_event.return_value = {
+                        "type": "customer.subscription.updated", "data": {"object": subscription},
+                    }
+                    response = self.client.post("/api/webhooks/stripe", content=b"{}", headers={
+                        "stripe-signature": "test-signature",
+                    })
+                    self.assertEqual(response.status_code, 200, response.text)
+                    record = db.get_subscription(STRIPE_USER)
+                    self.assertEqual(record["current_period_start"], start)
+                    self.assertEqual(record["current_period_end"], end)
 
     def test_stripe_webhook_maps_payment_failure_from_retrieved_subscription(self):
         stripe, settings = self.stripe()

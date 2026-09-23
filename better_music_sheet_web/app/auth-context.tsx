@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { clientApiFetch } from "@/lib/client-api";
 import { getAccessToken, readSession, signOut } from "@/lib/auth";
+import { refreshSubscription } from "@/lib/subscription";
 import { SignInModal } from "./sign-in-modal";
 import type { User } from "@/lib/api";
 
@@ -52,7 +53,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       try {
         const res = await clientApiFetch("/api/me");
-        if (res.ok) setUser(await res.json());
+        if (res.ok) {
+          const fetched = (await res.json()) as User;
+          // A row the backend had to recreate (a local restart, or a table
+          // wiped between deploys) comes back with no name or email - the
+          // token only carries the id. Keep what this browser's own sign-in
+          // stored rather than dropping the header back to "Account".
+          const same = stored?.user.user_id === fetched.user_id;
+          setUser({
+            ...fetched,
+            display_name: fetched.display_name ?? (same ? stored.user.display_name : null),
+            email: fetched.email ?? (same ? stored.user.email : null),
+          });
+        }
         else if (res.status === 401) setUser(null);
         // Any other status is a server-side blip, not proof of a bad session -
         // keep whatever the stored session said rather than signing them out.
@@ -69,6 +82,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // the first read has to wait for mount rather than happening in render.
     refresh();
   }, [refresh]);
+
+  // The subscription is cached per page load, not per account. Signing in
+  // through the modal doesn't reload the page, so without this a visitor who
+  // opened a page signed out keeps the "free" answer after signing in.
+  // undefined = session not settled yet; the first settled account is the
+  // one the initial fetch already asked about.
+  const userId = loading ? undefined : (user?.user_id ?? null);
+  const lastUserId = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (userId === undefined) return;
+    if (lastUserId.current !== undefined && lastUserId.current !== userId) {
+      void refreshSubscription();
+    }
+    lastUserId.current = userId;
+  }, [userId]);
 
   // A ref, not state: it's read once from an event handler (handleSignedIn),
   // never rendered, so it doesn't need to trigger a re-render on its own.

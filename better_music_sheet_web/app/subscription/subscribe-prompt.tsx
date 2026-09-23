@@ -2,11 +2,15 @@
 
 import Link from "next/link";
 import { useEffect } from "react";
+import { useSubscription } from "@/lib/subscription";
 
 /** Shown when a non-subscriber's free preview runs out - on the play page,
  * not a full-page redirect, so the sheet and keyboard stay right where they
  * were closed on top of. */
 export function SubscribePrompt({ onClose }: { onClose: () => void }) {
+  const { subscription } = useSubscription();
+  const trial = subscription?.trial_eligible !== false;
+
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
@@ -38,10 +42,10 @@ export function SubscribePrompt({ onClose }: { onClose: () => void }) {
         </button>
         <h2 className="serif modal-title">Keep practicing</h2>
         <p className="modal-sub">
-          That&apos;s the free preview. Subscribe for full practice mode on every piece, with a 7-day free trial.
+          That&apos;s the free preview. Subscribe for full practice mode on every piece{trial ? ", with a 7-day free trial" : ""}.
         </p>
         <Link className="btn-pill" href="/subscription/upgrade" onClick={onClose} style={{ display: "block", textAlign: "center" }}>
-          Start 7-day free trial
+          {trial ? "Start 7-day free trial" : "Subscribe"}
         </Link>
       </div>
     </div>

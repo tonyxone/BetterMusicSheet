@@ -14,12 +14,15 @@ from stripe.error import StripeError
 from fastapi import HTTPException
 
 import db
+from auth import is_trial_eligible
 from config import (
     STRIPE_PRICE_MONTHLY,
     STRIPE_PRICE_YEARLY,
     STRIPE_SECRET_KEY,
     STRIPE_WEBHOOK_SECRET,
 )
+
+TRIAL_DAYS = 7
 
 
 def _value(item, key, default=None):
@@ -55,6 +58,14 @@ def create_checkout(user_id, plan, success_url, cancel_url):
     prices = _prices()
     if plan not in prices:
         raise HTTPException(422, "plan must be monthly or yearly")
+    # Session metadata does not automatically appear on the subscription.
+    # The webhook sees the subscription, so store the owner there too.
+    subscription_data = {"metadata": {"user_id": user_id}}
+    # Neither Price has a trial of its own, so the trial is asked for here -
+    # and only for a first-time subscriber (see auth.is_trial_eligible). The
+    # card is still collected up front and first charged when the trial ends.
+    if is_trial_eligible(user_id):
+        subscription_data["trial_period_days"] = TRIAL_DAYS
     try:
         session = stripe.checkout.Session.create(
             mode="subscription",
@@ -63,9 +74,7 @@ def create_checkout(user_id, plan, success_url, cancel_url):
             cancel_url=cancel_url,
             client_reference_id=user_id,
             metadata={"user_id": user_id},
-            # Session metadata does not automatically appear on the subscription.
-            # The webhook sees the subscription, so store the owner there too.
-            subscription_data={"metadata": {"user_id": user_id}},
+            subscription_data=subscription_data,
         )
     except StripeError as exc:
         # A bad price id (e.g. STRIPE_PRICE_MONTHLY/YEARLY misconfigured -
@@ -90,12 +99,26 @@ def _plan(subscription):
     raise HTTPException(400, "Stripe subscription uses an unknown price.")
 
 
+def _period(subscription, key):
+    """current_period_start/end, wherever this payload's API version put it.
+
+    Stripe moved the billing period off the subscription and onto each
+    subscription item in API 2025-03-31. The webhook endpoint is pinned to a
+    newer version than this library, so webhook payloads carry it only on the
+    item while API calls made here still carry it on the subscription."""
+    value = _value(subscription, key)
+    if value is None:
+        items = _value(_value(subscription, "items", {}), "data", [])
+        value = _value(items[0], key) if items else None
+    return value
+
+
 def _sync_subscription(subscription, deleted=False):
     metadata = _value(subscription, "metadata", {})
     user_id = _value(metadata, "user_id")
     if not user_id:
         raise HTTPException(400, "Stripe subscription is missing metadata.user_id.")
-    period_end = _value(subscription, "current_period_end")
+    period_end = _period(subscription, "current_period_end")
     status = "expired" if deleted else _value(subscription, "status")
     if status not in ("trialing", "active", "past_due", "canceled", "expired"):
         raise HTTPException(400, f"Unhandled Stripe subscription status: {status}")
@@ -108,10 +131,14 @@ def _sync_subscription(subscription, deleted=False):
         status,
         _plan(subscription),
         "stripe",
-        _value(subscription, "current_period_start"),
+        _period(subscription, "current_period_start"),
         period_end,
         bool(_value(subscription, "cancel_at_period_end", False)),
         stripe_subscription_id=_value(subscription, "id"),
+        # When this subscription began (trial included) - unlike the period
+        # start, it doesn't move on each renewal. Per subscription, so a
+        # rejoining account shows its new start, not its first-ever one.
+        started_at=_value(subscription, "start_date"),
     )
     return db.get_subscription(user_id)
 

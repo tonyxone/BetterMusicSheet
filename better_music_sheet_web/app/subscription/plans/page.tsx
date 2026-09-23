@@ -4,7 +4,7 @@ import Link from "next/link";
 export const metadata: Metadata = {
   title: "Go Premium | BetterMusicSheet.com",
   description:
-    "Compare the monthly and yearly BetterMusicSheet Premium plans, each with a 7-day free trial.",
+    "Compare the monthly and yearly BetterMusicSheet Premium plans, with a 7-day free trial for new subscribers.",
 };
 
 export default function PlansPage() {
@@ -19,7 +19,7 @@ export default function PlansPage() {
         <article className="subscription-card">
           <h2>Monthly</h2>
           <p className="subscription-price">$1.99 <small>/ month</small></p>
-          <p>Billed monthly. Includes a 7-day free trial.</p>
+          <p>Billed monthly. 7-day free trial for new subscribers.</p>
           <Link className="btn-pill mt-4 w-full text-center" href="/subscription/upgrade?plan=monthly">Get Started</Link>
         </article>
         <article className="subscription-card">
@@ -27,7 +27,7 @@ export default function PlansPage() {
             Yearly <span style={{ color: "var(--success)", fontSize: 11, fontWeight: 700, marginLeft: 4 }}>Save 20%</span>
           </h2>
           <p className="subscription-price">$19.99 <small>/ year</small></p>
-          <p>About $1.67/month, billed yearly. Includes a 7-day free trial.</p>
+          <p>About $1.67/month, billed yearly. 7-day free trial for new subscribers.</p>
           <Link className="btn-pill mt-4 w-full text-center" href="/subscription/upgrade?plan=yearly">Get Started</Link>
         </article>
       </div>

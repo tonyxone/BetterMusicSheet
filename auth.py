@@ -79,8 +79,8 @@ def get_entitlement(user_id, is_guest=False):
     """
     free = {
         "tier": "free", "plan": None, "status": None,
-        "current_period_end": None, "cancel_at_period_end": False,
-        "platform": None,
+        "started_at": None, "current_period_end": None,
+        "cancel_at_period_end": False, "platform": None,
     }
     if is_guest:
         return free
@@ -89,14 +89,35 @@ def get_entitlement(user_id, is_guest=False):
     subscription = get_subscription(user_id)
     if subscription is None or subscription["status"] not in ("active", "trialing"):
         return free
+    # Do not depend on a provider webhook arriving at the exact cancellation
+    # instant. A scheduled cancellation remains premium through its precise
+    # period-end second, then becomes free on the next entitlement check.
+    if (subscription["cancel_at_period_end"]
+            and subscription["current_period_end"] is not None
+            and subscription["current_period_end"] <= int(time.time())):
+        return free
     return {
         "tier": "premium",
         "plan": subscription["plan"],
         "status": subscription["status"],
+        # Absent on records written before it was stored, until the next sync.
+        "started_at": subscription.get("started_at"),
         "current_period_end": subscription["current_period_end"],
         "cancel_at_period_end": subscription["cancel_at_period_end"],
         "platform": subscription["platform"],
     }
+
+def is_trial_eligible(user_id):
+    """Whether this account's next subscription gets the free trial.
+
+    Only a first-time subscriber does. Any subscription record at all - active,
+    cancelled or expired, bought through Stripe or Apple - means the account
+    has subscribed before (or is subscribed now), so rejoining is billed from
+    day one. An abandoned checkout never writes a record, so it doesn't count.
+    """
+    from db import get_subscription
+    return get_subscription(user_id) is None
+
 
 _jwks_cache = None  # fetched lazily, cached for the process lifetime
 

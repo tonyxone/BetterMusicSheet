@@ -8,7 +8,10 @@ and signed-in users alike (a guest's own history still reads and plays back;
 uploading a new one is the one thing that now requires signing in - see
 server.py), keyed by whichever id identified the request.
 
-Production only: DynamoDB's Decimal numbers are converted to int/float so
+Subscriptions are the exception: they use DynamoDB whenever
+SUBSCRIPTIONS_TABLE is set, local dev included (see the block at the end).
+
+Wherever DynamoDB is used, its Decimal numbers are converted to int/float so
 callers (server.py) never touch boto3 types directly.
 """
 import threading
@@ -32,6 +35,17 @@ def _validate_subscription(status, plan, platform):
         raise ValueError(f"invalid subscription platform: {platform}")
 
 
+def _clean(value):
+    """Recursively convert DynamoDB's Decimal numbers to int/float for JSON."""
+    if isinstance(value, Decimal):
+        return int(value) if value % 1 == 0 else float(value)
+    if isinstance(value, dict):
+        return {k: _clean(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_clean(v) for v in value]
+    return value
+
+
 if IS_PRODUCTION:
     import os
 
@@ -41,19 +55,8 @@ if IS_PRODUCTION:
     _dynamodb = boto3.resource("dynamodb", region_name=os.environ.get("AWS_REGION", "us-west-1"))
 
     _users_table = _dynamodb.Table(os.environ["USERS_TABLE"])
-    _subscriptions_table = _dynamodb.Table(SUBSCRIPTIONS_TABLE)
     _music_sheet_table = _dynamodb.Table(os.environ["MUSIC_SHEET_TABLE"])
     _annotation_job_table = _dynamodb.Table(os.environ["ANNOTATION_JOB_TABLE"])
-
-    def _clean(value):
-        """Recursively convert DynamoDB's Decimal numbers to int/float for JSON."""
-        if isinstance(value, Decimal):
-            return int(value) if value % 1 == 0 else float(value)
-        if isinstance(value, dict):
-            return {k: _clean(v) for k, v in value.items()}
-        if isinstance(value, list):
-            return [_clean(v) for v in value]
-        return value
 
     # ---- users (signed-in accounts only) ----
 
@@ -118,46 +121,6 @@ if IS_PRODUCTION:
             Key={"user_id": user_id},
             UpdateExpression="SET hide_demo = :h",
             ExpressionAttributeValues={":h": hidden},
-        )
-
-    # ---- subscriptions ----
-
-    def get_subscription(user_id):
-        item = _subscriptions_table.get_item(Key={"user_id": user_id}).get("Item")
-        return _clean(item) if item else None
-
-    def get_subscription_by_apple_original_transaction_id(original_transaction_id):
-        response = _subscriptions_table.scan(
-            FilterExpression="apple_original_transaction_id = :transaction_id",
-            ExpressionAttributeValues={":transaction_id": original_transaction_id},
-        )
-        items = response.get("Items", [])
-        return _clean(items[0]) if items else None
-
-    def upsert_subscription(user_id, status, plan, platform, current_period_start,
-                            current_period_end, cancel_at_period_end,
-                            stripe_subscription_id=None, apple_original_transaction_id=None):
-        _validate_subscription(status, plan, platform)
-        fields = {
-            "status": status,
-            "plan": plan,
-            "platform": platform,
-            "current_period_start": current_period_start,
-            "current_period_end": current_period_end,
-            "cancel_at_period_end": cancel_at_period_end,
-            "updated_at": int(time.time()),
-        }
-        for key, value in (("stripe_subscription_id", stripe_subscription_id),
-                           ("apple_original_transaction_id", apple_original_transaction_id)):
-            if value is not None:
-                fields[key] = value
-        names = {f"#{key}": key for key in fields}
-        values = {f":{key}": value for key, value in fields.items()}
-        _subscriptions_table.update_item(
-            Key={"user_id": user_id},
-            UpdateExpression="SET " + ", ".join(f"#{key} = :{key}" for key in fields),
-            ExpressionAttributeNames=names,
-            ExpressionAttributeValues=values,
         )
 
     # ---- music_sheet ----
@@ -314,7 +277,8 @@ else:
 
     def upsert_subscription(user_id, status, plan, platform, current_period_start,
                             current_period_end, cancel_at_period_end,
-                            stripe_subscription_id=None, apple_original_transaction_id=None):
+                            stripe_subscription_id=None, apple_original_transaction_id=None,
+                            started_at=None):
         _validate_subscription(status, plan, platform)
         with _lock:
             row = _subscriptions.setdefault(user_id, {"user_id": user_id})
@@ -331,6 +295,8 @@ else:
                 row["stripe_subscription_id"] = stripe_subscription_id
             if apple_original_transaction_id is not None:
                 row["apple_original_transaction_id"] = apple_original_transaction_id
+            if started_at is not None:
+                row["started_at"] = started_at
 
     # ---- music_sheet ----
 
@@ -394,3 +360,62 @@ else:
     def delete_annotation_job(job_id):
         with _lock:
             _annotation_jobs.pop(job_id, None)
+
+
+# ---- subscriptions: DynamoDB whenever a table is named ----
+#
+# Production always names one (config.py requires it). Local dev may too, by
+# setting SUBSCRIPTIONS_TABLE in .env: a subscription is bought on the real
+# Stripe checkout and recorded by the deployed webhook, so the in-memory store
+# above - empty after every restart - can never see it. These replace the
+# in-memory subscription functions; users, sheets and jobs stay local.
+# Note that cancelling or switching plans from a local backend then changes
+# the real record.
+if SUBSCRIPTIONS_TABLE:
+    import os
+
+    import boto3
+
+    _subscriptions_table = boto3.resource(
+        "dynamodb", region_name=os.environ.get("AWS_REGION", "us-west-1"),
+    ).Table(SUBSCRIPTIONS_TABLE)
+
+    def get_subscription(user_id):
+        item = _subscriptions_table.get_item(Key={"user_id": user_id}).get("Item")
+        return _clean(item) if item else None
+
+    def get_subscription_by_apple_original_transaction_id(original_transaction_id):
+        response = _subscriptions_table.scan(
+            FilterExpression="apple_original_transaction_id = :transaction_id",
+            ExpressionAttributeValues={":transaction_id": original_transaction_id},
+        )
+        items = response.get("Items", [])
+        return _clean(items[0]) if items else None
+
+    def upsert_subscription(user_id, status, plan, platform, current_period_start,
+                            current_period_end, cancel_at_period_end,
+                            stripe_subscription_id=None, apple_original_transaction_id=None,
+                            started_at=None):
+        _validate_subscription(status, plan, platform)
+        fields = {
+            "status": status,
+            "plan": plan,
+            "platform": platform,
+            "current_period_start": current_period_start,
+            "current_period_end": current_period_end,
+            "cancel_at_period_end": cancel_at_period_end,
+            "updated_at": int(time.time()),
+        }
+        for key, value in (("stripe_subscription_id", stripe_subscription_id),
+                           ("apple_original_transaction_id", apple_original_transaction_id),
+                           ("started_at", started_at)):
+            if value is not None:
+                fields[key] = value
+        names = {f"#{key}": key for key in fields}
+        values = {f":{key}": value for key, value in fields.items()}
+        _subscriptions_table.update_item(
+            Key={"user_id": user_id},
+            UpdateExpression="SET " + ", ".join(f"#{key} = :{key}" for key in fields),
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=values,
+        )
