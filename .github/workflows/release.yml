@@ -303,14 +303,22 @@ jobs:
             aws lambda wait function-updated --function-name "$FUNCTION"
           done
 
+      # Start from the family's LATEST revision, not the one the service is
+      # running. apply-infra (above) registers a revision carrying Terraform's
+      # current env/cpu/memory, but the service ignores task_definition in
+      # Terraform, so the running revision is always the previous release's.
+      # Copying that one silently dropped every env var Terraform added -
+      # SUBSCRIPTIONS_TABLE never reached the worker, which then crashed on
+      # import in production. The image is replaced below either way.
       - name: Fetch the worker task definition
         env:
           CLUSTER: ${{ vars.ECS_CLUSTER }}
           SERVICE: ${{ vars.WORKER_ECS_SERVICE }}
         run: |
-          TASK=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query 'services[0].taskDefinition' --output text)
+          RUNNING=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query 'services[0].taskDefinition' --output text)
+          FAMILY=$(aws ecs describe-task-definition --task-definition "$RUNNING" --query 'taskDefinition.family' --output text)
           aws ecs describe-task-definition \
-            --task-definition "$TASK" \
+            --task-definition "$FAMILY" \
             --query taskDefinition \
             | jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' \
             > task-definition.json
