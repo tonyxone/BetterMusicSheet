@@ -32,6 +32,7 @@ from auth import (
     get_current_user_id,
     get_entitlement,
     get_signed_in_user_id,
+    is_trial_eligible,
     mint_backend_token,
     verify_cognito_id_token,
 )
@@ -228,10 +229,12 @@ def me(user_id: str = Depends(get_signed_in_user_id)):
 
 @app.get("/api/me/subscription")
 def subscription(user_id: str = Depends(get_signed_in_user_id)):
-    """The signed-in account's current subscription state."""
+    """The signed-in account's current subscription state, plus whether a
+    new subscription would start with the free trial - the paywall words its
+    button and terms from that."""
     if user_id is None:
         raise HTTPException(401, "not signed in")
-    return get_entitlement(user_id)
+    return {**get_entitlement(user_id), "trial_eligible": is_trial_eligible(user_id)}
 
 
 class DemoHiddenRequest(BaseModel):

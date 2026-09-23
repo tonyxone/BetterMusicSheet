@@ -11,6 +11,7 @@ real AWS-backed implementations, which still hard-require their usual env
 vars (JOB_FILES_BUCKET, USERS_TABLE, COGNITO_USER_POOL_ID, ...).
 """
 import os
+import sys
 from pathlib import Path
 
 
@@ -28,16 +29,28 @@ def _load_dotenv():
     """
     env_file = Path(__file__).parent / ".env"
     if not env_file.exists():
-        return
+        return set()
+    loaded = set()
     for raw in env_file.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+        key = key.strip()
+        if key not in os.environ:
+            os.environ[key] = value.strip().strip('"').strip("'")
+            loaded.add(key)
+    return loaded
 
 
-_load_dotenv()
+_loaded_from_dotenv = _load_dotenv()
+
+# A .env SUBSCRIPTIONS_TABLE points the local backend at the real table (see
+# db.py). The test suite reads the same .env and writes subscriptions freely,
+# so under a test runner that value is dropped and tests stay in memory. A test
+# that sets the variable itself (test_serverless.py) is unaffected.
+if "SUBSCRIPTIONS_TABLE" in _loaded_from_dotenv and ("unittest" in sys.modules or "pytest" in sys.modules):
+    del os.environ["SUBSCRIPTIONS_TABLE"]
 
 APP_ENV = os.environ.get("APP_ENV", "local")
 IS_PRODUCTION = APP_ENV == "production"

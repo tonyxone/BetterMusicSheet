@@ -10,6 +10,7 @@ import { SignInIcon } from "./sign-in-icon";
 import { useAuth } from "./auth-context";
 import { isAuthConfigured } from "@/lib/auth";
 import { clientApiFetch } from "@/lib/client-api";
+import { useSubscription } from "@/lib/subscription";
 
 export function Header() {
   const { user, loading, openSignIn, signOut } = useAuth();
@@ -71,6 +72,9 @@ export function Header() {
 }
 
 function UserMenu({ name, email, onSignOut }: { name: string; email: string | null; onSignOut: () => void }) {
+  // Only a subscriber has anything to manage; everyone else goes to the plans.
+  const { subscription } = useSubscription();
+  const subscribed = subscription?.tier === "premium";
   const [open, setOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -140,7 +144,7 @@ function UserMenu({ name, email, onSignOut }: { name: string; email: string | nu
       {open && (
         <div className="nav-menu" role="menu">
           <Link
-            href="/subscription"
+            href={subscribed ? "/subscription" : "/subscription/upgrade"}
             className="nav-menu-item"
             role="menuitem"
             title="Manage your subscription"

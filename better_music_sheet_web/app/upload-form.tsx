@@ -85,7 +85,7 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
   const ready = !!file && !submitting;
 
   return (
-    <div className="wrap">
+    <div className={heading ? "wrap" : "wrap embedded"}>
       {heading && (
         <>
           <h1 className="upload-h1">Upload your sheet music</h1>

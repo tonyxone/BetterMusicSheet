@@ -130,6 +130,7 @@ def _sync_transaction(user_id, transaction, renewal=None, force_expired=False):
     db.upsert_subscription(
         user_id, status, _plan(transaction), "apple", period_start, period_end,
         str(auto_renew) == "0", apple_original_transaction_id=original_transaction_id,
+        started_at=_timestamp(transaction.get("originalPurchaseDate")),
     )
     return db.get_subscription(user_id)
 
