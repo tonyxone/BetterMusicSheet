@@ -143,8 +143,9 @@ resource "aws_ecs_service" "worker" {
     assign_public_ip = true
   }
   # desired_count belongs to the scale-to-zero controller, and task_definition
-  # belongs to the release pipeline - it registers a new revision from whatever
-  # the service is running and points the service at it (see release.yml). The
+  # belongs to the release pipeline - it registers a new revision from the
+  # family's latest one (Terraform's, since apply-infra runs first) with the
+  # new image, and points the service at it (see release.yml). The
   # Lambdas above ignore image_uri for exactly this reason; without the same
   # here, a terraform apply rolls the worker back to whichever revision this
   # state last recorded. It really does: this was caught rolling a deployed
@@ -152,8 +153,8 @@ resource "aws_ecs_service" "worker" {
   #
   # The cost of ignoring it: a task-definition change made HERE (cpu, memory,
   # an env var) creates a new revision that the service will not pick up until
-  # the next release carries it forward. Deploy a release after such a change,
-  # or point the service at the new revision by hand.
+  # the next release builds on it. Deploy a release after such a change, or
+  # point the service at the new revision by hand.
   lifecycle { ignore_changes = [desired_count, task_definition] }
   depends_on = [aws_iam_role_policy.worker, aws_iam_role_policy.execution]
 }
