@@ -110,11 +110,11 @@ class ServerlessTests(unittest.TestCase):
 
     def test_subscription_store_round_trips_through_dynamodb(self):
         db.upsert_subscription(USER, "trialing", "monthly", "apple", 100, 200, True,
-                               apple_original_transaction_id="original_123")
+                               subscription_id="original_123")
         subscription = db.get_subscription(USER)
         self.assertEqual(subscription["status"], "trialing")
         self.assertEqual(subscription["plan"], "monthly")
-        self.assertEqual(subscription["apple_original_transaction_id"], "original_123")
+        self.assertEqual(subscription["subscription_id"], "original_123")
 
     def test_replaced_worker_cannot_publish_or_renew_lease(self):
         self.upload()

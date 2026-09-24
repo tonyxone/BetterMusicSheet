@@ -1,6 +1,6 @@
 "use client";
 
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useAuth } from "../auth-context";
 import { clientApiFetch } from "@/lib/client-api";
@@ -93,6 +93,13 @@ export function Paywall() {
   // visitor is shown the trial, and the server re-checks at checkout.
   const { subscription, loading: subscriptionLoading } = useSubscription();
   const trial = subscription?.trial_eligible !== false;
+  // Already subscribed - on the web or in the iOS app - so there's nothing to
+  // buy; a second subscription would only bill them twice.
+  const router = useRouter();
+  const subscribed = subscription?.tier === "premium";
+  useEffect(() => {
+    if (subscribed) router.replace("/subscription");
+  }, [subscribed, router]);
   const searchParams = useSearchParams();
   // Nothing is pre-selected: the visitor picks a billing period themselves.
   // A link that names one (?plan=yearly) still arrives with it chosen.

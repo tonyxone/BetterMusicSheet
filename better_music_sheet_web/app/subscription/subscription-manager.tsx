@@ -6,6 +6,8 @@ import { useAuth } from "../auth-context";
 import { clientApiFetch } from "@/lib/client-api";
 import { refreshSubscription, useSubscription } from "@/lib/subscription";
 
+type CancelDetail = string | { code: "manage_with_apple"; message: string; url: string };
+
 function dateTime(value: number | null) {
   return value ? new Date(value * 1000).toLocaleString(undefined, { year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—";
 }
@@ -23,14 +25,30 @@ export function SubscriptionManager() {
   const [confirming, setConfirming] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set when the backend answers that this subscription has to be cancelled
+  // with Apple: no server can cancel an App Store subscription.
+  const [manageWithApple, setManageWithApple] = useState<{ message: string; url: string } | null>(null);
 
   async function cancel() {
+    if (!subscription?.platform) return;
     setCancelling(true);
     setError(null);
     try {
-      const response = await clientApiFetch("/api/subscriptions/stripe/cancel", { method: "POST" });
-      const body = await response.json().catch(() => null) as { detail?: string } | null;
-      if (!response.ok) throw new Error(body?.detail || "Could not cancel the subscription.");
+      // The backend cancels through whichever store billed it; naming the
+      // platform lets it refuse if what this page shows is out of date.
+      const response = await clientApiFetch("/api/subscriptions/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ platform: subscription.platform }),
+      });
+      const body = await response.json().catch(() => null) as { detail?: CancelDetail } | null;
+      const detail = body?.detail;
+      if (typeof detail === "object" && detail?.code === "manage_with_apple") {
+        setManageWithApple({ message: detail.message, url: detail.url });
+        setConfirming(false);
+        return;
+      }
+      if (!response.ok) throw new Error(typeof detail === "string" ? detail : "Could not cancel the subscription.");
       await refreshSubscription();
       setConfirming(false);
     } catch (reason) {
@@ -60,23 +78,30 @@ export function SubscriptionManager() {
         </dl>
         {pending ? (
           <p className="subscription-notice">Cancellation is pending. Premium access continues until {dateTime(subscription.current_period_end)}, then ends. You won&apos;t be charged again, and no refund is issued for the current period.</p>
-        ) : subscription.platform === "stripe" ? (
-          confirming ? (
-            <div className="subscription-confirm">
-              <p>
-                {subscription.status === "trialing"
-                  ? <>Cancel your free trial? You keep Premium access until {dateTime(subscription.current_period_end)}, and you won&apos;t be charged.</>
-                  : <>Cancel your subscription? It stays active until the end of the period you&apos;ve paid for, {dateTime(subscription.current_period_end)}, and then ends. You won&apos;t be charged again, but no refund is issued for the time remaining.</>}
-              </p>
-              <button type="button" className="btn-pill danger" onClick={cancel} disabled={cancelling}>{cancelling ? "Cancelling…" : "Confirm cancellation"}</button>
-              <button type="button" className="btn-pill ghost" onClick={() => setConfirming(false)} disabled={cancelling}>Keep subscription</button>
-            </div>
-          ) : (
-            <div className="subscription-confirm">
-              <button type="button" className="btn-pill danger" onClick={() => setConfirming(true)}>Cancel Subscription</button>
-            </div>
-          )
-        ) : <p className="subscription-muted">Manage this subscription through Apple.</p>}
+        ) : manageWithApple ? (
+          <div className="subscription-notice">
+            <p>{manageWithApple.message}</p>
+            <a href={manageWithApple.url} target="_blank" rel="noreferrer">Open Apple subscriptions</a>
+          </div>
+        ) : confirming ? (
+          <div className="subscription-confirm">
+            <p>
+              {subscription.status === "trialing"
+                ? <>Cancel your free trial? You keep Premium access until {dateTime(subscription.current_period_end)}, and you won&apos;t be charged.</>
+                : <>Cancel your subscription? It stays active until the end of the period you&apos;ve paid for, {dateTime(subscription.current_period_end)}, and then ends. You won&apos;t be charged again, but no refund is issued for the time remaining.</>}
+            </p>
+            <button type="button" className="btn-pill danger" onClick={cancel} disabled={cancelling}>{cancelling ? "Cancelling…" : "Confirm cancellation"}</button>
+            <button type="button" className="btn-pill ghost" onClick={() => setConfirming(false)} disabled={cancelling}>Keep subscription</button>
+          </div>
+        ) : (
+          <div className="subscription-confirm">
+            {/* Apple subscriptions can only be cancelled with Apple, so
+                there's nothing to confirm here - go straight to where. */}
+            <button type="button" className="btn-pill danger" onClick={subscription.platform === "apple" ? cancel : () => setConfirming(true)} disabled={cancelling}>
+              Cancel Subscription
+            </button>
+          </div>
+        )}
         {error && <p className="subscription-error">{error}</p>}
       </section>
     </div>

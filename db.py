@@ -262,23 +262,27 @@ else:
             row["hide_demo"] = hidden
 
     # ---- subscriptions ----
+    #
+    # One record per account, whichever store billed it: `platform` is
+    # "stripe" or "apple", and `subscription_id` is that provider's own id for
+    # it - a Stripe subscription id, or Apple's original transaction id (which
+    # stays the same across renewals).
 
     def get_subscription(user_id):
         with _lock:
             item = _subscriptions.get(user_id)
             return dict(item) if item else None
 
-    def get_subscription_by_apple_original_transaction_id(original_transaction_id):
+    def get_subscription_by_platform_id(platform, subscription_id):
         with _lock:
             for item in _subscriptions.values():
-                if item.get("apple_original_transaction_id") == original_transaction_id:
+                if item.get("platform") == platform and item.get("subscription_id") == subscription_id:
                     return dict(item)
             return None
 
     def upsert_subscription(user_id, status, plan, platform, current_period_start,
                             current_period_end, cancel_at_period_end,
-                            stripe_subscription_id=None, apple_original_transaction_id=None,
-                            started_at=None):
+                            subscription_id=None, started_at=None):
         _validate_subscription(status, plan, platform)
         with _lock:
             row = _subscriptions.setdefault(user_id, {"user_id": user_id})
@@ -291,10 +295,8 @@ else:
                 "cancel_at_period_end": cancel_at_period_end,
                 "updated_at": int(time.time()),
             })
-            if stripe_subscription_id is not None:
-                row["stripe_subscription_id"] = stripe_subscription_id
-            if apple_original_transaction_id is not None:
-                row["apple_original_transaction_id"] = apple_original_transaction_id
+            if subscription_id is not None:
+                row["subscription_id"] = subscription_id
             if started_at is not None:
                 row["started_at"] = started_at
 
@@ -384,18 +386,18 @@ if SUBSCRIPTIONS_TABLE:
         item = _subscriptions_table.get_item(Key={"user_id": user_id}).get("Item")
         return _clean(item) if item else None
 
-    def get_subscription_by_apple_original_transaction_id(original_transaction_id):
+    def get_subscription_by_platform_id(platform, subscription_id):
         response = _subscriptions_table.scan(
-            FilterExpression="apple_original_transaction_id = :transaction_id",
-            ExpressionAttributeValues={":transaction_id": original_transaction_id},
+            FilterExpression="#platform = :platform AND subscription_id = :subscription_id",
+            ExpressionAttributeNames={"#platform": "platform"},
+            ExpressionAttributeValues={":platform": platform, ":subscription_id": subscription_id},
         )
         items = response.get("Items", [])
         return _clean(items[0]) if items else None
 
     def upsert_subscription(user_id, status, plan, platform, current_period_start,
                             current_period_end, cancel_at_period_end,
-                            stripe_subscription_id=None, apple_original_transaction_id=None,
-                            started_at=None):
+                            subscription_id=None, started_at=None):
         _validate_subscription(status, plan, platform)
         fields = {
             "status": status,
@@ -406,9 +408,7 @@ if SUBSCRIPTIONS_TABLE:
             "cancel_at_period_end": cancel_at_period_end,
             "updated_at": int(time.time()),
         }
-        for key, value in (("stripe_subscription_id", stripe_subscription_id),
-                           ("apple_original_transaction_id", apple_original_transaction_id),
-                           ("started_at", started_at)):
+        for key, value in (("subscription_id", subscription_id), ("started_at", started_at)):
             if value is not None:
                 fields[key] = value
         names = {f"#{key}": key for key in fields}

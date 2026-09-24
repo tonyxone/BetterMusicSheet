@@ -32,6 +32,7 @@ from auth import (
     get_current_user_id,
     get_entitlement,
     get_signed_in_user_id,
+    has_active_subscription,
     is_trial_eligible,
     mint_backend_token,
     verify_cognito_id_token,
@@ -149,6 +150,10 @@ class StripeCheckoutRequest(BaseModel):
 
 class StripeConfirmRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=255)
+
+
+class CancelSubscriptionRequest(BaseModel):
+    platform: Literal["stripe", "apple"]
 
 
 class StripePlanRequest(BaseModel):
@@ -293,11 +298,27 @@ async def stripe_webhook(request: Request):
     )
 
 
-@app.post("/api/subscriptions/stripe/cancel")
-def cancel_stripe_subscription(user_id: str = Depends(get_signed_in_user_id)):
+@app.post("/api/subscriptions/cancel")
+def cancel_subscription(body: CancelSubscriptionRequest, user_id: str = Depends(get_signed_in_user_id)):
+    """Cancel at period end, through whichever store billed the subscription.
+
+    The caller names the platform it thinks it's cancelling (from
+    /api/me/subscription); a mismatch means its view is stale, and is
+    refused rather than cancelling something the user didn't see. Stripe is
+    cancelled here. Apple can't be cancelled by a server, so that answers
+    409 with where the subscriber can (see apple_billing.cancel_subscription).
+    """
     if user_id is None:
         raise HTTPException(401, "not signed in")
-    return stripe_billing.cancel_subscription(user_id)
+    subscription = db.get_subscription(user_id)
+    if subscription is None or not has_active_subscription(user_id):
+        raise HTTPException(404, "No active subscription found.")
+    if subscription["platform"] != body.platform:
+        raise HTTPException(409, "This subscription is billed through a different store. Reload and try again.")
+    if body.platform == "apple":
+        apple_billing.cancel_subscription()
+    stripe_billing.cancel_subscription(user_id)
+    return get_entitlement(user_id)
 
 
 @app.post("/api/subscriptions/stripe/plan")
