@@ -13,6 +13,7 @@ from fastapi import HTTPException
 from jose import jwt
 
 import db
+from auth import can_record_subscription
 from config import (
     APPLE_APP_ID,
     APPLE_BUNDLE_ID,
@@ -23,6 +24,12 @@ from config import (
     APPLE_PRODUCT_MONTHLY,
     APPLE_PRODUCT_YEARLY,
 )
+
+
+# Apple offers no API for a server to cancel someone's subscription - only
+# the subscriber can, from their Apple ID settings (the iOS app opens the same
+# screen with StoreKit's manageSubscriptionsSheet).
+MANAGE_SUBSCRIPTIONS_URL = "https://apps.apple.com/account/subscriptions"
 
 
 def _require(*settings):
@@ -67,32 +74,56 @@ def _client_jwt():
     )
 
 
-def _apple_url(transaction_id):
-    host = "api.storekit-sandbox.itunes.apple.com" if APPLE_ENV == "sandbox" else "api.storekit.itunes.apple.com"
-    return f"https://{host}/inApps/v1/transactions/{transaction_id}"
+def _apple_get(path):
+    """GET from the App Store Server API, authenticated as this app.
 
-
-def _fetch_transaction(transaction_id):
+    What comes back is trusted: it arrived over TLS from Apple in answer to
+    our own signed request. That is the only source subscription state is
+    read from - never a JWS someone posted to us (see handle_webhook)."""
     _require_api_settings()
-    request = Request(_apple_url(transaction_id), headers={"Authorization": f"Bearer {_client_jwt()}"})
+    host = "api.storekit-sandbox.itunes.apple.com" if APPLE_ENV == "sandbox" else "api.storekit.itunes.apple.com"
+    request = Request(f"https://{host}{path}", headers={"Authorization": f"Bearer {_client_jwt()}"})
     try:
         with urlopen(request, timeout=10) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+            return json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         if exc.code == 404:
             raise HTTPException(404, "Apple transaction was not found.") from exc
         raise HTTPException(502, "Apple App Store Server API request failed.") from exc
     except (URLError, UnicodeDecodeError, ValueError) as exc:
         raise HTTPException(502, "Apple App Store Server API returned an invalid response.") from exc
+
+
+def _fetch_transaction(transaction_id):
+    """One transaction, as Apple has it (Get Transaction Info)."""
+    payload = _apple_get(f"/inApps/v1/transactions/{transaction_id}")
     transaction = payload.get("signedTransactionInfo", payload.get("transactionInfo"))
     if isinstance(transaction, str):
         transaction = _decode_jws(transaction, "transaction")
     if not isinstance(transaction, dict):
         raise HTTPException(502, "Apple App Store Server API did not return transaction information.")
-    renewal = payload.get("signedRenewalInfo")
-    if isinstance(renewal, str):
-        renewal = _decode_jws(renewal, "renewal")
-    return transaction, renewal if isinstance(renewal, dict) else None
+    return transaction
+
+
+def _fetch_subscription(original_transaction_id):
+    """The subscription's latest transaction and its renewal info, as Apple
+    has them now (Get All Subscription Statuses).
+
+    Transaction info alone can't say whether the subscriber turned
+    auto-renew off - i.e. cancelled - so this is what both the iOS report and
+    the webhook sync from."""
+    payload = _apple_get(f"/inApps/v1/subscriptions/{original_transaction_id}")
+    for group in payload.get("data") or []:
+        for last in group.get("lastTransactions") or []:
+            if last.get("originalTransactionId") != original_transaction_id:
+                continue
+            transaction = last.get("signedTransactionInfo")
+            transaction = _decode_jws(transaction, "transaction") if isinstance(transaction, str) else None
+            renewal = last.get("signedRenewalInfo")
+            renewal = _decode_jws(renewal, "renewal") if isinstance(renewal, str) else None
+            if transaction:
+                return transaction, renewal
+    raise HTTPException(404, "Apple transaction was not found.")
 
 
 def _timestamp(value):
@@ -114,7 +145,7 @@ def _plan(transaction):
     raise HTTPException(400, "Apple transaction uses an unknown product.")
 
 
-def _sync_transaction(user_id, transaction, renewal=None, force_expired=False):
+def _sync_transaction(user_id, transaction, renewal=None):
     _require_api_settings()
     original_transaction_id = transaction.get("originalTransactionId")
     if not original_transaction_id:
@@ -124,12 +155,13 @@ def _sync_transaction(user_id, transaction, renewal=None, force_expired=False):
     auto_renew = transaction.get("autoRenewStatus")
     if auto_renew is None and renewal:
         auto_renew = renewal.get("autoRenewStatus")
-    active = (not force_expired and not transaction.get("revocationDate") and period_end
-              and period_end > int(time.time()))
+    active = not transaction.get("revocationDate") and period_end and period_end > int(time.time())
     status = "expired" if not active else ("trialing" if transaction.get("offerType") in (1, "1") else "active")
+    if not can_record_subscription(user_id, "apple", original_transaction_id):
+        raise HTTPException(409, "This account already has an active subscription.")
     db.upsert_subscription(
         user_id, status, _plan(transaction), "apple", period_start, period_end,
-        str(auto_renew) == "0", apple_original_transaction_id=original_transaction_id,
+        str(auto_renew) == "0", subscription_id=original_transaction_id,
         started_at=_timestamp(transaction.get("originalPurchaseDate")),
     )
     return db.get_subscription(user_id)
@@ -140,49 +172,66 @@ def record_transaction(user_id, signed_transaction):
     transaction_id = submitted.get("transactionId")
     if not transaction_id:
         raise HTTPException(400, "Apple transaction is missing transactionId.")
-    transaction, renewal = _fetch_transaction(transaction_id)
+    # The posted JWS isn't signature-checked here, so all it's trusted for is
+    # the id to look up; Apple confirms the transaction exists, and the state
+    # recorded is the subscription's current one, renewal status included.
+    transaction = _fetch_transaction(transaction_id)
     if transaction.get("bundleId") != APPLE_BUNDLE_ID:
         raise HTTPException(400, "Apple transaction bundle ID does not match this app.")
-    return _sync_transaction(user_id, transaction, renewal)
+    original_transaction_id = transaction.get("originalTransactionId")
+    if not original_transaction_id:
+        raise HTTPException(400, "Apple transaction is missing originalTransactionId.")
+    latest, renewal = _fetch_subscription(original_transaction_id)
+    return _sync_transaction(user_id, latest, renewal)
 
 
-def _notification_transaction(data):
-    transaction = data.get("latestTransactionInfo") or data.get("transactionInfo") or data.get("signedTransactionInfo")
+def _notification_original_transaction_id(data):
+    transaction = data.get("signedTransactionInfo") or data.get("transactionInfo") or data.get("latestTransactionInfo")
     if isinstance(transaction, str):
         transaction = _decode_jws(transaction, "transaction")
-    renewal = data.get("signedRenewalInfo")
-    if isinstance(renewal, str):
-        renewal = _decode_jws(renewal, "renewal")
-    return transaction if isinstance(transaction, dict) else None, renewal if isinstance(renewal, dict) else None
+    return transaction.get("originalTransactionId") if isinstance(transaction, dict) else None
 
 
 def handle_webhook(payload):
+    """App Store Server Notifications V2.
+
+    The endpoint is public and the notification's JWS signature isn't
+    verified, so nothing in it is believed: it only says which subscription
+    to look at. Its current state - active, cancelled (auto-renew off),
+    expired, refunded - is then read from Apple's API. A forged notification
+    can at most make us re-read the truth.
+    """
     _require(("APPLE_BUNDLE_ID", APPLE_BUNDLE_ID))
     try:
         token = payload.decode("utf-8") if isinstance(payload, bytes) else payload
     except UnicodeDecodeError as exc:
         raise HTTPException(400, "Invalid Apple notification payload.") from exc
     notification = _decode_jws(token, "notification")
-    notification_type = notification.get("notificationType")
-    if notification_type not in ("DID_CHANGE_RENEWAL_STATUS", "EXPIRED", "REFUND", "RENEWAL", "DID_RENEW"):
+    if notification.get("notificationType") not in (
+            "DID_CHANGE_RENEWAL_STATUS", "EXPIRED", "REFUND", "RENEWAL", "DID_RENEW"):
         return {"received": True}
     data = notification.get("data")
     if not isinstance(data, dict):
         raise HTTPException(400, "Invalid Apple notification payload.")
-    transaction, renewal = _notification_transaction(data)
-    bundle_id = data.get("bundleId") or (transaction or {}).get("bundleId")
-    if bundle_id != APPLE_BUNDLE_ID:
-        raise HTTPException(400, "Apple notification bundle ID does not match this app.")
-    if not transaction or not transaction.get("expiresDate"):
-        transaction_id = (transaction or {}).get("transactionId")
-        if not transaction_id:
-            raise HTTPException(400, "Apple notification is missing transaction information.")
-        transaction, fetched_renewal = _fetch_transaction(transaction_id)
-        renewal = renewal or fetched_renewal
-    original_transaction_id = transaction.get("originalTransactionId")
-    subscription = db.get_subscription_by_apple_original_transaction_id(original_transaction_id)
+    original_transaction_id = _notification_original_transaction_id(data)
+    if not original_transaction_id:
+        raise HTTPException(400, "Apple notification is missing transaction information.")
+    subscription = db.get_subscription_by_platform_id("apple", original_transaction_id)
     if not subscription:
         raise HTTPException(404, "No subscription owner found for Apple transaction.")
-    _sync_transaction(subscription["user_id"], transaction, renewal,
-                      force_expired=notification_type in ("EXPIRED", "REFUND"))
+    transaction, renewal = _fetch_subscription(original_transaction_id)
+    if transaction.get("bundleId") != APPLE_BUNDLE_ID:
+        raise HTTPException(400, "Apple notification bundle ID does not match this app.")
+    _sync_transaction(subscription["user_id"], transaction, renewal)
     return {"received": True}
+
+
+def cancel_subscription():
+    """Apple subscriptions can't be cancelled from here (see
+    MANAGE_SUBSCRIPTIONS_URL), so this answers where the subscriber can."""
+    raise HTTPException(409, {
+        "code": "manage_with_apple",
+        "message": "This subscription was bought through Apple, so it's cancelled in your "
+                   "Apple ID settings. Open Subscriptions there and choose Cancel Subscription.",
+        "url": MANAGE_SUBSCRIPTIONS_URL,
+    })

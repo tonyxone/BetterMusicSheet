@@ -107,6 +107,34 @@ def get_entitlement(user_id, is_guest=False):
         "platform": subscription["platform"],
     }
 
+def has_active_subscription(user_id):
+    """Whether the account is subscribed right now, through either store.
+
+    A subscription bought on the web (Stripe) or in the iOS app (Apple)
+    unlocks the account everywhere; nothing downstream cares which."""
+    return get_entitlement(user_id)["tier"] == "premium"
+
+
+def can_record_subscription(user_id, platform, subscription_id):
+    """Whether news about this provider subscription may overwrite the
+    account's one subscription record.
+
+    It may when the record is about that same subscription, or when the
+    account has no active subscription for it to clobber. What it must not do
+    is replace an active subscription with a different one - say a Stripe
+    subscription that lapsed while the user re-subscribed on iOS, whose
+    `deleted` webhook arrives afterwards and would otherwise mark the paying
+    Apple subscriber expired.
+    """
+    from db import get_subscription
+    current = get_subscription(user_id)
+    if current is None:
+        return True
+    if current.get("platform") == platform and current.get("subscription_id") == subscription_id:
+        return True
+    return not has_active_subscription(user_id)
+
+
 def is_trial_eligible(user_id):
     """Whether this account's next subscription gets the free trial.
 

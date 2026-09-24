@@ -14,7 +14,7 @@ from stripe.error import StripeError
 from fastapi import HTTPException
 
 import db
-from auth import is_trial_eligible
+from auth import can_record_subscription, has_active_subscription, is_trial_eligible
 from config import (
     STRIPE_PRICE_MONTHLY,
     STRIPE_PRICE_YEARLY,
@@ -23,6 +23,8 @@ from config import (
 )
 
 TRIAL_DAYS = 7
+
+ALREADY_SUBSCRIBED = "This account already has an active subscription."
 
 
 def _value(item, key, default=None):
@@ -58,6 +60,10 @@ def create_checkout(user_id, plan, success_url, cancel_url):
     prices = _prices()
     if plan not in prices:
         raise HTTPException(422, "plan must be monthly or yearly")
+    # A subscription from either store already covers web and iOS; a second
+    # one would just bill the same person twice.
+    if has_active_subscription(user_id):
+        raise HTTPException(409, ALREADY_SUBSCRIBED)
     # Session metadata does not automatically appear on the subscription.
     # The webhook sees the subscription, so store the owner there too.
     subscription_data = {"metadata": {"user_id": user_id}}
@@ -126,6 +132,9 @@ def _sync_subscription(subscription, deleted=False):
     # sends subscription.deleted after that period, which becomes expired.
     if _value(subscription, "cancel_at_period_end", False) and period_end and period_end > int(time.time()):
         status = "active"
+    subscription_id = _value(subscription, "id")
+    if not can_record_subscription(user_id, "stripe", subscription_id):
+        raise HTTPException(409, ALREADY_SUBSCRIBED)
     db.upsert_subscription(
         user_id,
         status,
@@ -134,7 +143,7 @@ def _sync_subscription(subscription, deleted=False):
         _period(subscription, "current_period_start"),
         period_end,
         bool(_value(subscription, "cancel_at_period_end", False)),
-        stripe_subscription_id=_value(subscription, "id"),
+        subscription_id=subscription_id,
         # When this subscription began (trial included) - unlike the period
         # start, it doesn't move on each renewal. Per subscription, so a
         # rejoining account shows its new start, not its first-ever one.
@@ -170,7 +179,7 @@ def change_plan(user_id, plan):
     subscription = db.get_subscription(user_id)
     if (not subscription or subscription.get("platform") != "stripe"
             or subscription.get("status") not in ("active", "trialing")
-            or not subscription.get("stripe_subscription_id")):
+            or not subscription.get("subscription_id")):
         raise HTTPException(404, "No active Stripe subscription found.")
     prices = _prices()
     if plan not in prices:
@@ -179,11 +188,11 @@ def change_plan(user_id, plan):
         raise HTTPException(409, f"Already on the {plan} plan.")
     _configure_api()
     try:
-        current = stripe.Subscription.retrieve(subscription["stripe_subscription_id"])
+        current = stripe.Subscription.retrieve(subscription["subscription_id"])
         items = _value(_value(current, "items", {}), "data", [])
         item_id = _value(items[0], "id") if items else None
         updated = stripe.Subscription.modify(
-            subscription["stripe_subscription_id"],
+            subscription["subscription_id"],
             items=[{"id": item_id, "price": prices[plan]}],
             proration_behavior="create_prorations",
         )
@@ -201,16 +210,24 @@ def handle_webhook(payload, signature):
 
     event_type = _value(event, "type")
     data = _value(_value(event, "data", {}), "object", {})
-    if event_type in ("customer.subscription.created", "customer.subscription.updated"):
-        _sync_subscription(data)
-    elif event_type == "customer.subscription.deleted":
-        _sync_subscription(data, deleted=True)
-    elif event_type == "invoice.payment_failed":
-        _configure_api()
-        subscription_id = _value(data, "subscription")
-        subscription_id = _value(subscription_id, "id", subscription_id)
-        if subscription_id:
-            _sync_subscription(stripe.Subscription.retrieve(subscription_id))
+    try:
+        if event_type in ("customer.subscription.created", "customer.subscription.updated"):
+            _sync_subscription(data)
+        elif event_type == "customer.subscription.deleted":
+            _sync_subscription(data, deleted=True)
+        elif event_type == "invoice.payment_failed":
+            _configure_api()
+            subscription_id = _value(data, "subscription")
+            subscription_id = _value(subscription_id, "id", subscription_id)
+            if subscription_id:
+                _sync_subscription(stripe.Subscription.retrieve(subscription_id))
+    except HTTPException as exc:
+        # About a Stripe subscription the account no longer uses while another
+        # one is active (see auth.can_record_subscription). Nothing to record,
+        # and answering an error would only make Stripe keep retrying it.
+        if exc.status_code != 409:
+            raise
+        return {"received": True, "ignored": exc.detail}
     return {"received": True}
 
 
@@ -218,12 +235,12 @@ def cancel_subscription(user_id):
     subscription = db.get_subscription(user_id)
     if (not subscription or subscription.get("platform") != "stripe"
             or subscription.get("status") not in ("active", "trialing")
-            or not subscription.get("stripe_subscription_id")):
+            or not subscription.get("subscription_id")):
         raise HTTPException(404, "No active Stripe subscription found.")
     _configure_api()
     try:
         updated = stripe.Subscription.modify(
-            subscription["stripe_subscription_id"], cancel_at_period_end=True,
+            subscription["subscription_id"], cancel_at_period_end=True,
         )
     except StripeError as exc:
         raise HTTPException(502, "We couldn't reach Stripe to cancel your subscription. Please try again in a moment.") from exc
