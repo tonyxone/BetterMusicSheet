@@ -11,6 +11,7 @@ import traceback
 import db
 import job_state
 import storage
+from config import QUEUE_SECONDS
 from worker import accept_input, event_jobs
 
 
@@ -47,7 +48,16 @@ def reconcile(sqs, queue_url, now):
                     if job.get("lease_until", 0) <= now:
                         job_state.change(job["job_id"], {"status": status, "lease_owner": job["lease_owner"],
                             "lease_until": job["lease_until"]}, status="queued", next_check_at=now,
-                            stage="Recovering interrupted processing")
+                            queued_at=now, stage="Recovering interrupted processing")
+                elif status == "queued" and job.get("queued_at", job["created_at"]) + QUEUE_SECONDS <= now:
+                    # No worker has claimed it in time - most likely none can
+                    # start. Fail it so the user sees an error instead of a
+                    # spinner. Matching queued_at loses the race to a worker
+                    # that claims (or re-queues) it meanwhile.
+                    if job_state.change(job["job_id"], {"status": status, "queued_at": job.get("queued_at")},
+                                        status="failed", stage="Processing failed",
+                                        error="We couldn't start annotating this sheet. Please try uploading it again."):
+                        job_state.release(job)
                 elif status == "queued":
                     # Repair notification loss and producer crashes. Duplicates
                     # are harmless because the worker uses a conditional claim.

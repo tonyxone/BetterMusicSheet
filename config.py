@@ -63,6 +63,11 @@ MAX_JOB_SECONDS = int(os.environ.get("MAX_JOB_SECONDS", "1800"))
 MAX_ATTEMPTS = 3
 LEASE_SECONDS = 180
 UPLOAD_SECONDS = 900
+# How long a job may wait in the queue before the controller gives up on it.
+# Attempt limits only count runs a worker actually started, so a worker that
+# cannot start at all (a crash on import) would otherwise leave the user on
+# "Waiting for a recognition worker" forever.
+QUEUE_SECONDS = 1800
 
 # Subscription records are optional in local development, where db.py uses an
 # in-memory store. Production must name the DynamoDB table explicitly.

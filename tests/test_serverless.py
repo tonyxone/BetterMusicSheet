@@ -186,6 +186,25 @@ class ServerlessTests(unittest.TestCase):
         self.assertEqual(db.get_annotation_job("b")["status"], "failed")
         job_state.create("c", "22222222", "Next.pdf", OPTIONS, 3)
 
+    def test_job_no_worker_claims_fails_and_releases_user_lock(self):
+        job = self.upload()
+        controller.reconcile(self.sqs, self.queue, job["queued_at"] + config.QUEUE_SECONDS - 1)
+        self.assertEqual(db.get_annotation_job("a")["status"], "queued")
+        # That pass re-sent the job and deferred its next check by 5 minutes.
+        controller.reconcile(self.sqs, self.queue, job["queued_at"] + config.QUEUE_SECONDS + 299)
+        failed = db.get_annotation_job("a")
+        self.assertEqual(failed["status"], "failed")
+        self.assertIn("try uploading it again", failed["error"])
+        self.assertEqual(self.client.get("/api/sheets/a", headers=self.headers).json()["status"], "failed")
+        job_state.create("b", USER, "Next.pdf", OPTIONS, 1)
+
+    def test_queue_timeout_does_not_fail_a_job_a_worker_claimed(self):
+        job = self.upload()
+        job_state.claim("a", "worker")
+        with patch.object(job_state, "due", side_effect=lambda status, now: [job] if status == "queued" else []):
+            controller.reconcile(self.sqs, self.queue, job["queued_at"] + config.QUEUE_SECONDS)
+        self.assertEqual(db.get_annotation_job("a")["status"], "processing")
+
     def test_size_mismatch_is_terminal(self):
         job = job_state.create("a", USER, "Test.pdf", OPTIONS, 1)
         self.s3.put_object(Bucket="new-files", Key=job["input_key"], Body=b"too big")

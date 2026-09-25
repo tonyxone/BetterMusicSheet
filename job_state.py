@@ -117,8 +117,9 @@ def release(job):
 def ready(job_id, version):
     job = db.get_annotation_job(job_id)
     if job and job["status"] == "uploading":
-        change(job_id, {"status": "uploading"}, status="queued", input_version=version,
-               stage="Waiting for a recognition worker", next_check_at=int(time.time()) + 300)
+        now = int(time.time())
+        change(job_id, {"status": "uploading"}, status="queued", input_version=version, queued_at=now,
+               stage="Waiting for a recognition worker", next_check_at=now + 300)
     return db.get_annotation_job(job_id)
 
 

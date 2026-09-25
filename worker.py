@@ -206,8 +206,9 @@ def process_job(job_id, extend=lambda: None, runner=run_processor):
             if permanent:
                 job_state.finish(job, status="failed", error=str(exc), stage="Processing failed")
             else:
+                now = int(time.time())
                 job_state.owned(job, status="queued", error=None, stage="Retrying interrupted processing",
-                                next_check_at=int(time.time()) + 300)
+                                queued_at=now, next_check_at=now + 300)
         except job_state.LeaseLost:
             return False
         return permanent
