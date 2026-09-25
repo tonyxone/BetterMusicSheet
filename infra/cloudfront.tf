@@ -7,6 +7,16 @@
 # what lets S3 itself resolve "folder" paths (e.g. /sheets/ -> sheets/index.html)
 # without this config needing to manage an Origin Access Control / private
 # bucket policy for a bucket it doesn't otherwise own.
+# Adds the trailing slash itself, keeping the query string - see the
+# function's own comment for why S3's redirect can't.
+resource "aws_cloudfront_function" "trailing_slash" {
+  name    = "${var.project}-web-trailing-slash"
+  runtime = "cloudfront-js-2.0"
+  comment = "Redirect /path to /path/ and keep the query string"
+  publish = true
+  code    = file("${path.module}/functions/trailing-slash.js")
+}
+
 resource "aws_cloudfront_distribution" "web" {
   enabled             = true
   is_ipv6_enabled     = true
@@ -31,6 +41,11 @@ resource "aws_cloudfront_distribution" "web" {
     target_origin_id       = "s3-website"
     viewer_protocol_policy = "redirect-to-https"
     compress               = true
+
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = aws_cloudfront_function.trailing_slash.arn
+    }
 
     # The app's client-side routing uses a ?job= query param (see
     # better_music_sheet_web/app/sheets/), but the HTML served for that path
