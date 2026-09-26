@@ -1,28 +1,39 @@
 "use client";
 
 // The sheet preview, with the reader's own changes on top and the tools to
-// make them: move or retype a note name (retyping one fixes what plays too),
-// draw, highlight, add text notes. Changes save as they are made (see
-// lib/edits.ts) and come back on the next visit.
+// make them: move or retype note names (retyping one fixes what plays too),
+// draw, highlight, add text notes - one item at a time or a selected group.
+// Changes save as they are made (see lib/edits.ts) and come back on the
+// next visit.
 //
 // The note names are drawn from data over the ORIGINAL upload, rather than
 // shown baked into the annotated PDF, which is what makes them editable.
 // When a sheet can't be shown that way - no stored original, or a photo
 // upload - the annotated PDF is shown instead, and only marks and notes can
 // be added on top of it.
+//
+// The Original view shows the same upload without the names; the reader's
+// own marks and notes stay, and can be edited there too.
 
-import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MutableRefObject } from "react";
 import { fetchSheetAssets, fetchSheetFile } from "@/lib/sheet-files";
 import { loadLabels, type LabelItem, type LabelSet } from "@/lib/labels";
 import { correctionsForRetype, EMPTY_EDITS, isEmptyEdits, resolveLabel, useSheetEdits, type LabelEdit, type SaveState, type SheetEdits } from "@/lib/edits";
 import type { Timeline } from "@/lib/timeline";
 import type { SheetVariant } from "../sheet-toggle";
 import { PdfPages, type PageInfo } from "./pdf-pages";
-import { AnnotationLayer, type EditorHooks, type InlineTarget, type Selection, type Tool } from "./annotation-layer";
+import { AnnotationLayer, itemKey, moveItems, type EditorHooks, type InlineTarget, type SelectedItem, type Tool } from "./annotation-layer";
 
 const PEN_COLORS = ["#2e2117", "#c0392b", "#1f5fbf", "#2f7d32"];
 const HIGHLIGHT_COLORS = ["#ffd84d", "#8ee07a", "#ff9ec7", "#7cc8ff"];
 
+// 100% fits the page to the preview's width (up to 900px, as before).
+const ZOOM_STEPS = [0.5, 0.67, 0.8, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4];
+const MIN_ZOOM = ZOOM_STEPS[0];
+const MAX_ZOOM = ZOOM_STEPS[ZOOM_STEPS.length - 1];
+const ZOOM_KEY = "bms_sheet_zoom";
+
+/** Builds the Customized PDF from what the preview shows right now. */
 export type CustomizedExport = () => Promise<Blob>;
 
 type Loaded = {
@@ -49,6 +60,28 @@ function withLabelEdit(labels: Record<string, LabelEdit>, id: string, edit: Labe
   return next;
 }
 
+const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
+
+function savedZoom() {
+  try {
+    const z = Number(localStorage.getItem(ZOOM_KEY));
+    return z >= MIN_ZOOM && z <= MAX_ZOOM ? z : 1;
+  } catch {
+    return 1;
+  }
+}
+
+/** The nearest ancestor that scrolls - the preview's resizable box. */
+function scrollerOf(el: HTMLElement | null) {
+  let node = el?.parentElement ?? null;
+  while (node) {
+    const style = getComputedStyle(node);
+    if (/(auto|scroll)/.test(`${style.overflowX} ${style.overflowY}`)) return node;
+    node = node.parentElement;
+  }
+  return null;
+}
+
 const SAVE_TEXT: Record<SaveState, string> = {
   saved: "All changes saved",
   saving: "Saving…",
@@ -68,16 +101,28 @@ export function SheetEditor({ jobId, variant, exportRef }: {
   const edits = useSheetEdits(jobId);
   const { doc, update, undo, redo, current } = edits;
 
-  const [editRequested, setEditRequested] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [tool, setTool] = useState<Tool>("select");
   const [penColor, setPenColor] = useState(PEN_COLORS[1]);
   const [highlightColor, setHighlightColor] = useState(HIGHLIGHT_COLORS[0]);
-  const [selection, setSelection] = useState<Selection>(null);
+  const [selection, setSelection] = useState<SelectedItem[]>([]);
   const [inline, setInline] = useState<InlineTarget | null>(null);
   // Mirrors `inline`, so the box closing twice (Enter, then the blur its
   // removal can cause) only applies once.
   const inlineRef = useRef<InlineTarget | null>(null);
   const inlineBefore = useRef<SheetEdits | null>(null);
+  const [resetOpen, setResetOpen] = useState(false);
+  // A reset can wipe a lot at once, so it offers its own undo, in or out of
+  // edit mode.
+  const [resetNotice, setResetNotice] = useState<string | null>(null);
+
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [zoom, setZoom] = useState(savedZoom);
+  const zoomRef = useRef(zoom);
+  // The page is re-rasterized for a new zoom only once zooming pauses; until
+  // then the current pixels are stretched, which is cheap.
+  const [renderZoom, setRenderZoom] = useState(zoom);
+  const zoomAnchor = useRef<{ cx: number; cy: number; left: number; top: number; ratio: number } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -103,6 +148,7 @@ export function SheetEditor({ jobId, variant, exportRef }: {
   }, [jobId]);
 
   const labelsLive = !!loaded?.labels && !!loaded.original;
+  const showNames = labelsLive && variant === "annotated";
   const base = variant === "original"
     ? loaded?.original ?? null
     : labelsLive ? loaded!.original : loaded?.annotated ?? null;
@@ -122,22 +168,84 @@ export function SheetEditor({ jobId, variant, exportRef }: {
     if (!exportRef) return;
     exportRef.current = loaded ? async () => {
       const { exportCustomizedPdf } = await import("@/lib/export-pdf");
-      const exportBase = labelsLive ? loaded.original! : loaded.annotated ?? loaded.original!;
-      return exportCustomizedPdf({ base: exportBase, labels: labelsLive ? loaded.labels : null, edits: current() ?? EMPTY_EDITS });
+      // What the preview shows: the names over the original, the original
+      // alone, or the annotated copy when the names can't be drawn.
+      const exportBase = variant === "original" || labelsLive ? loaded.original! : loaded.annotated ?? loaded.original!;
+      return exportCustomizedPdf({ base: exportBase, labels: showNames ? loaded.labels : null, edits: current() ?? EMPTY_EDITS });
     } : null;
     return () => { exportRef.current = null; };
-  }, [exportRef, loaded, labelsLive, current]);
-
-  // Switching to the original puts the tools away; there is nothing of the
-  // reader's on it to edit.
-  const editing = editRequested && variant === "annotated";
+  }, [exportRef, loaded, labelsLive, showNames, variant, current]);
 
   function stopEditing() {
-    setEditRequested(false);
-    setSelection(null);
+    setEditing(false);
+    setSelection([]);
     setInline(null);
     inlineRef.current = null;
   }
+
+  // Names aren't on the Original view, so they can't stay selected there.
+  const visibleSelection = useMemo(
+    () => (showNames ? selection : selection.filter((s) => s.kind !== "label")),
+    [selection, showNames],
+  );
+
+  // ---- zoom ------------------------------------------------------------------
+
+  /** Zoom to ``next``, keeping the point under ``at`` (a client position,
+   * default the middle of the preview) where it is on screen. */
+  const zoomTo = useCallback((next: number, at?: { x: number; y: number }) => {
+    const z = clampZoom(Math.round(next * 100) / 100);
+    const old = zoomRef.current;
+    if (z === old) return;
+    const scroller = scrollerOf(rootRef.current);
+    if (scroller) {
+      const r = scroller.getBoundingClientRect();
+      zoomAnchor.current = {
+        cx: at ? at.x - r.left : scroller.clientWidth / 2,
+        cy: at ? at.y - r.top : scroller.clientHeight / 2,
+        left: scroller.scrollLeft, top: scroller.scrollTop, ratio: z / old,
+      };
+    }
+    zoomRef.current = z;
+    setZoom(z);
+    try { localStorage.setItem(ZOOM_KEY, String(z)); } catch { /* optional */ }
+  }, []);
+
+  useLayoutEffect(() => {
+    const anchor = zoomAnchor.current;
+    const scroller = scrollerOf(rootRef.current);
+    zoomAnchor.current = null;
+    if (!anchor || !scroller) return;
+    scroller.scrollLeft = (anchor.left + anchor.cx) * anchor.ratio - anchor.cx;
+    scroller.scrollTop = (anchor.top + anchor.cy) * anchor.ratio - anchor.cy;
+  }, [zoom]);
+
+  useEffect(() => {
+    const t = setTimeout(() => setRenderZoom(zoom), 250);
+    return () => clearTimeout(t);
+  }, [zoom]);
+
+  // Ctrl + wheel (and a trackpad pinch, which browsers report the same way)
+  // zooms the sheet around the pointer instead of the whole page.
+  useEffect(() => {
+    const scroller = scrollerOf(rootRef.current);
+    if (!scroller) return;
+    function onWheel(e: WheelEvent) {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      zoomTo(zoomRef.current * Math.exp(-e.deltaY * 0.0015), { x: e.clientX, y: e.clientY });
+    }
+    scroller.addEventListener("wheel", onWheel, { passive: false });
+    return () => scroller.removeEventListener("wheel", onWheel);
+  }, [loaded, zoomTo]);
+
+  const stepZoom = (direction: 1 | -1) => {
+    const z = zoomRef.current;
+    const next = direction > 0
+      ? ZOOM_STEPS.find((s) => s > z + 0.001) ?? MAX_ZOOM
+      : [...ZOOM_STEPS].reverse().find((s) => s < z - 0.001) ?? MIN_ZOOM;
+    zoomTo(next);
+  };
 
   // ---- edits that need more than one field ---------------------------------
 
@@ -174,41 +282,50 @@ export function SheetEditor({ jobId, variant, exportRef }: {
     edits.setNotice(message);
   }, [labelsById, current, update, loaded, edits]);
 
-  const resetLabel = useCallback((id: string) => {
-    const item = labelsById.get(id);
+  /** Names back where and as they were printed, with their playback. */
+  const resetLabels = useCallback((ids: string[]) => {
     const now = current();
-    if (!item || !now) return;
-    const result = loaded?.timeline ? correctionsForRetype(item, item.text, loaded.timeline, now.corrections) : null;
-    update((d) => ({ ...d, labels: withLabelEdit(d.labels, id, {}), corrections: result?.corrections ?? d.corrections }));
+    if (!now) return;
+    let corrections = now.corrections;
+    for (const id of ids) {
+      const item = labelsById.get(id);
+      if (item && loaded?.timeline) {
+        corrections = correctionsForRetype(item, item.text, loaded.timeline, corrections)?.corrections ?? corrections;
+      }
+    }
+    update((d) => {
+      let labels = d.labels;
+      for (const id of ids) labels = withLabelEdit(labels, id, {});
+      return { ...d, labels, corrections };
+    });
   }, [labelsById, current, update, loaded]);
 
   const deleteSelection = useCallback(() => {
-    if (!selection) return;
-    if (selection.kind === "label") {
-      update((d) => ({ ...d, labels: withLabelEdit(d.labels, selection.id, { ...(d.labels[selection.id] ?? {}), hidden: true }) }));
-    } else if (selection.kind === "text") {
-      update((d) => ({ ...d, texts: d.texts.filter((t) => t.id !== selection.id) }));
-    } else {
-      update((d) => ({ ...d, strokes: d.strokes.filter((s) => s.id !== selection.id) }));
-    }
-    setSelection(null);
-  }, [selection, update]);
+    if (!visibleSelection.length) return;
+    const keys = new Set(visibleSelection.map(itemKey));
+    update((d) => {
+      let labels = d.labels;
+      for (const s of visibleSelection) {
+        if (s.kind === "label") labels = withLabelEdit(labels, s.id, { ...(labels[s.id] ?? {}), hidden: true });
+      }
+      return {
+        ...d, labels,
+        texts: d.texts.filter((t) => !keys.has(`text:${t.id}`)),
+        strokes: d.strokes.filter((s) => !keys.has(`stroke:${s.id}`)),
+      };
+    });
+    setSelection([]);
+  }, [visibleSelection, update]);
 
   const nudge = useCallback((dx: number, dy: number) => {
-    if (!selection) return;
-    const r = (v: number) => Math.round(v * 100) / 100;
-    update((d) => {
-      if (selection.kind === "label") {
-        const e = d.labels[selection.id] ?? {};
-        return { ...d, labels: { ...d.labels, [selection.id]: { ...e, dx: r((e.dx ?? 0) + dx), dy: r((e.dy ?? 0) + dy) } } };
-      }
-      if (selection.kind === "text") {
-        return { ...d, texts: d.texts.map((t) => t.id === selection.id ? { ...t, x: r(t.x + dx), y: r(t.y + dy) } : t) };
-      }
-      return { ...d, strokes: d.strokes.map((s) => s.id === selection.id
-        ? { ...s, points: s.points.map((v, i) => r(v + (i % 2 ? dy : dx))) } : s) };
-    });
-  }, [selection, update]);
+    if (!visibleSelection.length) return;
+    update((d) => moveItems(d, visibleSelection, dx, dy));
+  }, [visibleSelection, update]);
+
+  const pxPerPtOf = (pageNumber: number) => {
+    const svg = document.querySelector<SVGSVGElement>(`.sheet-page[data-page="${pageNumber}"] svg.annotation-layer`);
+    return svg ? svg.getBoundingClientRect().width / svg.viewBox.baseVal.width : null;
+  };
 
   const openInline = useCallback((target: InlineTarget) => {
     // A new text note exists only transiently until it has text; remember
@@ -219,6 +336,13 @@ export function SheetEditor({ jobId, variant, exportRef }: {
     inlineRef.current = target;
     setInline(target);
   }, [current]);
+
+  const openInlineFor = useCallback((item: SelectedItem) => {
+    if (item.kind === "stroke") return;
+    const page = item.kind === "label" ? labelsById.get(item.id)?.page : current()?.texts.find((t) => t.id === item.id)?.page;
+    const pxPerPt = page ? pxPerPtOf(page) : null;
+    if (page && pxPerPt) openInline({ kind: item.kind, id: item.id, page, pxPerPt });
+  }, [labelsById, current, openInline]);
 
   const closeInline = useCallback((value: string | null) => {
     const target = inlineRef.current;
@@ -235,7 +359,7 @@ export function SheetEditor({ jobId, variant, exportRef }: {
     if (target.isNew) {
       if (!text) {
         update((d) => ({ ...d, texts: d.texts.filter((t) => t.id !== target.id) }), { transient: true });
-        setSelection(null);
+        setSelection([]);
       } else {
         update((d) => ({ ...d, texts: d.texts.map((t) => t.id === target.id ? { ...t, text } : t) }), before ? { before } : {});
       }
@@ -245,6 +369,17 @@ export function SheetEditor({ jobId, variant, exportRef }: {
     if (!text) update((d) => ({ ...d, texts: d.texts.filter((t) => t.id !== target.id) }));
     else update((d) => ({ ...d, texts: d.texts.map((t) => t.id === target.id ? { ...t, text } : t) }));
   }, [retypeLabel, update]);
+
+  const reset = useCallback((scope: "names" | "all") => {
+    setResetOpen(false);
+    update((d) => (scope === "all" ? EMPTY_EDITS : { ...d, labels: {}, corrections: {} }));
+    setSelection([]);
+    const message = scope === "all"
+      ? "Reset to the annotated version: your names, playback fixes, drawings and notes are removed."
+      : "Note names and playback reset to the annotated version. Your drawings and notes are kept.";
+    setResetNotice(message);
+    edits.setNotice(message);
+  }, [update, edits]);
 
   // ---- keyboard --------------------------------------------------------------
 
@@ -264,7 +399,7 @@ export function SheetEditor({ jobId, variant, exportRef }: {
         redo();
         return;
       }
-      if (!selection) {
+      if (!visibleSelection.length) {
         if (e.key === "Escape") setTool("select");
         return;
       }
@@ -279,20 +414,15 @@ export function SheetEditor({ jobId, variant, exportRef }: {
         e.preventDefault();
         deleteSelection();
       } else if (e.key === "Escape") {
-        setSelection(null);
-      } else if (e.key === "Enter" && selection.kind !== "stroke") {
+        setSelection([]);
+      } else if (e.key === "Enter" && visibleSelection.length === 1) {
         e.preventDefault();
-        const item = selection.kind === "label" ? labelsById.get(selection.id) : current()?.texts.find((t) => t.id === selection.id);
-        const pageEl = item && document.querySelector<SVGSVGElement>(`.sheet-page[data-page="${item.page}"] svg.annotation-layer`);
-        if (item && pageEl) {
-          openInline({ kind: selection.kind, id: selection.id, page: item.page,
-            pxPerPt: pageEl.getBoundingClientRect().width / pageEl.viewBox.baseVal.width });
-        }
+        openInlineFor(visibleSelection[0]);
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [editing, selection, undo, redo, nudge, deleteSelection, labelsById, current, openInline]);
+  }, [editing, visibleSelection, undo, redo, nudge, deleteSelection, openInlineFor]);
 
   // ---- rendering -------------------------------------------------------------
 
@@ -308,13 +438,17 @@ export function SheetEditor({ jobId, variant, exportRef }: {
   }
 
   const hooks: EditorHooks | undefined = editing ? {
-    tool, penColor, highlightColor, textColor: penColor, selection, select: setSelection,
+    tool, penColor, highlightColor, textColor: penColor, selection: visibleSelection, select: setSelection,
     update, current, inline, openInline,
   } : undefined;
-  const showLayer = variant === "annotated";
   const labelColor = loaded.labels?.color ?? "#000000";
-  const selectedLabel = selection?.kind === "label" ? labelsById.get(selection.id) : undefined;
+  const single = visibleSelection.length === 1 ? visibleSelection[0] : null;
+  const selectedLabel = single?.kind === "label" ? labelsById.get(single.id) : undefined;
   const selectedResolved = selectedLabel ? resolveLabel(selectedLabel, doc) : null;
+  const chord = selectedLabel ? labelsByPage.get(selectedLabel.page)?.filter((l) => l.group === selectedLabel.group) ?? [] : [];
+  const selectedLabelIds = visibleSelection.filter((s) => s.kind === "label").map((s) => s.id);
+  const hasNameChanges = Object.keys(doc.labels).length > 0 || Object.keys(doc.corrections).length > 0;
+  const hasMarks = doc.texts.length > 0 || doc.strokes.length > 0;
 
   function renderInline(page: PageInfo) {
     if (!inline || inline.page !== page.pageNumber || !doc) return null;
@@ -374,29 +508,73 @@ export function SheetEditor({ jobId, variant, exportRef }: {
   }
 
   const tools: { id: Tool; label: string; title: string; icon: React.ReactNode }[] = [
-    { id: "select", label: "Move", title: "Move and edit: drag a note name or note, double-click to retype it. Shift-drag moves a whole chord's names.", icon: <path d="M5 3l14 8-6 1.5L10 19z" /> },
+    { id: "select", label: "Select", title: "Select and move: drag a name or note; Shift- or Ctrl-click, or drag a box over empty space, to select several and move them together. Double-click a name to retype it.", icon: <path d="M5 3l14 8-6 1.5L10 19z" /> },
     { id: "pen", label: "Pen", title: "Draw on the sheet", icon: <path d="M4 20l1-4L16 5l3 3L8 19zM14 7l3 3" /> },
     { id: "highlighter", label: "Highlight", title: "Highlight part of the sheet", icon: <path d="M4 20h6M7 17l-2-2 9-9 4 4-9 9zM12 8l4 4" /> },
     { id: "text", label: "Text", title: "Click anywhere to add a text note", icon: <path d="M5 5h14M12 5v14M9 19h6" /> },
     { id: "eraser", label: "Erase", title: "Erase drawings and text notes (note names are hidden with Delete instead)", icon: <path d="M8 20h12M5 15l8-9 6 6-7 8H9z" /> },
   ];
 
+  const zoomControls = (
+    <div className="zoom-controls" role="group" aria-label="Zoom">
+      <button type="button" className="editor-btn icon" onClick={() => stepZoom(-1)} disabled={zoom <= MIN_ZOOM}
+        title="Zoom out (Ctrl + scroll also zooms)" aria-label="Zoom out">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14" /></svg>
+      </button>
+      <button type="button" className="editor-btn zoom-level" onClick={() => zoomTo(1)} title="Fit the page to the width">
+        {Math.round(zoom * 100)}%
+      </button>
+      <button type="button" className="editor-btn icon" onClick={() => stepZoom(1)} disabled={zoom >= MAX_ZOOM}
+        title="Zoom in (Ctrl + scroll also zooms)" aria-label="Zoom in">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14" /></svg>
+      </button>
+    </div>
+  );
+
+  const resetControl = (
+    <div className="reset-menu">
+      <button type="button" className="editor-btn" disabled={isEmptyEdits(doc)} aria-haspopup="menu" aria-expanded={resetOpen}
+        title="Go back to the annotated version as it was generated" onClick={() => setResetOpen((v) => !v)}>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4v6h6M4.5 10A8 8 0 1 1 6 17" /></svg>
+        <span>Reset</span>
+      </button>
+      {resetOpen && (
+        <div className="download-menu-list reset-menu-list" role="menu">
+          <button type="button" role="menuitem" disabled={!hasNameChanges} onClick={() => reset("names")}>
+            Note names only
+            <small>Undo moved, retyped and hidden names, and the playback fixes they made. Keeps your drawings and notes.</small>
+          </button>
+          <button type="button" role="menuitem" onClick={() => reset("all")}>
+            Everything
+            <small>Back to the annotated version exactly as generated{hasMarks ? ", removing your drawings and notes too" : ""}.</small>
+          </button>
+          <button type="button" role="menuitem" onClick={() => setResetOpen(false)}>Cancel</button>
+        </div>
+      )}
+    </div>
+  );
+
+  const showSub = !!edits.notice || (editing && (visibleSelection.length > 0 || tool === "select"));
+
   return (
-    <div className="sheet-editor">
+    <div className="sheet-editor" ref={rootRef} style={{ "--zoom": zoom } as CSSProperties}>
       {/* One sticky block, so the selection line stays under the toolbar
           however many rows the toolbar wraps onto. */}
       <div className="sheet-editor-head">
-      {showLayer && (
         <div className="sheet-editor-bar">
           {!editing ? (
             <>
-              <button type="button" className="editor-btn primary" onClick={() => setEditRequested(true)}
-                title="Move or retype note names, draw, highlight and add notes">
+              <button type="button" className="editor-btn primary" onClick={() => setEditing(true)}
+                title={showNames ? "Move or retype note names, draw, highlight and add notes" : "Draw, highlight and add notes"}>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l1-4L16 5l3 3L8 19z" /></svg>
                 Edit sheet
               </button>
               {!isEmptyEdits(doc) && <span className="editor-status">Showing your changes</span>}
-              {!labelsLive && <span className="editor-status">Names on this sheet can&apos;t be moved; you can still draw and add notes.</span>}
+              {variant === "annotated" && !labelsLive && <span className="editor-status">Names on this sheet can&apos;t be moved; you can still draw and add notes.</span>}
+              <div className="bar-end">
+                {resetControl}
+                {zoomControls}
+              </div>
             </>
           ) : (
             <>
@@ -434,80 +612,101 @@ export function SheetEditor({ jobId, variant, exportRef }: {
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 7l5 5-5 5M20 12H9a5 5 0 000 10h2" /></svg>
                   <span>Redo</span>
                 </button>
-                <button type="button" className="editor-btn" disabled={isEmptyEdits(doc)}
-                  title="Remove all your changes to this sheet"
-                  onClick={() => {
-                    if (window.confirm("Remove all your changes to this sheet? This includes moved and retyped names, drawings, notes and playback fixes.")) {
-                      update(() => EMPTY_EDITS);
-                      setSelection(null);
-                    }
-                  }}>
-                  <span>Reset all</span>
-                </button>
+                {resetControl}
               </div>
               <span className="editor-status" aria-live="polite">{SAVE_TEXT[edits.saveState]}</span>
-              <button type="button" className="editor-btn primary done" onClick={stopEditing}>Done</button>
+              <div className="bar-end">
+                {zoomControls}
+                <button type="button" className="editor-btn primary" onClick={stopEditing}>Done</button>
+              </div>
             </>
           )}
         </div>
-      )}
 
-      {editing && (selection || edits.notice) && (
-        <div className="sheet-editor-sub">
-          {selectedLabel && selectedResolved && (
-            <>
-              <span>
-                Note name <strong>{selectedResolved.text}</strong>
-                {selectedLabel.notes.length > 0 ? " · linked to playback" : " · not linked to playback"}
+        {showSub && (
+          <div className="sheet-editor-sub">
+            {editing && single && selectedLabel && selectedResolved && (
+              <>
+                <span>
+                  Note name <strong>{selectedResolved.text}</strong>
+                  {selectedLabel.notes.length > 0 ? " · linked to playback" : " · not linked to playback"}
+                </span>
+                <button type="button" className="editor-link" onClick={() => openInlineFor(single)}>Retype</button>
+                {chord.length > 1 && (
+                  <button type="button" className="editor-link"
+                    onClick={() => setSelection(chord.map((l) => ({ kind: "label" as const, id: l.id })))}>
+                    Select chord ({chord.length})
+                  </button>
+                )}
+                <button type="button" className="editor-link" onClick={deleteSelection}>Hide</button>
+                {doc.labels[selectedLabel.id] && (
+                  <button type="button" className="editor-link" onClick={() => resetLabels([selectedLabel.id])}>Reset</button>
+                )}
+              </>
+            )}
+            {editing && single?.kind === "text" && (
+              <>
+                <span>Text note</span>
+                <button type="button" className="editor-link" onClick={() => openInlineFor(single)}>Edit</button>
+                <button type="button" className="editor-link" onClick={deleteSelection}>Delete</button>
+              </>
+            )}
+            {editing && single?.kind === "stroke" && (
+              <>
+                <span>Drawing</span>
+                <button type="button" className="editor-link" onClick={deleteSelection}>Delete</button>
+              </>
+            )}
+            {editing && visibleSelection.length > 1 && (
+              <>
+                <span><strong>{visibleSelection.length}</strong> selected · drag any of them to move them together</span>
+                <button type="button" className="editor-link" onClick={deleteSelection}>
+                  {selectedLabelIds.length === visibleSelection.length ? "Hide" : "Hide / delete"}
+                </button>
+                {selectedLabelIds.some((id) => doc.labels[id]) && (
+                  <button type="button" className="editor-link" onClick={() => resetLabels(selectedLabelIds)}>Reset names</button>
+                )}
+                <button type="button" className="editor-link" onClick={() => setSelection([])}>Clear</button>
+              </>
+            )}
+            {editing && !visibleSelection.length && tool === "select" && !edits.notice && (
+              <span className="editor-hint">
+                Click to select · Shift- or Ctrl-click, or drag a box, to select several · double-click a name to retype it
+                {variant === "original" && labelsLive && " · note names are edited in the Annotated view"}
               </span>
-              <button type="button" className="editor-link" onClick={() => {
-                const pageEl = document.querySelector<SVGSVGElement>(`.sheet-page[data-page="${selectedLabel.page}"] svg.annotation-layer`);
-                if (pageEl) openInline({ kind: "label", id: selectedLabel.id, page: selectedLabel.page,
-                  pxPerPt: pageEl.getBoundingClientRect().width / pageEl.viewBox.baseVal.width });
-              }}>Retype</button>
-              <button type="button" className="editor-link" onClick={deleteSelection}>Hide</button>
-              {doc.labels[selectedLabel.id] && (
-                <button type="button" className="editor-link" onClick={() => resetLabel(selectedLabel.id)}>Reset</button>
-              )}
-            </>
-          )}
-          {selection?.kind === "text" && (
-            <>
-              <span>Text note</span>
-              <button type="button" className="editor-link" onClick={deleteSelection}>Delete</button>
-            </>
-          )}
-          {selection?.kind === "stroke" && (
-            <>
-              <span>Drawing</span>
-              <button type="button" className="editor-link" onClick={deleteSelection}>Delete</button>
-            </>
-          )}
-          {edits.notice && (
-            <span className="editor-notice">
-              {edits.notice}
-              <button type="button" className="editor-link" onClick={edits.clearNotice} aria-label="Dismiss">✕</button>
-            </span>
-          )}
-        </div>
-      )}
+            )}
+            {edits.notice && (
+              <span className="editor-notice">
+                {edits.notice}
+                {resetNotice === edits.notice && (
+                  <button type="button" className="editor-link" onClick={() => { undo(); edits.clearNotice(); }}>
+                    Undo
+                  </button>
+                )}
+                <button type="button" className="editor-link" onClick={edits.clearNotice}
+                  aria-label="Dismiss">✕</button>
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       <PdfPages
         pdfData={base}
-        renderOverlay={showLayer ? (page) => (
+        renderScale={Math.min(4, Math.max(2, Math.round(renderZoom * 4) / 2))}
+        renderOverlay={(page) => (
           <>
             <AnnotationLayer
               page={page}
-              labels={labelsLive ? labelsByPage.get(page.pageNumber) ?? [] : []}
+              labels={showNames ? labelsByPage.get(page.pageNumber) ?? [] : []}
               labelColor={labelColor}
-              showLabels={labelsLive}
+              showLabels={showNames}
               edits={doc}
               editor={hooks}
             />
             {renderInline(page)}
           </>
-        ) : undefined}
+        )}
       />
     </div>
   );

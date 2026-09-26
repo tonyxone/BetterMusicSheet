@@ -8,15 +8,17 @@
 // all, which is why both render through pdf.js instead.
 //
 // Two passes, deliberately: open the document and lay out one <canvas> per
-// page first, then rasterize into those mounted canvases. Rendering into
-// detached canvases and handing them to React afterwards fights React over
-// the DOM and leaves pdf.js working on an unattached element.
+// page first, then fill those mounted canvases. Handing React canvases made
+// elsewhere fights React over the DOM; here React owns the visible canvases
+// and only their pixels are replaced.
 
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { isMissingBrowserFeature } from "@/lib/browser-support";
 import { openPdf, type PdfDoc } from "@/lib/pdfjs";
 
-const RENDER_SCALE = 2; // rasterize above CSS size so the sheet stays sharp
+// Rasterize above CSS size so the sheet stays sharp; callers that zoom pass
+// a higher scale for the zoomed size.
+const DEFAULT_RENDER_SCALE = 2;
 
 /** A failure to show, and whether the reader can do anything about it. */
 type ViewerError = { unsupported: boolean };
@@ -30,9 +32,6 @@ function describe(err: unknown): ViewerError {
 
 export type PageInfo = {
   pageNumber: number;
-  /** Backing-store size, in device pixels. */
-  pixelWidth: number;
-  pixelHeight: number;
   /** Page size in PDF points - the space timeline bboxes live in. */
   widthPt: number;
   heightPt: number;
@@ -43,12 +42,15 @@ export function PdfPages({
   renderOverlay,
   onPageClick,
   containerRef,
+  renderScale = DEFAULT_RENDER_SCALE,
 }: {
   pdfData: ArrayBuffer;
   /** Drawn inside each page's positioning box, above the canvas. */
   renderOverlay?: (page: PageInfo) => ReactNode;
   onPageClick?: (page: PageInfo, e: React.MouseEvent<HTMLDivElement>) => void;
   containerRef?: RefObject<HTMLDivElement | null>;
+  /** Device pixels per PDF point to rasterize at. */
+  renderScale?: number;
 }) {
   const [pages, setPages] = useState<PageInfo[]>([]);
   const [error, setError] = useState<ViewerError | null>(null);
@@ -69,12 +71,9 @@ export function PdfPages({
         for (let n = 1; n <= doc.numPages; n++) {
           const page = await doc.getPage(n);
           if (cancelled) return;
-          const viewport = page.getViewport({ scale: RENDER_SCALE });
           const view = page.view; // [x0, y0, x1, y1] of the un-rotated page box
           infos.push({
             pageNumber: n,
-            pixelWidth: Math.floor(viewport.width),
-            pixelHeight: Math.floor(viewport.height),
             widthPt: view[2] - view[0],
             heightPt: view[3] - view[1],
           });
@@ -90,7 +89,10 @@ export function PdfPages({
     };
   }, [pdfData]);
 
-  // Second pass: the canvases exist in the DOM now, so rasterize into them.
+  // Second pass: the canvases exist in the DOM now, so rasterize into them -
+  // and again whenever the scale changes. Each page is drawn offscreen and
+  // swapped in whole, so re-rendering for a new zoom never blanks a page
+  // while it draws.
   useEffect(() => {
     const doc = docRef.current;
     if (!pages.length || !doc) return;
@@ -102,15 +104,21 @@ export function PdfPages({
       for (const info of pages) {
         if (cancelled) return;
         const canvas = canvasRefs.current.get(info.pageNumber);
-        const ctx = canvas?.getContext("2d");
-        if (!ctx) continue;
+        if (!canvas) continue;
         try {
           const page = await doc.getPage(info.pageNumber);
           if (cancelled) return;
-          const viewport = page.getViewport({ scale: RENDER_SCALE });
-          const task = page.render({ canvasContext: ctx, viewport });
+          const viewport = page.getViewport({ scale: renderScale });
+          const offscreen = document.createElement("canvas");
+          offscreen.width = Math.floor(viewport.width);
+          offscreen.height = Math.floor(viewport.height);
+          const task = page.render({ canvasContext: offscreen.getContext("2d")!, viewport });
           tasks.push(task);
           await task.promise;
+          if (cancelled) return;
+          canvas.width = offscreen.width;
+          canvas.height = offscreen.height;
+          canvas.getContext("2d")?.drawImage(offscreen, 0, 0);
         } catch (err) {
           // A cancelled render rejects on unmount; that is not a failure.
           if (!cancelled) setError(describe(err));
@@ -130,7 +138,7 @@ export function PdfPages({
         }
       });
     };
-  }, [pages]);
+  }, [pages, renderScale]);
 
   if (error) {
     // An old browser is worth saying out loud: it is the reader's to fix, and
@@ -168,8 +176,9 @@ export function PdfPages({
           onClick={onPageClick ? (e) => onPageClick(page, e) : undefined}
         >
           <canvas
-            width={page.pixelWidth}
-            height={page.pixelHeight}
+            // Sized by the page's own proportions until the first render
+            // lands, so the layout doesn't jump when it does.
+            style={{ aspectRatio: `${page.widthPt} / ${page.heightPt}` }}
             ref={(el) => {
               if (el) canvasRefs.current.set(page.pageNumber, el);
               else canvasRefs.current.delete(page.pageNumber);

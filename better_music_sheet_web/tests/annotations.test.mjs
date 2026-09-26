@@ -126,3 +126,25 @@ test('stroke thinning keeps the ends and the corners', () => {
   assert.deepEqual(Array.from(thin), [0, 0, 50, 0, 50, 50]);
   assert.match(ink.strokePath(thin), /^M 0 0 Q 50 0 50 25 L 50 50$/);
 });
+
+test('a selection of names, notes and drawings moves together', () => {
+  const before = {
+    ...edits.EMPTY_EDITS,
+    labels: { L1: { dx: 1, text: 'D' } },
+    texts: [{ id: 't1', page: 1, x: 10, y: 20, text: 'hi', size: 10, color: '#000000' },
+      { id: 't2', page: 1, x: 50, y: 50, text: 'stay', size: 10, color: '#000000' }],
+    strokes: [{ id: 's1', page: 2, tool: 'pen', color: '#000000', width: 1, points: [0, 0, 4, 4] }],
+  };
+  const moved = edits.moveItems(before, [
+    { kind: 'label', id: 'L1' }, { kind: 'label', id: 'L2' },
+    { kind: 'text', id: 't1' }, { kind: 'stroke', id: 's1' },
+  ], 2, -3);
+  assert.deepEqual({ ...moved.labels.L1 }, { dx: 3, dy: -3, text: 'D' });
+  assert.deepEqual({ ...moved.labels.L2 }, { dx: 2, dy: -3 });
+  assert.equal(moved.texts[0].x, 12);
+  assert.equal(moved.texts[0].y, 17);
+  assert.equal(moved.texts[1].x, 50);
+  assert.deepEqual(Array.from(moved.strokes[0].points), [2, -3, 6, 1]);
+  // The state it started from is left alone, so undo can return to it.
+  assert.equal(before.texts[0].x, 10);
+});

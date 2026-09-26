@@ -6,17 +6,18 @@
 // labels and the timeline already use, and it scales with the canvas.
 //
 // Read-only unless an `editor` is passed, in which case it also takes the
-// pointer: dragging names and notes, drawing, erasing.
+// pointer: selecting (one item, several, or everything inside a dragged
+// box), moving the selection together, drawing, erasing.
 
 import { useRef, useState } from "react";
 import type { LabelItem } from "@/lib/labels";
-import { resolveLabel, type SheetEdits } from "@/lib/edits";
+import { itemKey, moveItems, newId, resolveLabel, type ItemKind, type SelectedItem, type SheetEdits } from "@/lib/edits";
 import { simplify, strokePath } from "@/lib/ink";
-import { newId } from "@/lib/edits";
 import type { PageInfo } from "./pdf-pages";
 
 export type Tool = "select" | "text" | "pen" | "highlighter" | "eraser";
-export type Selection = { kind: "label" | "text" | "stroke"; id: string } | null;
+export type { ItemKind, SelectedItem };
+export { itemKey, moveItems };
 export type InlineTarget = { kind: "label" | "text"; id: string; page: number; pxPerPt: number; isNew?: boolean };
 
 export const PEN_WIDTH = 1.2;
@@ -30,8 +31,8 @@ export type EditorHooks = {
   penColor: string;
   highlightColor: string;
   textColor: string;
-  selection: Selection;
-  select: (s: Selection) => void;
+  selection: SelectedItem[];
+  select: (items: SelectedItem[]) => void;
   update: (fn: (d: SheetEdits) => SheetEdits, options?: { transient?: boolean; before?: SheetEdits }) => void;
   current: () => SheetEdits | null;
   /** The item under the inline text box, hidden while it is open. */
@@ -44,14 +45,8 @@ function approxWidth(text: string, size: number) {
   return Math.max(1, [...text].length) * size * 0.62;
 }
 
-type Drag = {
-  kind: "label" | "text" | "stroke";
-  ids: string[];
-  startX: number;
-  startY: number;
-  before: SheetEdits;
-  moved: boolean;
-};
+type Drag = { items: SelectedItem[]; startX: number; startY: number; before: SheetEdits; moved: boolean };
+type Marquee = { x0: number; y0: number; x1: number; y1: number; additive: boolean; base: SelectedItem[] };
 
 export function AnnotationLayer({
   page,
@@ -71,8 +66,10 @@ export function AnnotationLayer({
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [draft, setDraft] = useState<number[] | null>(null);
+  const [marquee, setMarquee] = useState<Marquee | null>(null);
   const drawing = useRef<number[] | null>(null);
   const drag = useRef<Drag | null>(null);
+  const boxing = useRef<Marquee | null>(null);
   const erasing = useRef<{ before: SheetEdits; removed: boolean } | null>(null);
 
   const w = page.widthPt;
@@ -83,7 +80,8 @@ export function AnnotationLayer({
     ? labels.map((item) => resolveLabel(item, edits)).filter((l) => l !== null)
     : [];
   const interactive = !!editor;
-  const selection = editor?.selection ?? null;
+  const selectedKeys = new Set((editor?.selection ?? []).map(itemKey));
+  const isSelected = (kind: ItemKind, id: string) => selectedKeys.has(`${kind}:${id}`);
   const tool = editor?.tool ?? "select";
 
   function toPt(e: { clientX: number; clientY: number }) {
@@ -95,10 +93,49 @@ export function AnnotationLayer({
     return svgRef.current!.getBoundingClientRect().width / w;
   }
 
-  function targetOf(el: EventTarget | null) {
+  function targetOf(el: EventTarget | null): SelectedItem | null {
     const node = (el as Element | null)?.closest?.("[data-kind]");
     if (!node || !svgRef.current?.contains(node)) return null;
-    return { kind: node.getAttribute("data-kind") as Drag["kind"], id: node.getAttribute("data-id")! };
+    return { kind: node.getAttribute("data-kind") as ItemKind, id: node.getAttribute("data-id")! };
+  }
+
+  function nearest(x: number, y: number, radius: number): SelectedItem | null {
+    let best: SelectedItem | null = null;
+    let bestDistance = radius;
+    for (const l of resolved) {
+      const d = Math.hypot(l.x - x, l.y - l.size * 0.35 - y);
+      if (d < bestDistance) {
+        bestDistance = d;
+        best = { kind: "label", id: l.id };
+      }
+    }
+    for (const t of texts) {
+      const d = Math.hypot(t.x + approxWidth(t.text, t.size * 0.9) / 2 - x, t.y - t.size * 0.35 - y);
+      if (d < bestDistance) {
+        bestDistance = d;
+        best = { kind: "text", id: t.id };
+      }
+    }
+    return best;
+  }
+
+  /** Items whose centre lies inside the box. */
+  function itemsIn(m: Marquee): SelectedItem[] {
+    const x0 = Math.min(m.x0, m.x1), x1 = Math.max(m.x0, m.x1);
+    const y0 = Math.min(m.y0, m.y1), y1 = Math.max(m.y0, m.y1);
+    const inside = (x: number, y: number) => x >= x0 && x <= x1 && y >= y0 && y <= y1;
+    const found: SelectedItem[] = [];
+    for (const l of resolved) if (inside(l.x, l.y - l.size * 0.35)) found.push({ kind: "label", id: l.id });
+    for (const t of texts) {
+      if (inside(t.x + approxWidth(t.text, t.size * 0.9) / 2, t.y - t.size * 0.35)) found.push({ kind: "text", id: t.id });
+    }
+    for (const s of strokes) {
+      const xs = s.points.filter((_, i) => i % 2 === 0), ys = s.points.filter((_, i) => i % 2 === 1);
+      if (inside((Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2)) {
+        found.push({ kind: "stroke", id: s.id });
+      }
+    }
+    return found;
   }
 
   function eraseAt(e: React.PointerEvent) {
@@ -144,52 +181,37 @@ export function AnnotationLayer({
       // Not an undo step yet: an empty note is dropped when its box closes,
       // and a filled one is recorded then (see sheet-editor.tsx).
       editor.update((d) => ({ ...d, texts: [...d.texts, note] }), { transient: true });
-      editor.select({ kind: "text", id });
+      editor.select([{ kind: "text", id }]);
       editor.openInline({ kind: "text", id, page: page.pageNumber, pxPerPt: pxPerPt(), isNew: true });
       return;
     }
-    // Select (or text tool on an existing note): pick up what was hit - or,
-    // since a name is only a few pixels across, whatever is nearest within
-    // a fingertip's reach.
+
+    // Select (or the text tool on an existing note). A name is only a few
+    // pixels across, so a press near one counts as on it.
+    e.preventDefault();
+    svgRef.current!.setPointerCapture(e.pointerId);
+    const additive = e.shiftKey || e.ctrlKey || e.metaKey;
     const picked = hit ?? nearest(pt.x, pt.y, PICK_RADIUS_PX / pxPerPt());
     if (!picked) {
-      editor.select(null);
+      // Empty space: drag out a box to select everything inside it.
+      const m = { x0: pt.x, y0: pt.y, x1: pt.x, y1: pt.y, additive, base: additive ? editor.selection : [] };
+      boxing.current = m;
+      setMarquee(m);
       return;
     }
-    return pickUp(e, picked, pt, current);
-  }
-
-  function nearest(x: number, y: number, radius: number): { kind: Drag["kind"]; id: string } | null {
-    let best: { kind: Drag["kind"]; id: string } | null = null;
-    let bestDistance = radius;
-    for (const l of resolved) {
-      const d = Math.hypot(l.x - x, l.y - l.size * 0.35 - y);
-      if (d < bestDistance) {
-        bestDistance = d;
-        best = { kind: "label", id: l.id };
-      }
+    if (additive) {
+      // Shift/Ctrl/Cmd-click adds or removes one item, and doesn't move anything.
+      const key = itemKey(picked);
+      editor.select(selectedKeys.has(key)
+        ? editor.selection.filter((s) => itemKey(s) !== key)
+        : [...editor.selection, picked]);
+      return;
     }
-    for (const t of texts) {
-      const d = Math.hypot(t.x + approxWidth(t.text, t.size * 0.9) / 2 - x, t.y - t.size * 0.35 - y);
-      if (d < bestDistance) {
-        bestDistance = d;
-        best = { kind: "text", id: t.id };
-      }
-    }
-    return best;
-  }
-
-  function pickUp(e: React.PointerEvent<SVGSVGElement>, hit: { kind: Drag["kind"]; id: string }, pt: { x: number; y: number }, current: SheetEdits) {
-    if (!editor) return;
-    e.preventDefault();
-    editor.select({ kind: hit.kind, id: hit.id });
-    let ids = [hit.id];
-    if (hit.kind === "label" && e.shiftKey) {
-      const group = labels.find((l) => l.id === hit.id)?.group;
-      ids = labels.filter((l) => l.group === group).map((l) => l.id);
-    }
-    drag.current = { kind: hit.kind, ids, startX: pt.x, startY: pt.y, before: current, moved: false };
-    svgRef.current!.setPointerCapture(e.pointerId);
+    // Pressing on part of the selection moves all of it; on anything else,
+    // that item becomes the selection.
+    const items = selectedKeys.has(itemKey(picked)) ? editor.selection : [picked];
+    if (items !== editor.selection) editor.select(items);
+    drag.current = { items, startX: pt.x, startY: pt.y, before: current, moved: false };
   }
 
   function onPointerMove(e: React.PointerEvent<SVGSVGElement>) {
@@ -207,6 +229,12 @@ export function AnnotationLayer({
       eraseAt(e);
       return;
     }
+    if (boxing.current) {
+      const pt = toPt(e);
+      boxing.current = { ...boxing.current, x1: pt.x, y1: pt.y };
+      setMarquee(boxing.current);
+      return;
+    }
     const d = drag.current;
     if (!d) return;
     const pt = toPt(e);
@@ -214,25 +242,7 @@ export function AnnotationLayer({
     const dy = pt.y - d.startY;
     if (!d.moved && Math.hypot(dx, dy) * pxPerPt() < 3) return;
     d.moved = true;
-    editor.update(() => moved(d, dx, dy), { transient: true });
-  }
-
-  function moved(d: Drag, dx: number, dy: number): SheetEdits {
-    const b = d.before;
-    const r = (v: number) => Math.round(v * 100) / 100;
-    if (d.kind === "label") {
-      const labelsEdit = { ...b.labels };
-      for (const id of d.ids) {
-        const e = labelsEdit[id] ?? {};
-        labelsEdit[id] = { ...e, dx: r((e.dx ?? 0) + dx), dy: r((e.dy ?? 0) + dy) };
-      }
-      return { ...b, labels: labelsEdit };
-    }
-    if (d.kind === "text") {
-      return { ...b, texts: b.texts.map((t) => d.ids.includes(t.id) ? { ...t, x: r(t.x + dx), y: r(t.y + dy) } : t) };
-    }
-    return { ...b, strokes: b.strokes.map((s) => d.ids.includes(s.id)
-      ? { ...s, points: s.points.map((v, i) => r(v + (i % 2 ? dy : dx))) } : s) };
+    editor.update(() => moveItems(d.before, d.items, dx, dy), { transient: true });
   }
 
   function onPointerUp(e: React.PointerEvent<SVGSVGElement>) {
@@ -256,11 +266,26 @@ export function AnnotationLayer({
       if (removed) editor.update((d) => d, { before });
       return;
     }
+    if (boxing.current) {
+      const m = boxing.current;
+      boxing.current = null;
+      setMarquee(null);
+      const tiny = Math.hypot(m.x1 - m.x0, m.y1 - m.y0) * pxPerPt() < 4;
+      if (tiny) {
+        // A plain click on empty space clears the selection.
+        if (!m.additive) editor.select([]);
+        return;
+      }
+      const found = itemsIn(m);
+      const keys = new Set(m.base.map(itemKey));
+      editor.select([...m.base, ...found.filter((item) => !keys.has(itemKey(item)))]);
+      return;
+    }
     const d = drag.current;
     drag.current = null;
     if (d?.moved) {
       const pt = toPt(e);
-      editor.update(() => moved(d, pt.x - d.startX, pt.y - d.startY), { before: d.before });
+      editor.update(() => moveItems(d.before, d.items, pt.x - d.startX, pt.y - d.startY), { before: d.before });
     }
   }
 
@@ -269,7 +294,7 @@ export function AnnotationLayer({
     const pt = toPt(e);
     const hit = targetOf(e.target) ?? nearest(pt.x, pt.y, PICK_RADIUS_PX / pxPerPt());
     if (!hit || hit.kind === "stroke") return;
-    editor.select({ kind: hit.kind, id: hit.id });
+    editor.select([hit]);
     editor.openInline({ kind: hit.kind, id: hit.id, page: page.pageNumber, pxPerPt: pxPerPt() });
   }
 
@@ -283,7 +308,7 @@ export function AnnotationLayer({
 
   function strokeEl(s: (typeof strokes)[number]) {
     const d = strokePath(s.points);
-    const selected = selection?.kind === "stroke" && selection.id === s.id;
+    const selected = isSelected("stroke", s.id);
     return (
       <g key={s.id} data-kind="stroke" data-id={s.id}>
         {interactive && (
@@ -291,7 +316,7 @@ export function AnnotationLayer({
             strokeLinecap="round" strokeLinejoin="round" pointerEvents="stroke" />
         )}
         {selected && (
-          <path d={d} fill="none" stroke="var(--gold)" strokeWidth={s.width + 2.4} strokeOpacity={0.5}
+          <path d={d} fill="none" stroke="var(--accent)" strokeWidth={s.width + 2.4} strokeOpacity={0.35}
             strokeLinecap="round" strokeLinejoin="round" pointerEvents="none" />
         )}
         <path d={d} fill="none" stroke={s.color} strokeWidth={s.width}
@@ -320,7 +345,7 @@ export function AnnotationLayer({
       {resolved.map((l) => {
         if (l.id === inlineId) return null;
         const width = approxWidth(l.text, l.size);
-        const selected = selection?.kind === "label" && selection.id === l.id;
+        const selected = isSelected("label", l.id);
         return (
           <g key={l.id} data-kind="label" data-id={l.id}>
             {interactive && (
@@ -345,7 +370,7 @@ export function AnnotationLayer({
       {texts.map((t) => {
         if (t.id === inlineId) return null;
         const lines = t.text.split("\n");
-        const selected = selection?.kind === "text" && selection.id === t.id;
+        const selected = isSelected("text", t.id);
         const width = Math.max(...lines.map((line) => approxWidth(line, t.size * 0.9)));
         return (
           <g key={t.id} data-kind="text" data-id={t.id}>
@@ -369,6 +394,15 @@ export function AnnotationLayer({
           strokeOpacity={tool === "highlighter" ? 0.4 : 1}
           strokeWidth={tool === "highlighter" ? HIGHLIGHTER_WIDTH : PEN_WIDTH}
           strokeLinecap="round" strokeLinejoin="round" pointerEvents="none"
+        />
+      )}
+
+      {marquee && (
+        <rect
+          className="selection-box"
+          x={Math.min(marquee.x0, marquee.x1)} y={Math.min(marquee.y0, marquee.y1)}
+          width={Math.abs(marquee.x1 - marquee.x0)} height={Math.abs(marquee.y1 - marquee.y0)}
+          pointerEvents="none"
         />
       )}
     </svg>

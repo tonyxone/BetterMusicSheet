@@ -74,6 +74,32 @@ export function resolveLabel(item: LabelItem, edits: SheetEdits) {
 
 export type ResolvedLabel = NonNullable<ReturnType<typeof resolveLabel>>;
 
+// ---- selections ------------------------------------------------------------
+
+export type ItemKind = "label" | "text" | "stroke";
+export type SelectedItem = { kind: ItemKind; id: string };
+
+export const itemKey = (item: SelectedItem) => `${item.kind}:${item.id}`;
+
+/** Every selected item moved by (dx, dy) points, from the ``before`` state. */
+export function moveItems(before: SheetEdits, items: SelectedItem[], dx: number, dy: number): SheetEdits {
+  const r = (v: number) => Math.round(v * 100) / 100;
+  const keys = new Set(items.map(itemKey));
+  const labels = { ...before.labels };
+  for (const item of items) {
+    if (item.kind !== "label") continue;
+    const e = labels[item.id] ?? {};
+    labels[item.id] = { ...e, dx: r((e.dx ?? 0) + dx), dy: r((e.dy ?? 0) + dy) };
+  }
+  return {
+    ...before,
+    labels,
+    texts: before.texts.map((t) => keys.has(`text:${t.id}`) ? { ...t, x: r(t.x + dx), y: r(t.y + dy) } : t),
+    strokes: before.strokes.map((s) => keys.has(`stroke:${s.id}`)
+      ? { ...s, points: s.points.map((v, i) => r(v + (i % 2 ? dy : dx))) } : s),
+  };
+}
+
 // ---- retyped names -> playback --------------------------------------------
 
 /** The corrections implied by retyping ``item`` to ``text``: every note it

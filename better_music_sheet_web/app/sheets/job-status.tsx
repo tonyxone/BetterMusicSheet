@@ -145,7 +145,7 @@ export function JobStatus() {
             <KeyboardIcon size={44} />
           </Link>
           <DownloadMenu jobId={jobId} sheetName={job.sheet_name} originalMissing={!!originalMissing}
-            customizedRef={customizedRef} />
+            customizedRef={customizedRef} variant={variant} />
         </div>
       </div>
       <div className="preview-card">
@@ -170,11 +170,13 @@ function saveBlob(blob: Blob, filename: string) {
 // A plain <a href> can't be pointed at a fetch() call, and we want the
 // browser's "save as" filename to be the real sheet name, not the job id -
 // so fetch the bytes ourselves and hand the browser a blob URL to save.
-function DownloadMenu({ jobId, sheetName, originalMissing, customizedRef }: {
+function DownloadMenu({ jobId, sheetName, originalMissing, customizedRef, variant }: {
   jobId: string;
   sheetName?: string;
   originalMissing: boolean;
   customizedRef: MutableRefObject<CustomizedExport | null>;
+  /** Customized follows the preview: with the note names or without. */
+  variant: SheetVariant;
 }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<DownloadKind | null>(null);
@@ -225,7 +227,12 @@ function DownloadMenu({ jobId, sheetName, originalMissing, customizedRef }: {
   }
 
   const options: { kind: DownloadKind; label: string; detail: string; disabled?: boolean }[] = [
-    { kind: "customized", label: "Customized", detail: "With your moved and retyped names, drawings and notes" },
+    {
+      kind: "customized", label: "Customized",
+      detail: variant === "original"
+        ? "The original with your drawings and notes, as the preview shows it"
+        : "With your moved and retyped names, drawings and notes",
+    },
     { kind: "annotated", label: "Annotated", detail: "Note names as generated" },
     {
       kind: "original", label: "Original", disabled: originalMissing,

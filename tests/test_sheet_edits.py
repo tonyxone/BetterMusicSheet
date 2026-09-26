@@ -111,7 +111,11 @@ class DemoEditsTests(unittest.TestCase):
 
     def tearDown(self):
         self.client.close()
-        storage.delete_job_files(db.get_annotation_job(config.DEMO_JOB_ID))
+        # Only the edits file this test wrote: the demo's own files, and other
+        # readers' edits, live in the same local storage a running dev server
+        # serves the demo from.
+        job = db.get_annotation_job(config.DEMO_JOB_ID)
+        (storage._LOCAL_DIR / storage._edits_key(job, OUTSIDER)).unlink(missing_ok=True)
         db.delete_annotation_job(config.DEMO_JOB_ID)
         db.delete_music_sheet(config.DEMO_JOB_ID)
 

@@ -958,15 +958,16 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
             notes={timeline.notes}
             beat={beat}
             onMeasureClick={handleMeasureClick}
-            overlay={variant === "annotated" ? (page) => (
+            overlay={(page) => (
+              // On the Original view: the reader's own marks, without names.
               <AnnotationLayer
                 page={page}
-                labels={labelsLive ? labelSet!.items.filter((l) => l.page === page.pageNumber) : []}
+                labels={labelsLive && variant === "annotated" ? labelSet!.items.filter((l) => l.page === page.pageNumber) : []}
                 labelColor={labelSet?.color ?? "#000000"}
-                showLabels={labelsLive}
+                showLabels={labelsLive && variant === "annotated"}
                 edits={sheetEdits}
               />
-            ) : undefined}
+            )}
           />
         ) : (
           <p className="play-hint">
