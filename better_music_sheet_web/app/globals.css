@@ -898,6 +898,11 @@ textarea.sheet-inline-input { font-family: system-ui, -apple-system, "Segoe UI",
 .reset-menu { position: relative; display: inline-flex; }
 .reset-menu-list { min-width: 290px; }
 .editor-hint { font-size: 12.5px; }
+/* Drag the sheet around like a hand tool (see sheet-editor.tsx). */
+.sheet-editor.pannable .sheet-pages, .sheet-editor.pannable .annotation-layer { cursor: grab !important; }
+.sheet-editor.panning, .sheet-editor.panning .sheet-pages, .sheet-editor.panning .annotation-layer {
+  cursor: grabbing !important; user-select: none;
+}
 .selection-box { fill: rgba(168, 60, 52, 0.08); stroke: var(--accent); stroke-width: 0.6; stroke-dasharray: 2 1.5; }
 .sheet-editor-bar, .sheet-editor-sub {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px;

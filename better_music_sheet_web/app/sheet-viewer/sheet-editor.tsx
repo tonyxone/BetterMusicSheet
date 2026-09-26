@@ -123,6 +123,12 @@ export function SheetEditor({ jobId, variant, exportRef }: {
   // then the current pixels are stretched, which is cheap.
   const [renderZoom, setRenderZoom] = useState(zoom);
   const zoomAnchor = useRef<{ cx: number; cy: number; left: number; top: number; ratio: number } | null>(null);
+  // Dragging the sheet around with the mouse, like a hand tool. Outside edit
+  // mode a plain drag pans; in edit mode a drag draws or selects, so there
+  // it takes the space bar held down, or the middle button.
+  const panStart = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
+  const [panning, setPanning] = useState(false);
+  const [spaceHeld, setSpaceHeld] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -238,6 +244,66 @@ export function SheetEditor({ jobId, variant, exportRef }: {
     scroller.addEventListener("wheel", onWheel, { passive: false });
     return () => scroller.removeEventListener("wheel", onWheel);
   }, [loaded, zoomTo]);
+
+  function onPanStart(e: React.PointerEvent<HTMLDivElement>) {
+    // Touch and pens already scroll natively (outside edit mode) and draw
+    // inside it; this is for the mouse.
+    if (e.pointerType !== "mouse") return;
+    const target = e.target as HTMLElement;
+    if (target.closest(".sheet-editor-head, input, textarea, button")) return;
+    const wanted = e.button === 1 || (e.button === 0 && (!editing || spaceHeld));
+    if (!wanted) return;
+    const scroller = scrollerOf(rootRef.current);
+    if (!scroller) return;
+    // Captured before the annotation layer sees it, so a space-drag in edit
+    // mode pans instead of drawing or selecting.
+    e.preventDefault();
+    e.stopPropagation();
+    panStart.current = { x: e.clientX, y: e.clientY, left: scroller.scrollLeft, top: scroller.scrollTop };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setPanning(true);
+  }
+
+  function onPanMove(e: React.PointerEvent<HTMLDivElement>) {
+    const start = panStart.current;
+    const scroller = start && scrollerOf(rootRef.current);
+    if (!start || !scroller) return;
+    scroller.scrollLeft = start.left - (e.clientX - start.x);
+    scroller.scrollTop = start.top - (e.clientY - start.y);
+  }
+
+  function onPanEnd() {
+    if (!panStart.current) return;
+    panStart.current = null;
+    setPanning(false);
+  }
+
+  // Space held while editing turns the pointer into a hand for as long as it
+  // is down - and doesn't scroll the page the way a space press would.
+  useEffect(() => {
+    if (!editing) return;
+    function typing(e: KeyboardEvent) {
+      const el = e.target as HTMLElement | null;
+      return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+    }
+    function down(e: KeyboardEvent) {
+      if (e.code !== "Space" || typing(e)) return;
+      e.preventDefault();
+      setSpaceHeld(true);
+    }
+    function up(e: KeyboardEvent) {
+      if (e.code === "Space") setSpaceHeld(false);
+    }
+    const release = () => setSpaceHeld(false);
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    window.addEventListener("blur", release);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", release);
+    };
+  }, [editing]);
 
   const stepZoom = (direction: 1 | -1) => {
     const z = zoomRef.current;
@@ -557,7 +623,17 @@ export function SheetEditor({ jobId, variant, exportRef }: {
   const showSub = !!edits.notice || (editing && (visibleSelection.length > 0 || tool === "select"));
 
   return (
-    <div className="sheet-editor" ref={rootRef} style={{ "--zoom": zoom } as CSSProperties}>
+    <div
+      className={`sheet-editor${!editing || spaceHeld ? " pannable" : ""}${panning ? " panning" : ""}`}
+      ref={rootRef}
+      style={{ "--zoom": zoom } as CSSProperties}
+      onPointerDownCapture={onPanStart}
+      onPointerMove={onPanMove}
+      onPointerUp={onPanEnd}
+      onPointerCancel={onPanEnd}
+      // The middle button's own autoscroll would fight the drag.
+      onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
+    >
       {/* One sticky block, so the selection line stays under the toolbar
           however many rows the toolbar wraps onto. */}
       <div className="sheet-editor-head">
@@ -671,7 +747,7 @@ export function SheetEditor({ jobId, variant, exportRef }: {
             )}
             {editing && !visibleSelection.length && tool === "select" && !edits.notice && (
               <span className="editor-hint">
-                Click to select · Shift- or Ctrl-click, or drag a box, to select several · double-click a name to retype it
+                Click to select · Shift- or Ctrl-click, or drag a box, to select several · double-click a name to retype it · hold Space and drag to move around
                 {variant === "original" && labelsLive && " · note names are edited in the Annotated view"}
               </span>
             )}
