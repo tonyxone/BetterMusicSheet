@@ -24,6 +24,7 @@ APPLE_USER = "44444444-4444-4444-8444-444444444444"
 FIRST_TIME_USER = "33333333-3333-4333-8333-333333333333"
 REJOINING_USER = "22222222-2222-4222-8222-222222222222"
 CROSS_USER = "11111111-1111-4111-8111-111111111111"
+MASTER_USER = "00000000-0000-4000-8000-000000000000"
 
 
 def apple_jws(payload):
@@ -126,7 +127,7 @@ class SubscriptionTests(unittest.TestCase):
         self.assertEqual(response.json(), {
             "tier": "free", "plan": None, "status": None, "started_at": None,
             "current_period_end": None, "cancel_at_period_end": False,
-            "platform": None, "trial_eligible": True,
+            "platform": None, "trial_eligible": True, "master": False,
         })
 
     def test_subscription_endpoint_returns_active_entitlement(self):
@@ -138,7 +139,7 @@ class SubscriptionTests(unittest.TestCase):
         self.assertEqual(response.json(), {
             "tier": "premium", "plan": "yearly", "status": "active", "started_at": None,
             "current_period_end": 2_000_000_000, "cancel_at_period_end": True,
-            "platform": "apple", "trial_eligible": False,
+            "platform": "apple", "trial_eligible": False, "master": False,
         })
 
     def test_scheduled_cancellation_is_free_once_its_period_has_ended(self):
@@ -158,6 +159,48 @@ class SubscriptionTests(unittest.TestCase):
     def test_trialing_passes_premium_dependency(self):
         db.upsert_subscription(USER, "trialing", "monthly", "stripe", 100, 200, False)
         self.assertEqual(auth.require_premium(authorization=self.headers()["Authorization"]), USER)
+
+    def test_master_user_is_premium_without_a_subscription(self):
+        db.add_master_user(MASTER_USER)
+        self.addCleanup(db.remove_master_user, MASTER_USER)
+        response = self.client.get("/api/me/subscription", headers=self.headers(MASTER_USER))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {
+            "tier": "premium", "plan": None, "status": None, "started_at": None,
+            "current_period_end": None, "cancel_at_period_end": False,
+            "platform": None, "trial_eligible": True, "master": True,
+        })
+        self.assertEqual(auth.require_premium(authorization=self.headers(MASTER_USER)["Authorization"]), MASTER_USER)
+
+    def test_master_user_keeps_its_own_subscription_fields(self):
+        db.add_master_user(MASTER_USER)
+        self.addCleanup(db.remove_master_user, MASTER_USER)
+        db.upsert_subscription(MASTER_USER, "active", "yearly", "stripe", 100, 2_000_000_000, False,
+                               subscription_id="sub_master")
+        self.addCleanup(db._subscriptions.pop, MASTER_USER, None)
+        entitlement = auth.get_entitlement(MASTER_USER)
+        self.assertEqual((entitlement["tier"], entitlement["platform"], entitlement["master"]),
+                         ("premium", "stripe", True))
+
+    def test_master_status_is_not_a_subscription(self):
+        # Billing checks still see no subscription: nothing to cancel, and a
+        # real subscription may still be recorded.
+        db.add_master_user(MASTER_USER)
+        self.addCleanup(db.remove_master_user, MASTER_USER)
+        self.assertFalse(auth.has_active_subscription(MASTER_USER))
+        response = self.client.post("/api/subscriptions/cancel", json={"platform": "stripe"},
+                                    headers=self.headers(MASTER_USER))
+        self.assertEqual(response.status_code, 404)
+
+    def test_removing_a_master_user_revokes_the_bypass(self):
+        db.add_master_user(MASTER_USER)
+        db.remove_master_user(MASTER_USER)
+        self.assertEqual(auth.get_entitlement(MASTER_USER)["tier"], "free")
+
+    def test_a_guest_id_is_never_a_master_user(self):
+        db.add_master_user(GUEST)
+        self.addCleanup(db.remove_master_user, GUEST)
+        self.assertEqual(auth.get_entitlement(GUEST, is_guest=True)["tier"], "free")
 
     def checkout(self, user_id):
         stripe, settings = self.stripe()
@@ -232,7 +275,7 @@ class SubscriptionTests(unittest.TestCase):
         self.assertEqual(response.json(), {
             "tier": "premium", "plan": "yearly", "status": "active", "started_at": 90,
             "current_period_end": 2_000_000_000, "cancel_at_period_end": False,
-            "platform": "stripe",
+            "platform": "stripe", "master": False,
         })
         stripe.checkout.Session.retrieve.assert_called_once_with("cs_test_123", expand=["subscription"])
 

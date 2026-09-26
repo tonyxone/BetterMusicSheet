@@ -71,20 +71,16 @@ BACKEND_JWT_LIFETIME_SECONDS = 3600
 GUEST_USER_ID = "guest"
 
 
-def get_entitlement(user_id, is_guest=False):
-    """Return the account's subscription fields, or the free entitlement.
+_FREE_ENTITLEMENT = {
+    "tier": "free", "plan": None, "status": None,
+    "started_at": None, "current_period_end": None,
+    "cancel_at_period_end": False, "platform": None,
+}
 
-    Guest identifiers are intentionally never looked up: they identify
-    anonymous uploads, not an account that can own a subscription.
-    """
-    free = {
-        "tier": "free", "plan": None, "status": None,
-        "started_at": None, "current_period_end": None,
-        "cancel_at_period_end": False, "platform": None,
-    }
-    if is_guest:
-        return free
 
+def _subscription_entitlement(user_id):
+    """The entitlement the account's own subscription record grants."""
+    free = dict(_FREE_ENTITLEMENT)
     from db import get_subscription
     subscription = get_subscription(user_id)
     if subscription is None or subscription["status"] not in ("active", "trialing"):
@@ -107,12 +103,39 @@ def get_entitlement(user_id, is_guest=False):
         "platform": subscription["platform"],
     }
 
+
+def get_entitlement(user_id, is_guest=False):
+    """Return the account's subscription fields, or the free entitlement.
+
+    Guest identifiers are intentionally never looked up: they identify
+    anonymous uploads, not an account that can own a subscription.
+
+    A master user (a row in the master users table) is premium whatever its
+    subscription says - the web app and the iOS app both unlock on `tier`
+    alone, so this is the one place the bypass needs to live. `master` tells
+    the clients why, so they don't offer to manage a subscription that isn't
+    there. A master user who also subscribed keeps that subscription's
+    fields, so it can still be seen and cancelled.
+    """
+    if is_guest:
+        return {**_FREE_ENTITLEMENT, "master": False}
+
+    entitlement = _subscription_entitlement(user_id)
+    from db import is_master_user
+    master = is_master_user(user_id)
+    if master and entitlement["tier"] == "free":
+        entitlement = {**entitlement, "tier": "premium"}
+    return {**entitlement, "master": master}
+
+
 def has_active_subscription(user_id):
     """Whether the account is subscribed right now, through either store.
 
     A subscription bought on the web (Stripe) or in the iOS app (Apple)
-    unlocks the account everywhere; nothing downstream cares which."""
-    return get_entitlement(user_id)["tier"] == "premium"
+    unlocks the account everywhere; nothing downstream cares which. Master
+    status doesn't count here: this is about billing (whether a checkout
+    would double-charge, whether a record may be overwritten), not access."""
+    return _subscription_entitlement(user_id)["tier"] == "premium"
 
 
 def can_record_subscription(user_id, platform, subscription_id):

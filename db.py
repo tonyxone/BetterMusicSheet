@@ -9,7 +9,8 @@ uploading a new one is the one thing that now requires signing in - see
 server.py), keyed by whichever id identified the request.
 
 Subscriptions are the exception: they use DynamoDB whenever
-SUBSCRIPTIONS_TABLE is set, local dev included (see the block at the end).
+SUBSCRIPTIONS_TABLE is set, local dev included (see the block near the end),
+and so do master users whenever MASTER_USERS_TABLE is set (the last block).
 
 Wherever DynamoDB is used, its Decimal numbers are converted to int/float so
 callers (server.py) never touch boto3 types directly.
@@ -18,7 +19,7 @@ import threading
 import time
 from decimal import Decimal
 
-from config import IS_PRODUCTION, SUBSCRIPTIONS_TABLE
+from config import IS_PRODUCTION, MASTER_USERS_TABLE, SUBSCRIPTIONS_TABLE
 
 
 _SUBSCRIPTION_STATUSES = {"trialing", "active", "canceled", "expired", "past_due"}
@@ -419,3 +420,44 @@ if SUBSCRIPTIONS_TABLE:
             ExpressionAttributeNames=names,
             ExpressionAttributeValues=values,
         )
+
+
+# ---- master users: accounts that bypass every subscription check ----
+#
+# The table holds nothing but user_id: a row's presence is the whole grant
+# (see auth.get_entitlement). Rows are added and removed by hand, in the AWS
+# console or CLI - no endpoint writes them. Without a table (local dev and
+# tests by default) the set starts empty; add_master_user exists for tests.
+if MASTER_USERS_TABLE:
+    import os
+
+    import boto3
+
+    _master_users_table = boto3.resource(
+        "dynamodb", region_name=os.environ.get("AWS_REGION", "us-west-1"),
+    ).Table(MASTER_USERS_TABLE)
+
+    def is_master_user(user_id):
+        return "Item" in _master_users_table.get_item(Key={"user_id": user_id})
+
+    def add_master_user(user_id):
+        _master_users_table.put_item(Item={"user_id": user_id})
+
+    def remove_master_user(user_id):
+        _master_users_table.delete_item(Key={"user_id": user_id})
+
+else:
+    _master_users = set()
+    _master_users_lock = threading.Lock()
+
+    def is_master_user(user_id):
+        with _master_users_lock:
+            return user_id in _master_users
+
+    def add_master_user(user_id):
+        with _master_users_lock:
+            _master_users.add(user_id)
+
+    def remove_master_user(user_id):
+        with _master_users_lock:
+            _master_users.discard(user_id)

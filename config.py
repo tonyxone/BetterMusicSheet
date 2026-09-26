@@ -45,12 +45,15 @@ def _load_dotenv():
 
 _loaded_from_dotenv = _load_dotenv()
 
-# A .env SUBSCRIPTIONS_TABLE points the local backend at the real table (see
-# db.py). The test suite reads the same .env and writes subscriptions freely,
-# so under a test runner that value is dropped and tests stay in memory. A test
+# A .env SUBSCRIPTIONS_TABLE (or MASTER_USERS_TABLE) points the local backend
+# at the real table (see db.py). The test suite reads the same .env and writes
+# these freely, so under a test runner those values are dropped and tests stay
+# in memory. A test
 # that sets the variable itself (test_serverless.py) is unaffected.
-if "SUBSCRIPTIONS_TABLE" in _loaded_from_dotenv and ("unittest" in sys.modules or "pytest" in sys.modules):
-    del os.environ["SUBSCRIPTIONS_TABLE"]
+if "unittest" in sys.modules or "pytest" in sys.modules:
+    for _key in ("SUBSCRIPTIONS_TABLE", "MASTER_USERS_TABLE"):
+        if _key in _loaded_from_dotenv:
+            del os.environ[_key]
 
 APP_ENV = os.environ.get("APP_ENV", "local")
 IS_PRODUCTION = APP_ENV == "production"
@@ -75,6 +78,11 @@ if IS_PRODUCTION:
     SUBSCRIPTIONS_TABLE = os.environ["SUBSCRIPTIONS_TABLE"]
 else:
     SUBSCRIPTIONS_TABLE = os.environ.get("SUBSCRIPTIONS_TABLE")
+
+# Master users bypass every subscription check (see auth.get_entitlement).
+# Optional everywhere: without a table nobody is a master user, so a deploy
+# that ships this code ahead of the table still starts.
+MASTER_USERS_TABLE = os.environ.get("MASTER_USERS_TABLE")
 
 # Stripe is optional until somebody starts a checkout, cancels a subscription,
 # or Stripe calls the webhook. Keeping these nullable lets the rest of the API
