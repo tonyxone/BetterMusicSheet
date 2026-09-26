@@ -39,8 +39,11 @@ def seed():
             # gone, but nothing downstream needs it - storage keys are rebuilt
             # from the stem alone.
             sheet_name = pdf.name[: -len(SUFFIX)] + ".pdf"
-            sheet_id = uuid.uuid4().hex
-            job_id = uuid.uuid4().hex
+            # Derived from the file, not random: a reader's saved edits are
+            # stored under the job id, so they must find the same sheet again
+            # after a restart.
+            sheet_id = uuid.uuid5(uuid.NAMESPACE_URL, f"sheet/{user_id}/{sheet_name}").hex
+            job_id = uuid.uuid5(uuid.NAMESPACE_URL, f"job/{user_id}/{sheet_name}").hex
             db.create_music_sheet(sheet_id, user_id, sheet_name)
             db.create_annotation_job(job_id, user_id, sheet_id, "unicode", False, 6.5, None, True)
             db.update_annotation_job(job_id, status="done", labeled_groups=0)

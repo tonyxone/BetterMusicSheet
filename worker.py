@@ -193,9 +193,11 @@ def process_job(job_id, extend=lambda: None, runner=run_processor):
             output_key = storage.publish(job, "output", directory / "annotated.pdf")
             timeline = directory / "timeline.json"
             timeline_key = storage.publish(job, "timeline", timeline) if timeline.exists() else None
+            labels = directory / "labels.json"
+            labels_key = storage.publish(job, "labels", labels) if labels.exists() else None
             check()
             job_state.finish(job, status="done", labeled_groups=count, output_key=output_key,
-                             timeline_key=timeline_key, stage="Complete", error=None)
+                             timeline_key=timeline_key, labels_key=labels_key, stage="Complete", error=None)
         return True
     except job_state.LeaseLost:
         return False

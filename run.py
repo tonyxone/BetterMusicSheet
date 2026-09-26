@@ -758,13 +758,18 @@ def recognition_quality(omr_path, mxl_path, page, single_page=False):
 
 
 def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font_size=6.5,
-                  dpi=None, auto_retry=True, log=print, timeline_path=None, color="#000000"):
+                  dpi=None, auto_retry=True, log=print, timeline_path=None, color="#000000",
+                  labels_path=None):
     """Run the full PDF -> Audiveris OMR -> annotated PDF pipeline. Shared by the
     CLI (main(), below) and the web API (server.py) so the two stay in sync.
 
     ``timeline_path``: optional path to also write the playback timeline JSON
     (see timeline.py). Best-effort - a failure there is logged and ignored, so
     a bug in the playback data can never cost someone their annotated PDF.
+
+    ``labels_path``: optional path to also write the placed labels as JSON
+    (see label_export.py), for the web viewer's editable label layer. Also
+    best-effort, for the same reason.
 
     Returns the number of labeled beat-groups written to ``output``.
     """
@@ -814,6 +819,7 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
     records = build_records(str(pdf_path), str(omr), num_pages, style=style, octave=octave,
                              page_omr_overrides=page_overrides, resolved_notes=resolved)
 
+    tl = None
     if timeline_path is not None:
         try:
             import json
@@ -828,7 +834,16 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
             log(f"[2b/3] Timeline build failed, Play mode unavailable for this sheet: {e}")
 
     log(f"[3/3] Rendering {output} ...")
-    render(str(pdf_path), str(output), records, font_size=font_size, color=color)
+    placed = render(str(pdf_path), str(output), records, font_size=font_size, color=color)
+    if labels_path is not None:
+        try:
+            import json
+
+            from label_export import labels_document
+            Path(labels_path).write_text(json.dumps(labels_document(
+                placed, tl, font_size=font_size, color=color), ensure_ascii=False), encoding="utf-8")
+        except Exception as e:
+            log(f"Label export failed, label editing unavailable for this sheet: {e}")
     log(f"Done: {output} ({len(records)} labeled beat-groups)")
     return len(records)
 
@@ -845,6 +860,8 @@ def main():
     ap.add_argument("--work-dir", default="output")
     ap.add_argument("--timeline", default=None,
                      help="Also write the playback timeline JSON here (see timeline.py).")
+    ap.add_argument("--labels", default=None,
+                     help="Also write the placed labels as JSON here (see label_export.py).")
     ap.add_argument("--dpi", type=int, default=None,
                      help="Override Audiveris's PDF rasterization DPI (default: Audiveris's own, "
                           "normally 300). Worth raising only for scans or miniature engraving, where "
@@ -861,7 +878,7 @@ def main():
 
     annotate_pdf(pdf_path, output, args.work_dir, style=args.style, octave=args.octave,
                  font_size=args.font_size, dpi=args.dpi, auto_retry=not args.no_auto_retry,
-                 timeline_path=args.timeline, color=args.color)
+                 timeline_path=args.timeline, color=args.color, labels_path=args.labels)
 
 
 if __name__ == "__main__":

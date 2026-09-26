@@ -139,6 +139,10 @@ def layout_page_records(page_records, font_size, measure_font, margin_pt, page):
         return {
             'x': x, 'labels': rec['labels'], 'widths': widths, 'fs': fs,
             'ys': ys, 'label_x_offsets': [0.] * len(widths),
+            # Aligned with 'labels': the notehead each line names. Carried
+            # through so the placed labels can be exported and tied back to
+            # the playback timeline's notes (see label_export.py).
+            'note_boxes': rec.get('note_boxes_pt', []),
         }
 
     def neighbourhood(rec, fs, widths, line_h):

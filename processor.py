@@ -88,6 +88,7 @@ def generate(raw, directory, options):
     count = annotate_pdf(pdf, directory / "annotated.pdf", directory / "work",
                          style=options["style"], octave=options["octave"], font_size=options["font_size"],
                          dpi=options["dpi"], auto_retry=options["auto_retry"], timeline_path=timeline,
+                         labels_path=directory / "labels.json",
                          # .get, not [...]: jobs queued before this option existed
                          # have no colour in their options.json and must still run.
                          color=options.get("color", "#000000"), log=log)

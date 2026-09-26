@@ -11,14 +11,18 @@ export type SheetAssets = {
   timeline: string | null;
   original?: string | null;
   original_type?: string | null;
+  /** The placed note names as JSON (see lib/labels.ts); null for sheets
+   * annotated before label export, and absent from older backends. */
+  labels?: string | null;
 };
 
-export type SheetFileKind = "pdf" | "timeline" | "original";
+export type SheetFileKind = "pdf" | "timeline" | "original" | "labels";
 
 const LEGACY_PATHS: Record<SheetFileKind, string> = {
   pdf: "download?inline=1",
   timeline: "timeline",
   original: "original",
+  labels: "labels",
 };
 
 export async function fetchSheetAssets(jobId: string): Promise<SheetAssets | null> {
