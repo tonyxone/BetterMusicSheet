@@ -71,17 +71,6 @@ function savedZoom() {
   }
 }
 
-/** The nearest ancestor that scrolls - the preview's resizable box. */
-function scrollerOf(el: HTMLElement | null) {
-  let node = el?.parentElement ?? null;
-  while (node) {
-    const style = getComputedStyle(node);
-    if (/(auto|scroll)/.test(`${style.overflowX} ${style.overflowY}`)) return node;
-    node = node.parentElement;
-  }
-  return null;
-}
-
 const SAVE_TEXT: Record<SaveState, string> = {
   saved: "All changes saved",
   saving: "Saving…",
@@ -116,7 +105,8 @@ export function SheetEditor({ jobId, variant, exportRef }: {
   // edit mode.
   const [resetNotice, setResetNotice] = useState<string | null>(null);
 
-  const rootRef = useRef<HTMLDivElement>(null);
+  // Only the pages scroll and zoom; the toolbar above them stays put.
+  const scrollRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState(savedZoom);
   const zoomRef = useRef(zoom);
   // The page is re-rasterized for a new zoom only once zooming pauses; until
@@ -203,7 +193,7 @@ export function SheetEditor({ jobId, variant, exportRef }: {
     const z = clampZoom(Math.round(next * 100) / 100);
     const old = zoomRef.current;
     if (z === old) return;
-    const scroller = scrollerOf(rootRef.current);
+    const scroller = scrollRef.current;
     if (scroller) {
       const r = scroller.getBoundingClientRect();
       zoomAnchor.current = {
@@ -219,7 +209,7 @@ export function SheetEditor({ jobId, variant, exportRef }: {
 
   useLayoutEffect(() => {
     const anchor = zoomAnchor.current;
-    const scroller = scrollerOf(rootRef.current);
+    const scroller = scrollRef.current;
     zoomAnchor.current = null;
     if (!anchor || !scroller) return;
     scroller.scrollLeft = (anchor.left + anchor.cx) * anchor.ratio - anchor.cx;
@@ -231,10 +221,14 @@ export function SheetEditor({ jobId, variant, exportRef }: {
     return () => clearTimeout(t);
   }, [zoom]);
 
+  // Whether the scrolling area is on the page - it waits for the sheet and
+  // the reader's edits both.
+  const sheetShown = !!(loaded && doc && base);
+
   // Ctrl + wheel (and a trackpad pinch, which browsers report the same way)
   // zooms the sheet around the pointer instead of the whole page.
   useEffect(() => {
-    const scroller = scrollerOf(rootRef.current);
+    const scroller = scrollRef.current;
     if (!scroller) return;
     function onWheel(e: WheelEvent) {
       if (!e.ctrlKey) return;
@@ -243,17 +237,17 @@ export function SheetEditor({ jobId, variant, exportRef }: {
     }
     scroller.addEventListener("wheel", onWheel, { passive: false });
     return () => scroller.removeEventListener("wheel", onWheel);
-  }, [loaded, zoomTo]);
+  }, [sheetShown, zoomTo]);
 
   function onPanStart(e: React.PointerEvent<HTMLDivElement>) {
     // Touch and pens already scroll natively (outside edit mode) and draw
     // inside it; this is for the mouse.
     if (e.pointerType !== "mouse") return;
     const target = e.target as HTMLElement;
-    if (target.closest(".sheet-editor-head, input, textarea, button")) return;
+    if (target.closest("input, textarea, button")) return;
     const wanted = e.button === 1 || (e.button === 0 && (!editing || spaceHeld));
     if (!wanted) return;
-    const scroller = scrollerOf(rootRef.current);
+    const scroller = scrollRef.current;
     if (!scroller) return;
     // Captured before the annotation layer sees it, so a space-drag in edit
     // mode pans instead of drawing or selecting.
@@ -266,7 +260,7 @@ export function SheetEditor({ jobId, variant, exportRef }: {
 
   function onPanMove(e: React.PointerEvent<HTMLDivElement>) {
     const start = panStart.current;
-    const scroller = start && scrollerOf(rootRef.current);
+    const scroller = start && scrollRef.current;
     if (!start || !scroller) return;
     scroller.scrollLeft = start.left - (e.clientX - start.x);
     scroller.scrollTop = start.top - (e.clientY - start.y);
@@ -623,19 +617,10 @@ export function SheetEditor({ jobId, variant, exportRef }: {
   const showSub = !!edits.notice || (editing && (visibleSelection.length > 0 || tool === "select"));
 
   return (
-    <div
-      className={`sheet-editor${!editing || spaceHeld ? " pannable" : ""}${panning ? " panning" : ""}`}
-      ref={rootRef}
-      style={{ "--zoom": zoom } as CSSProperties}
-      onPointerDownCapture={onPanStart}
-      onPointerMove={onPanMove}
-      onPointerUp={onPanEnd}
-      onPointerCancel={onPanEnd}
-      // The middle button's own autoscroll would fight the drag.
-      onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
-    >
-      {/* One sticky block, so the selection line stays under the toolbar
-          however many rows the toolbar wraps onto. */}
+    <div className={`sheet-editor${!editing || spaceHeld ? " pannable" : ""}${panning ? " panning" : ""}`}>
+      {/* Outside the scrolling area, so zooming and scrolling the sheet
+          never move or scale the tools; the selection line stays under the
+          toolbar however many rows the toolbar wraps onto. */}
       <div className="sheet-editor-head">
         <div className="sheet-editor-bar">
           {!editing ? (
@@ -767,6 +752,17 @@ export function SheetEditor({ jobId, variant, exportRef }: {
         )}
       </div>
 
+      <div
+        className="sheet-editor-scroll"
+        ref={scrollRef}
+        style={{ "--zoom": zoom } as CSSProperties}
+        onPointerDownCapture={onPanStart}
+        onPointerMove={onPanMove}
+        onPointerUp={onPanEnd}
+        onPointerCancel={onPanEnd}
+        // The middle button's own autoscroll would fight the drag.
+        onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
+      >
       <PdfPages
         pdfData={base}
         renderScale={Math.min(4, Math.max(2, Math.round(renderZoom * 4) / 2))}
@@ -784,6 +780,7 @@ export function SheetEditor({ jobId, variant, exportRef }: {
           </>
         )}
       />
+      </div>
     </div>
   );
 }

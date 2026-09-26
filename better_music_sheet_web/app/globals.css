@@ -882,15 +882,17 @@ button.history-row { width: 100%; font-family: inherit; cursor: pointer; text-al
 textarea.sheet-inline-input { font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
 
 /* The preview scrolls inside its resizable box; the tools stay at its top. */
-.preview-resize.scrolling { overflow: auto; border-radius: 10px; background: var(--paper); }
-.sheet-editor { min-height: 100%; --zoom: 1; }
+/* The editor fills the resizable box: its toolbar on top, and below it the
+   only part that scrolls or zooms - the pages. */
+.preview-resize.scrolling { overflow: hidden; border-radius: 10px; background: var(--paper); }
+.sheet-editor { height: 100%; display: flex; flex-direction: column; }
+.sheet-editor-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; --zoom: 1; }
 .sheet-editor .sheet-pages { padding: 12px 8px 24px; align-items: safe center; }
 /* 100% fits the width, as before; zooming scales from there and the box
    scrolls both ways. "safe" keeps a page wider than the box reachable from
    its left edge instead of centring it off-screen. */
 .sheet-editor .sheet-page { flex: none; width: calc(100% * var(--zoom)); max-width: calc(900px * var(--zoom)); }
-/* Sticky both ways, so the tools stay put when a zoomed sheet scrolls sideways. */
-.sheet-editor-head { position: sticky; top: 0; left: 0; z-index: 5; background: var(--card); }
+.sheet-editor-head { flex: none; position: relative; z-index: 5; background: var(--card); }
 .bar-end { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; }
 .zoom-controls { display: inline-flex; align-items: center; gap: 2px; }
 .editor-btn.icon { padding: 7px 8px; }
@@ -900,7 +902,7 @@ textarea.sheet-inline-input { font-family: system-ui, -apple-system, "Segoe UI",
 .editor-hint { font-size: 12.5px; }
 /* Drag the sheet around like a hand tool (see sheet-editor.tsx). */
 .sheet-editor.pannable .sheet-pages, .sheet-editor.pannable .annotation-layer { cursor: grab !important; }
-.sheet-editor.panning, .sheet-editor.panning .sheet-pages, .sheet-editor.panning .annotation-layer {
+.sheet-editor.panning .sheet-editor-scroll, .sheet-editor.panning .sheet-pages, .sheet-editor.panning .annotation-layer {
   cursor: grabbing !important; user-select: none;
 }
 .selection-box { fill: rgba(168, 60, 52, 0.08); stroke: var(--accent); stroke-width: 0.6; stroke-dasharray: 2 1.5; }
