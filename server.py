@@ -474,7 +474,7 @@ async def submit_sheet(
         job = reserve_upload(body, user_id)
         try:
             if IS_PRODUCTION:
-                storage._s3.upload_file(str(raw), storage.job_bucket(job), job["input_key"])
+                storage._s3_for(job).upload_file(str(raw), storage.job_bucket(job), job["input_key"])
                 version = storage.input_info(job)["VersionId"]
             else:
                 shutil.copyfile(raw, storage._local_path(job["input_key"]))

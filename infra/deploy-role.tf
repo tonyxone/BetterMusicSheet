@@ -43,10 +43,13 @@ data "aws_iam_policy_document" "github_deploy" {
   statement {
     sid     = "DeployLambdaCode"
     actions = ["lambda:UpdateFunctionCode", "lambda:GetFunction", "lambda:GetFunctionConfiguration"]
-    resources = var.enable_serverless ? [
+    resources = var.enable_serverless ? concat([
       "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:${module.serverless[0].api_function}",
       "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:${module.serverless[0].controller_function}",
-    ] : ["arn:aws:lambda:${var.aws_region}:${var.account_id}:function:none"]
+      ], local.us_east_1_enabled ? [
+      "arn:aws:lambda:${local.us_east_1}:${var.account_id}:function:${module.serverless_us_east_1[0].api_function}",
+      "arn:aws:lambda:${local.us_east_1}:${var.account_id}:function:${module.serverless_us_east_1[0].controller_function}",
+    ] : []) : ["arn:aws:lambda:${var.aws_region}:${var.account_id}:function:none"]
   }
   # RegisterTaskDefinition has no resource-level control; a new revision is
   # only reachable through the UpdateService grant below, which is scoped.
@@ -58,17 +61,22 @@ data "aws_iam_policy_document" "github_deploy" {
   statement {
     sid     = "DeployWorkerService"
     actions = ["ecs:DescribeServices", "ecs:UpdateService"]
-    resources = var.enable_serverless ? [
+    resources = var.enable_serverless ? concat([
       "arn:aws:ecs:${var.aws_region}:${var.account_id}:service/${var.existing_ecs_cluster_name}/${module.serverless[0].worker_service}",
-    ] : ["arn:aws:ecs:${var.aws_region}:${var.account_id}:service/${var.existing_ecs_cluster_name}/none"]
+      ], local.us_east_1_enabled ? [
+      "arn:aws:ecs:${local.us_east_1}:${var.account_id}:service/${aws_ecs_cluster.us_east_1[0].name}/${module.serverless_us_east_1[0].worker_service}",
+    ] : []) : ["arn:aws:ecs:${var.aws_region}:${var.account_id}:service/${var.existing_ecs_cluster_name}/none"]
   }
   statement {
     sid     = "PassWorkerRoles"
     actions = ["iam:PassRole"]
-    resources = var.enable_serverless ? [
+    resources = var.enable_serverless ? concat([
       module.serverless[0].worker_role_arn,
       module.serverless[0].execution_role_arn,
-    ] : ["arn:aws:iam::${var.account_id}:role/none"]
+      ], local.us_east_1_enabled ? [
+      module.serverless_us_east_1[0].worker_role_arn,
+      module.serverless_us_east_1[0].execution_role_arn,
+    ] : []) : ["arn:aws:iam::${var.account_id}:role/none"]
   }
 }
 

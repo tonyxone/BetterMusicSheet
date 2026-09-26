@@ -211,6 +211,7 @@ resource "aws_apigatewayv2_api_mapping" "api" {
 }
 
 output "api_url" { value = aws_apigatewayv2_api.api.api_endpoint }
+output "files_bucket" { value = aws_s3_bucket.files.id }
 output "api_function" { value = aws_lambda_function.api.function_name }
 output "controller_function" { value = aws_lambda_function.controller.function_name }
 output "worker_service" { value = aws_ecs_service.worker.name }

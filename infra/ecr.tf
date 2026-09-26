@@ -14,8 +14,13 @@ variable "existing_ecr_repository_name" {
 
 resource "aws_ecr_lifecycle_policy" "images" {
   repository = var.existing_ecr_repository_name
+  policy     = local.ecr_lifecycle_policy
+}
 
-  policy = jsonencode({
+# Shared with the us-east-1 copy of the repository (see us-east-1.tf):
+# replication copies images, not the policy that expires them.
+locals {
+  ecr_lifecycle_policy = jsonencode({
     rules = [
       {
         # Retagging `latest` orphans the image it pointed at. Nothing can pull

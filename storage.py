@@ -23,8 +23,55 @@ from pathlib import Path
 from config import IS_PRODUCTION
 
 
+# ---- which region holds a job's files ----
+#
+# The service can run in more than one AWS region (see infra/us-east-1.tf).
+# Job rows are replicated to every region, but files are not: each region's
+# API hands out uploads to its own bucket, and that region's worker processes
+# them. So a job records the bucket and region its files went to
+# (job_state.create), and every read, presign and delete follows the job
+# there - a sheet uploaded in one region still opens when the visitor is next
+# routed to the other.
+#
+# Jobs from before that was recorded, and every legacy (v1) sheet, live in the
+# home region: FILES_HOME_REGION / FILES_HOME_BUCKET, which default to this
+# region's own when the service runs in just one.
+
+
+def own_region():
+    return os.environ.get("AWS_REGION", "us-west-1")
+
+
+def _home_region():
+    return os.environ.get("FILES_HOME_REGION") or own_region()
+
+
+def _home_bucket():
+    return os.environ.get("FILES_HOME_BUCKET") or os.environ["NEW_JOB_FILES_BUCKET"]
+
+
 def job_bucket(job):
-    return os.environ["NEW_JOB_FILES_BUCKET"] if job.get("storage_version") == 2 else os.environ["JOB_FILES_BUCKET"]
+    if job.get("storage_version") == 2:
+        return job.get("files_bucket") or _home_bucket()
+    return os.environ["JOB_FILES_BUCKET"]
+
+
+def job_region(job):
+    """The region holding the job's files - and so the region whose worker
+    and controller own the job."""
+    if job.get("storage_version") == 2 and job.get("files_region"):
+        return job["files_region"]
+    return _home_region()
+
+
+def is_own_job(job):
+    return job_region(job) == own_region()
+
+
+def _edits_bucket(job):
+    # Edits sit under the job's own prefix, in the bucket that holds the job's
+    # other files. Legacy sheets keep theirs in the home region's v2 bucket.
+    return job.get("files_bucket") if job.get("storage_version") == 2 and job.get("files_bucket") else _home_bucket()
 
 
 def artifact_key(job, kind):
@@ -39,7 +86,7 @@ def artifact_key(job, kind):
 
 def create_upload(job, content_type):
     from config import UPLOAD_SECONDS
-    return _s3.generate_presigned_post(
+    return _s3_for(job).generate_presigned_post(
         Bucket=job_bucket(job), Key=job["input_key"],
         Fields={"Content-Type": content_type},
         Conditions=[{"Content-Type": content_type}, ["content-length-range", job["size"], job["size"]]],
@@ -50,9 +97,9 @@ def create_upload(job, content_type):
 def input_info(job, version=None):
     if IS_PRODUCTION:
         try:
-            return _s3.head_object(Bucket=job_bucket(job), Key=job["input_key"],
+            return _s3_for(job).head_object(Bucket=job_bucket(job), Key=job["input_key"],
                                    **({"VersionId": version} if version else {}))
-        except _s3.exceptions.ClientError as exc:
+        except _s3_for(job).exceptions.ClientError as exc:
             if exc.response["Error"]["Code"] in ("404", "NoSuchKey", "NoSuchVersion"):
                 return None
             raise
@@ -64,7 +111,7 @@ def download_input(job, destination):
     key = artifact_key(job, "input")
     if IS_PRODUCTION:
         extra = {"VersionId": job["input_version"]} if job.get("input_version") else {}
-        _s3.download_file(job_bucket(job), key, str(destination), ExtraArgs=extra)
+        _s3_for(job).download_file(job_bucket(job), key, str(destination), ExtraArgs=extra)
     else:
         shutil.copyfile(_local_path(key), destination)
 
@@ -74,7 +121,7 @@ def publish(job, kind, path):
     # keys become visible through the conditional job completion update.
     key = f"jobs/{job['user_id']}/{job['job_id']}/attempts/{job['lease_owner']}/{kind}"
     if IS_PRODUCTION:
-        _s3.upload_file(str(path), job_bucket(job), key,
+        _s3_for(job).upload_file(str(path), job_bucket(job), key,
                         ExtraArgs={"ContentType": "application/pdf" if kind == "output" else "application/json"})
     else:
         shutil.copyfile(path, _local_path(key))
@@ -86,7 +133,7 @@ def read_artifact(job, kind):
     if not key:
         raise FileNotFoundError(kind)
     if IS_PRODUCTION:
-        return _s3.get_object(Bucket=job_bucket(job), Key=key)
+        return _s3_for(job).get_object(Bucket=job_bucket(job), Key=key)
     return _local_path(key)
 
 
@@ -96,8 +143,8 @@ def presign_artifact(job, kind, disposition=None):
         return None
     params = {"Bucket": job_bucket(job), "Key": key}
     try:
-        _s3.head_object(**params)
-    except _s3.exceptions.ClientError as exc:
+        _s3_for(job).head_object(**params)
+    except _s3_for(job).exceptions.ClientError as exc:
         if exc.response["Error"]["Code"] in ("404", "NoSuchKey"):
             return None
         raise
@@ -112,7 +159,7 @@ def presign_artifact(job, kind, disposition=None):
         else "application/pdf" if kind == "output" else "application/json")
     if disposition:
         params["ResponseContentDisposition"] = disposition
-    return _s3.generate_presigned_url("get_object", Params=params, ExpiresIn=300)
+    return _s3_for(job).generate_presigned_url("get_object", Params=params, ExpiresIn=300)
 
 
 # ---- per-reader edits: moved/retyped labels, drawings, notes, corrections ----
@@ -139,8 +186,8 @@ def read_edits(job, reader_id):
     key = _edits_key(job, reader_id)
     if IS_PRODUCTION:
         try:
-            return _s3.get_object(Bucket=os.environ["NEW_JOB_FILES_BUCKET"], Key=key)["Body"].read()
-        except _s3.exceptions.ClientError as exc:
+            return _s3_for(job).get_object(Bucket=_edits_bucket(job), Key=key)["Body"].read()
+        except _s3_for(job).exceptions.ClientError as exc:
             if exc.response["Error"]["Code"] in ("404", "NoSuchKey"):
                 return None
             raise
@@ -151,7 +198,7 @@ def read_edits(job, reader_id):
 def write_edits(job, reader_id, data):
     key = _edits_key(job, reader_id)
     if IS_PRODUCTION:
-        _s3.put_object(Bucket=os.environ["NEW_JOB_FILES_BUCKET"], Key=key, Body=data,
+        _s3_for(job).put_object(Bucket=_edits_bucket(job), Key=key, Body=data,
                        ContentType="application/json")
     else:
         path = _local_path(key)
@@ -164,7 +211,7 @@ def delete_edits(job):
     """Every reader's edits for one sheet. delete_job_files() already covers
     per-job sheets; legacy sheets keep their files elsewhere and need this."""
     if IS_PRODUCTION:
-        _delete_prefix(os.environ["NEW_JOB_FILES_BUCKET"], _edits_prefix(job))
+        _delete_prefix(_s3_for(job), _edits_bucket(job), _edits_prefix(job))
     else:
         root = _LOCAL_DIR.resolve()
         target = (root / _edits_prefix(job)).resolve()
@@ -173,12 +220,12 @@ def delete_edits(job):
         shutil.rmtree(target, ignore_errors=True)
 
 
-def _delete_prefix(bucket, prefix):
-    for page in _s3.get_paginator("list_object_versions").paginate(Bucket=bucket, Prefix=prefix):
+def _delete_prefix(s3, bucket, prefix):
+    for page in s3.get_paginator("list_object_versions").paginate(Bucket=bucket, Prefix=prefix):
         objects = [{"Key": v["Key"], "VersionId": v["VersionId"]}
                    for v in page.get("Versions", []) + page.get("DeleteMarkers", [])]
         for offset in range(0, len(objects), 1000):
-            result = _s3.delete_objects(Bucket=bucket, Delete={"Objects": objects[offset:offset + 1000]})
+            result = s3.delete_objects(Bucket=bucket, Delete={"Objects": objects[offset:offset + 1000]})
             if result.get("Errors"):
                 raise RuntimeError("Some sheet files could not be deleted. Please retry.")
 
@@ -187,7 +234,7 @@ def delete_job_files(job):
     """Delete all attempts AND all upload versions, including failed attempts."""
     prefix = f"jobs/{job['user_id']}/{job['job_id']}/"
     if IS_PRODUCTION:
-        _delete_prefix(job_bucket(job), prefix)
+        _delete_prefix(_s3_for(job), job_bucket(job), prefix)
     else:
         root = _LOCAL_DIR.resolve()
         target = (root / prefix).resolve()
@@ -254,12 +301,29 @@ if IS_PRODUCTION:
     import boto3
     from botocore.config import Config
 
-    # region_name alone still signs against the global s3.amazonaws.com host, so
-    # every presigned upload and download answers 307 and the browser repeats the
-    # request - a redirected POST re-sends the whole file, doubling the bytes a
-    # user uploads. Pin the regional virtual-hosted endpoint instead.
-    _s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-west-1"),
-                       config=Config(s3={"addressing_style": "virtual"}, signature_version="s3v4"))
+    _clients = {}
+
+    def _s3_in(region):
+        """An S3 client for one region's buckets.
+
+        region_name alone still signs against the global s3.amazonaws.com
+        host, so every presigned upload and download answers 307 and the
+        browser repeats the request - a redirected POST re-sends the whole
+        file, doubling the bytes a user uploads. Pin the regional
+        virtual-hosted endpoint instead - which is also why a bucket in
+        another region needs a client of its own."""
+        if region not in _clients:
+            _clients[region] = boto3.client(
+                "s3", region_name=region,
+                config=Config(s3={"addressing_style": "virtual", "us_east_1_regional_endpoint": "regional"},
+                              signature_version="s3v4"))
+        return _clients[region]
+
+    def _s3_for(job):
+        return _s3_in(job_region(job))
+
+    # The legacy (v1) bucket is in the home region, as are the helpers below.
+    _s3 = _s3_in(_home_region())
     _BUCKET = os.environ["JOB_FILES_BUCKET"]
 
     def upload_input_pdf(user_id, local_path, sheet_name):

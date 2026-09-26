@@ -4,6 +4,13 @@
 # The music_sheet/annotation_job tables hold rows for guests AND signed-in
 # users - user_id is whichever id identified the request. Only `users` is
 # exclusively real accounts.
+#
+# With enable_us_east_1, every table here becomes a global table with a
+# replica in us-east-1 (see us-east-1.tf). Replication needs a stream carrying
+# both images; DynamoDB resolves concurrent writes to one item in two regions
+# by keeping the last one, which suits these tables: each row is written by
+# the region that is serving its user at the time. The per-region upload lock
+# (the module's `control` table) is deliberately NOT replicated.
 
 resource "aws_dynamodb_table" "users" {
   name         = "${var.project}-users"
@@ -20,6 +27,16 @@ resource "aws_dynamodb_table" "users" {
   point_in_time_recovery {
     enabled = true
   }
+
+  stream_enabled   = local.us_east_1_enabled
+  stream_view_type = local.us_east_1_enabled ? "NEW_AND_OLD_IMAGES" : null
+  dynamic "replica" {
+    for_each = local.us_east_1_enabled ? [local.us_east_1] : []
+    content {
+      region_name            = replica.value
+      point_in_time_recovery = true
+    }
+  }
 }
 
 resource "aws_dynamodb_table" "subscriptions" {
@@ -34,6 +51,16 @@ resource "aws_dynamodb_table" "subscriptions" {
 
   point_in_time_recovery {
     enabled = true
+  }
+
+  stream_enabled   = local.us_east_1_enabled
+  stream_view_type = local.us_east_1_enabled ? "NEW_AND_OLD_IMAGES" : null
+  dynamic "replica" {
+    for_each = local.us_east_1_enabled ? [local.us_east_1] : []
+    content {
+      region_name            = replica.value
+      point_in_time_recovery = true
+    }
   }
 }
 
@@ -53,6 +80,16 @@ resource "aws_dynamodb_table" "master_user" {
 
   point_in_time_recovery {
     enabled = true
+  }
+
+  stream_enabled   = local.us_east_1_enabled
+  stream_view_type = local.us_east_1_enabled ? "NEW_AND_OLD_IMAGES" : null
+  dynamic "replica" {
+    for_each = local.us_east_1_enabled ? [local.us_east_1] : []
+    content {
+      region_name            = replica.value
+      point_in_time_recovery = true
+    }
   }
 }
 
@@ -88,6 +125,16 @@ resource "aws_dynamodb_table" "music_sheet" {
 
   point_in_time_recovery {
     enabled = true
+  }
+
+  stream_enabled   = local.us_east_1_enabled
+  stream_view_type = local.us_east_1_enabled ? "NEW_AND_OLD_IMAGES" : null
+  dynamic "replica" {
+    for_each = local.us_east_1_enabled ? [local.us_east_1] : []
+    content {
+      region_name            = replica.value
+      point_in_time_recovery = true
+    }
   }
 }
 
@@ -138,5 +185,15 @@ resource "aws_dynamodb_table" "annotation_job" {
 
   point_in_time_recovery {
     enabled = true
+  }
+
+  stream_enabled   = local.us_east_1_enabled
+  stream_view_type = local.us_east_1_enabled ? "NEW_AND_OLD_IMAGES" : null
+  dynamic "replica" {
+    for_each = local.us_east_1_enabled ? [local.us_east_1] : []
+    content {
+      region_name            = replica.value
+      point_in_time_recovery = true
+    }
   }
 }

@@ -32,6 +32,7 @@ resource "aws_s3_bucket_cors_configuration" "files" {
 # Existing objects also need CORS for direct browser reads after cutover.
 # Import/merge any pre-existing CORS configuration before applying this resource.
 resource "aws_s3_bucket_cors_configuration" "legacy" {
+  count  = var.manage_legacy_cors ? 1 : 0
   bucket = var.legacy_bucket
   cors_rule {
     allowed_headers = ["*"]
@@ -40,6 +41,12 @@ resource "aws_s3_bucket_cors_configuration" "legacy" {
     expose_headers  = ["ETag", "Content-Length", "Content-Disposition"]
     max_age_seconds = 300
   }
+}
+# Became conditional when a second region's copy of this module arrived; the
+# existing rules stay put rather than being deleted and recreated.
+moved {
+  from = aws_s3_bucket_cors_configuration.legacy
+  to   = aws_s3_bucket_cors_configuration.legacy[0]
 }
 resource "aws_s3_bucket_lifecycle_configuration" "files" {
   bucket = aws_s3_bucket.files.id

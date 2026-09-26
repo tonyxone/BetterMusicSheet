@@ -18,6 +18,12 @@ from worker import accept_input, event_jobs
 def reconcile(sqs, queue_url, now):
     for status in (*job_state.ACTIVE, "done", "failed", "deleting", "deleted"):
         for job in job_state.due(status, now):
+            # Job rows are replicated to every region the service runs in, but
+            # a job's files, queue and worker are in one of them. Only that
+            # region's controller may retry, fail or clean up the job - the
+            # other would re-queue it where no worker can reach its upload.
+            if not storage.is_own_job(job):
+                continue
             try:
                 if status in ("done", "failed"):
                     job_state.release(job)

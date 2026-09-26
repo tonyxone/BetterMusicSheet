@@ -16,6 +16,19 @@ resource "aws_route53_record" "api" {
   name    = var.api_subdomain
   type    = "A"
 
+  # With a second region this becomes us-west-1's half of a latency pair (see
+  # us-east-1.tf). Switching routing policy replaces the record, so for a few
+  # seconds during that apply new lookups of api.* find nothing; resolvers
+  # that already hold the answer keep using it for its 60 second TTL.
+  set_identifier  = local.us_east_1_enabled ? var.aws_region : null
+  health_check_id = local.us_east_1_enabled ? aws_route53_health_check.api[var.aws_region].id : null
+  dynamic "latency_routing_policy" {
+    for_each = local.us_east_1_enabled ? [var.aws_region] : []
+    content {
+      region = latency_routing_policy.value
+    }
+  }
+
   alias {
     name    = module.serverless[0].domain_target
     zone_id = module.serverless[0].domain_zone
