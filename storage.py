@@ -30,8 +30,11 @@ def job_bucket(job):
 def artifact_key(job, kind):
     if job.get("storage_version") == 2:
         return job.get(f"{kind}_key")
+    legacy = {"output": _output_key, "timeline": _timeline_key, "input": _input_key}.get(kind)
+    if legacy is None:
+        return None  # e.g. "labels": sheets from before per-job storage never had one
     name = job.get("sheet_name") or job["music_sheet_id"]
-    return {"output": _output_key, "timeline": _timeline_key, "input": _input_key}[kind](job["user_id"], name)
+    return legacy(job["user_id"], name)
 
 
 def create_upload(job, content_type):
@@ -112,18 +115,79 @@ def presign_artifact(job, kind, disposition=None):
     return _s3.generate_presigned_url("get_object", Params=params, ExpiresIn=300)
 
 
+# ---- per-reader edits: moved/retyped labels, drawings, notes, corrections ----
+#
+# One JSON document per (sheet, reader), keyed by the READER rather than the
+# sheet's owner, so anyone can mark up the shared demo sheet without touching
+# what other visitors see. Always stored in the per-job bucket under the job's
+# own prefix - the API may write there for every sheet, legacy ones included,
+# and deleting the job's prefix takes the edits with it.
+
+EDITS_MAX_BYTES = 2_000_000
+
+
+def _edits_prefix(job):
+    return f"jobs/{job['user_id']}/{job['job_id']}/edits/"
+
+
+def _edits_key(job, reader_id):
+    return f"{_edits_prefix(job)}{reader_id}.json"
+
+
+def read_edits(job, reader_id):
+    """The stored document as bytes, or None if this reader has none yet."""
+    key = _edits_key(job, reader_id)
+    if IS_PRODUCTION:
+        try:
+            return _s3.get_object(Bucket=os.environ["NEW_JOB_FILES_BUCKET"], Key=key)["Body"].read()
+        except _s3.exceptions.ClientError as exc:
+            if exc.response["Error"]["Code"] in ("404", "NoSuchKey"):
+                return None
+            raise
+    path = _LOCAL_DIR / key
+    return path.read_bytes() if path.exists() else None
+
+
+def write_edits(job, reader_id, data):
+    key = _edits_key(job, reader_id)
+    if IS_PRODUCTION:
+        _s3.put_object(Bucket=os.environ["NEW_JOB_FILES_BUCKET"], Key=key, Body=data,
+                       ContentType="application/json")
+    else:
+        path = _local_path(key)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_bytes(data)
+        os.replace(temporary, path)
+
+
+def delete_edits(job):
+    """Every reader's edits for one sheet. delete_job_files() already covers
+    per-job sheets; legacy sheets keep their files elsewhere and need this."""
+    if IS_PRODUCTION:
+        _delete_prefix(os.environ["NEW_JOB_FILES_BUCKET"], _edits_prefix(job))
+    else:
+        root = _LOCAL_DIR.resolve()
+        target = (root / _edits_prefix(job)).resolve()
+        if not target.is_relative_to(root) or target == root:
+            raise ValueError("Invalid job directory")
+        shutil.rmtree(target, ignore_errors=True)
+
+
+def _delete_prefix(bucket, prefix):
+    for page in _s3.get_paginator("list_object_versions").paginate(Bucket=bucket, Prefix=prefix):
+        objects = [{"Key": v["Key"], "VersionId": v["VersionId"]}
+                   for v in page.get("Versions", []) + page.get("DeleteMarkers", [])]
+        for offset in range(0, len(objects), 1000):
+            result = _s3.delete_objects(Bucket=bucket, Delete={"Objects": objects[offset:offset + 1000]})
+            if result.get("Errors"):
+                raise RuntimeError("Some sheet files could not be deleted. Please retry.")
+
+
 def delete_job_files(job):
     """Delete all attempts AND all upload versions, including failed attempts."""
     prefix = f"jobs/{job['user_id']}/{job['job_id']}/"
     if IS_PRODUCTION:
-        bucket = job_bucket(job)
-        for page in _s3.get_paginator("list_object_versions").paginate(Bucket=bucket, Prefix=prefix):
-            objects = [{"Key": v["Key"], "VersionId": v["VersionId"]}
-                       for v in page.get("Versions", []) + page.get("DeleteMarkers", [])]
-            for offset in range(0, len(objects), 1000):
-                result = _s3.delete_objects(Bucket=bucket, Delete={"Objects": objects[offset:offset + 1000]})
-                if result.get("Errors"):
-                    raise RuntimeError("Some sheet files could not be deleted. Please retry.")
+        _delete_prefix(job_bucket(job), prefix)
     else:
         root = _LOCAL_DIR.resolve()
         target = (root / prefix).resolve()

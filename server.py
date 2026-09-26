@@ -3,6 +3,7 @@
 New uploads use immutable artifacts and a standalone worker. Legacy routes
 remain available during the staged deployment and for existing history.
 """
+import json
 import os
 import queue
 import shutil
@@ -27,6 +28,7 @@ import apple_billing
 import stripe_billing
 from auth import (
     BACKEND_JWT_LIFETIME_SECONDS,
+    GUEST_USER_ID,
     delete_cognito_user,
     exchange_authorization_code,
     get_current_user_id,
@@ -88,7 +90,7 @@ _allowed = os.environ.get("ALLOWED_ORIGINS", "*")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"] if _allowed == "*" else [o.strip() for o in _allowed.split(",")],
-    allow_methods=["GET", "POST", "DELETE"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -583,6 +585,7 @@ def delete_job(job_id: str, user_id: str = Depends(get_current_user_id)):
             storage.delete_sheet_files(user_id, sheet_name)
         db.delete_music_sheet(sheet_id)
 
+    storage.delete_edits(job)
     db.delete_annotation_job(job_id)
     shutil.rmtree(JOBS_DIR / job_id, ignore_errors=True)
     return Response(status_code=204)
@@ -628,10 +631,15 @@ def job_assets(job_id: str, user_id: str = Depends(get_current_user_id)):
     # rather than an error. original_type says whether it is a PDF, which the
     # Play page needs: it renders through pdf.js and cannot show a photo.
     original_type = storage.upload_media_type(job["sheet_name"])
+    # "labels" is the placed note names as data (label_export.py), which the
+    # viewer draws itself so they can be moved and retyped. Null for sheets
+    # annotated before it existed; the viewer then reads them out of the PDF.
+    has_labels = job.get("storage_version") == 2 and bool(job.get("labels_key"))
     if not IS_PRODUCTION:
         return {"direct": False, "pdf": f"/api/sheets/{job_id}/download",
                 "timeline": f"/api/sheets/{job_id}/timeline",
                 "original": f"/api/sheets/{job_id}/original",
+                "labels": f"/api/sheets/{job_id}/labels" if has_labels else None,
                 "original_type": original_type}
     stem = Path(job["sheet_name"]).stem
     disposition = _content_disposition("attachment", f"{stem} (annotated).pdf", f"{_ascii_stem(stem)} (annotated).pdf")
@@ -639,6 +647,7 @@ def job_assets(job_id: str, user_id: str = Depends(get_current_user_id)):
                          "pdf": storage.presign_artifact(job, "output", disposition),
                          "timeline": storage.presign_artifact(job, "timeline"),
                          "original": storage.presign_artifact(job, "input"),
+                         "labels": storage.presign_artifact(job, "labels") if has_labels else None,
                          "original_type": original_type},
                         headers={"Cache-Control": "no-store"})
 
@@ -758,6 +767,76 @@ def job_timeline(job_id: str, user_id: str = Depends(get_current_user_id)):
     if not path.exists():
         raise HTTPException(404, "no playback timeline for this sheet")
     return FileResponse(path, media_type="application/json")
+
+
+@app.get("/api/sheets/{job_id}/labels")
+def job_labels(job_id: str, user_id: str = Depends(get_current_user_id)):
+    """The placed note names as JSON (see label_export.py). Local dev only in
+    practice - production hands out a presigned URL from /assets instead."""
+    job = _readable_job_or_404(job_id, user_id)
+    if job["status"] != "done":
+        raise HTTPException(409, f"job is '{job['status']}', not done yet")
+    if job.get("storage_version") != 2 or not job.get("labels_key"):
+        raise HTTPException(404, "No label data for this sheet.")
+    return new_artifact_response(job, "labels")
+
+
+class EditsRequest(BaseModel):
+    # The revision the client last read. A save based on anything older is
+    # refused, so a second open tab can't silently overwrite the first.
+    revision: int = Field(ge=0)
+    doc: dict
+
+
+def _stored_edits(job, user_id):
+    raw = storage.read_edits(job, user_id)
+    if raw is None:
+        return {"revision": 0, "doc": None}
+    try:
+        stored = json.loads(raw)
+    except ValueError:
+        return {"revision": 0, "doc": None}
+    return {"revision": int(stored.get("revision", 0)), "doc": stored.get("doc"),
+            "updated_at": stored.get("updated_at")}
+
+
+# Serializes the read-compare-write below within one process. Across Lambda
+# instances two saves can still interleave, but both would have to come from
+# the same reader on the same sheet within milliseconds.
+_edits_lock = threading.Lock()
+
+
+@app.get("/api/sheets/{job_id}/edits")
+def get_edits(job_id: str, user_id: str = Depends(get_current_user_id)):
+    """This reader's own changes to the sheet: moved and retyped labels,
+    drawings, text notes and note corrections. Readable on the demo sheet
+    too - they belong to the reader, not the sheet's owner."""
+    job = _readable_job_or_404(job_id, user_id)
+    return JSONResponse(_stored_edits(job, user_id), headers={"Cache-Control": "no-store"})
+
+
+@app.put("/api/sheets/{job_id}/edits")
+def put_edits(job_id: str, body: EditsRequest, user_id: str = Depends(get_current_user_id)):
+    job = _readable_job_or_404(job_id, user_id)
+    if user_id == GUEST_USER_ID:
+        # The shared fallback identity (no token, no guest id) belongs to
+        # nobody in particular; saving under it would pool strangers' edits.
+        raise HTTPException(403, "Reload the page to save your changes.")
+    if job["status"] != "done":
+        raise HTTPException(409, "The sheet is not ready yet.")
+    if not isinstance(body.doc.get("version"), int):
+        raise HTTPException(422, "Edits need a version number.")
+    with _edits_lock:
+        current = _stored_edits(job, user_id)
+        if body.revision != current["revision"]:
+            return JSONResponse(status_code=409, content={
+                "detail": "These edits changed in another window.", **current})
+        stored = {"revision": current["revision"] + 1, "updated_at": int(time.time()), "doc": body.doc}
+        data = json.dumps(stored, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        if len(data) > storage.EDITS_MAX_BYTES:
+            raise HTTPException(413, "Too many drawings on this sheet to save. Erase some and try again.")
+        storage.write_edits(job, user_id, data)
+    return {"revision": stored["revision"], "updated_at": stored["updated_at"]}
 
 
 @app.get("/api/music-sheets")

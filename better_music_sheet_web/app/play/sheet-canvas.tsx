@@ -1,52 +1,12 @@
 "use client";
 
-// The annotated sheet, rendered to canvas so measures can be clicked.
-//
-// The existing results page shows the same PDF in an <iframe> using the
-// browser's own viewer, which gives no access to page coordinates at all -
-// hence pdf.js here, on this page only.
-//
-// Two passes, deliberately: open the document and lay out one <canvas> per
-// page first, then rasterize into those mounted canvases. Rendering into
-// detached canvases and handing them to React afterwards fights React over
-// the DOM and leaves pdf.js working on an unattached element.
+// The annotated sheet on the Play page, with measures to click and a
+// playhead following playback. Page rendering itself is shared with the
+// sheet preview (../sheet-viewer/pdf-pages.tsx).
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import type { TimelineMeasure, TimelineNote } from "@/lib/timeline";
-import { isMissingBrowserFeature } from "@/lib/browser-support";
-
-const RENDER_SCALE = 2; // rasterize above CSS size so the sheet stays sharp
-
-/** A failure to show, and whether the reader can do anything about it. */
-type ViewerError = { unsupported: boolean };
-
-function describe(err: unknown): ViewerError {
-  // The reader gets a sentence they can act on; the console keeps the real
-  // error, which is what a bug report needs and what a musician cannot use.
-  console.error("Sheet viewer failed:", err);
-  return { unsupported: isMissingBrowserFeature(err) };
-}
-
-type PageInfo = {
-  pageNumber: number;
-  /** Backing-store size, in device pixels. */
-  pixelWidth: number;
-  pixelHeight: number;
-  /** Page size in PDF points - the space timeline bboxes live in. */
-  widthPt: number;
-  heightPt: number;
-};
-
-type PdfPage = {
-  getViewport: (o: { scale: number }) => { width: number; height: number };
-  view: number[];
-  render: (o: Record<string, unknown>) => { promise: Promise<void>; cancel: () => void };
-};
-
-type PdfDoc = {
-  numPages: number;
-  getPage: (n: number) => Promise<PdfPage>;
-};
+import { PdfPages, type PageInfo } from "../sheet-viewer/pdf-pages";
 
 export function SheetCanvas({
   pdfData,
@@ -56,6 +16,7 @@ export function SheetCanvas({
   notes,
   beat,
   onMeasureClick,
+  overlay,
 }: {
   pdfData: ArrayBuffer;
   measures: TimelineMeasure[];
@@ -70,104 +31,10 @@ export function SheetCanvas({
   /** Playback position, in beats. */
   beat: number;
   onMeasureClick: (index: number) => void;
+  /** Drawn over each page beneath the measure boxes - the note names and the
+   * reader's own marks (see ../sheet-viewer/annotation-layer.tsx). */
+  overlay?: (page: PageInfo) => ReactNode;
 }) {
-  const [pages, setPages] = useState<PageInfo[]>([]);
-  const [error, setError] = useState<ViewerError | null>(null);
-  const canvasRefs = useRef<Map<number, HTMLCanvasElement>>(new Map());
-  // A pdf.js handle, not something the UI renders - hence a ref, not state.
-  const docRef = useRef<PdfDoc | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    (async () => {
-      try {
-        // Must land before pdf.js: it reaches for the Uint8Array base64/hex
-        // methods Safari only shipped in 18.2, and throws "toHex is not a
-        // function" without them. The worker gets the same polyfill prepended
-        // at build time (scripts/copy-pdf-worker.mjs).
-        await import("@/lib/binary-polyfill.js");
-        const pdfjs = await import("pdfjs-dist");
-        // Served from the site root, copied out of node_modules at build time
-        // by scripts/copy-pdf-worker.mjs. Resolving it through the bundler
-        // instead (new URL(..., import.meta.url)) does not emit the asset for
-        // a node_modules path, so the worker 404s.
-        pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
-
-        // pdf.js takes ownership of the buffer it is given, so hand over a
-        // copy - React mounts effects twice in dev and the second pass would
-        // otherwise find the original detached.
-        const doc = (await pdfjs.getDocument({ data: pdfData.slice(0) }).promise) as unknown as PdfDoc;
-        if (cancelled) return;
-        docRef.current = doc;
-
-        const infos: PageInfo[] = [];
-        for (let n = 1; n <= doc.numPages; n++) {
-          const page = await doc.getPage(n);
-          if (cancelled) return;
-          const viewport = page.getViewport({ scale: RENDER_SCALE });
-          const view = page.view; // [x0, y0, x1, y1] of the un-rotated page box
-          infos.push({
-            pageNumber: n,
-            pixelWidth: Math.floor(viewport.width),
-            pixelHeight: Math.floor(viewport.height),
-            widthPt: view[2] - view[0],
-            heightPt: view[3] - view[1],
-          });
-        }
-        if (!cancelled) setPages(infos);
-      } catch (err) {
-        if (!cancelled) setError(describe(err));
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [pdfData]);
-
-  // Second pass: the canvases exist in the DOM now, so rasterize into them.
-  useEffect(() => {
-    const doc = docRef.current;
-    if (!pages.length || !doc) return;
-
-    let cancelled = false;
-    const tasks: { cancel: () => void }[] = [];
-
-    (async () => {
-      for (const info of pages) {
-        if (cancelled) return;
-        const canvas = canvasRefs.current.get(info.pageNumber);
-        const ctx = canvas?.getContext("2d");
-        if (!ctx) continue;
-        try {
-          const page = await doc.getPage(info.pageNumber);
-          if (cancelled) return;
-          const viewport = page.getViewport({ scale: RENDER_SCALE });
-          const task = page.render({ canvasContext: ctx, viewport });
-          tasks.push(task);
-          await task.promise;
-        } catch (err) {
-          // A cancelled render rejects on unmount; that is not a failure.
-          if (!cancelled) setError(describe(err));
-          return;
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      // Abandoned renders otherwise keep working and holding the canvas.
-      tasks.forEach((t) => {
-        try {
-          t.cancel();
-        } catch {
-          // already finished
-        }
-      });
-    };
-  }, [pages]);
-
   // Keep the sounding measure on screen. Only reacts when the measure
   // changes, so it never fights the user mid-scroll within one measure.
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -318,44 +185,14 @@ export function SheetCanvas({
     [measures, onMeasureClick, playingIndex, beat],
   );
 
-  if (error) {
-    // An old browser is worth saying out loud: it is the reader's to fix, and
-    // "toHex is not a function" tells them nothing about how.
-    if (error.unsupported) {
-      return (
-        <div className="play-error">
-          <strong>This browser is too old to show the sheet.</strong>
-          <p>
-            The viewer needs features your browser does not have yet. Updating it
-            usually fixes this — on an iPhone or iPad that means updating iOS or
-            iPadOS itself, since Safari comes with the system. Recent Chrome,
-            Edge and Firefox work too.
-          </p>
-        </div>
-      );
-    }
-    return (
-      <p className="play-error">
-        Couldn&apos;t show the sheet. Reloading the page usually fixes it.
-      </p>
-    );
-  }
-  if (!pages.length) {
-    return <p className="play-hint">Loading the sheet…</p>;
-  }
-
   return (
-    <div className="sheet-pages" ref={scrollerRef}>
-      {pages.map((page) => (
-        <div key={page.pageNumber} className="sheet-page" onClick={(e) => handleClick(page, e)}>
-          <canvas
-            width={page.pixelWidth}
-            height={page.pixelHeight}
-            ref={(el) => {
-              if (el) canvasRefs.current.set(page.pageNumber, el);
-              else canvasRefs.current.delete(page.pageNumber);
-            }}
-          />
+    <PdfPages
+      pdfData={pdfData}
+      containerRef={scrollerRef}
+      onPageClick={handleClick}
+      renderOverlay={(page) => (
+        <>
+          {overlay?.(page)}
           {/* Overlays are positioned as percentages of the page box, so they
               stay aligned at any rendered size without re-rastering. */}
           {measures
@@ -397,9 +234,9 @@ export function SheetCanvas({
               }}
             />
           )}
-        </div>
-      ))}
-    </div>
+        </>
+      )}
+    />
   );
 }
 

@@ -850,3 +850,91 @@ button.history-row { width: 100%; font-family: inherit; cursor: pointer; text-al
    so the block form needs readable measure and left-aligned prose. */
 .play-error strong { display: block; margin-bottom: 10px; font-size: 1.05rem; }
 .play-error p { color: var(--ink); max-width: 46ch; margin: 0 auto 10px; line-height: 1.6; text-align: left; }
+
+/* ---- Sheet annotations: note names, marks and text notes over a page ---- */
+/* The same face the Customized download embeds (lib/export-pdf.ts), so a
+   name takes the same room on screen as it does in the file. */
+@font-face {
+  font-family: "Sheet Labels";
+  src: url("/fonts/DejaVuSans-labels.ttf") format("truetype");
+  font-display: swap;
+}
+.annotation-layer {
+  position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible;
+  pointer-events: none; z-index: 1;
+}
+/* Editing takes the pointer, and touch too, so a finger or pencil draws
+   rather than scrolls the page. */
+.annotation-layer.editing { pointer-events: auto; touch-action: none; user-select: none; -webkit-user-select: none; }
+.sheet-label { font-family: "Sheet Labels", "Arial Unicode MS", Arial, sans-serif; stroke-linejoin: round; }
+.sheet-note { font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+.label-hit { fill: transparent; stroke: transparent; stroke-width: 0.5; cursor: move; }
+.label-hit.edited { fill: rgba(217, 164, 65, 0.16); }
+.annotation-layer.editing g:hover > .label-hit { stroke: var(--gold); stroke-dasharray: 1.2 0.8; }
+.label-hit.selected { stroke: var(--accent) !important; stroke-dasharray: none !important; fill: rgba(168, 60, 52, 0.08); }
+
+.sheet-inline-input {
+  position: absolute; z-index: 4; line-height: 1.2; padding: 1px 4px; margin: 0;
+  font-family: "Sheet Labels", system-ui, sans-serif; color: var(--ink);
+  background: #fff; border: 1.5px solid var(--accent); border-radius: 4px;
+  box-shadow: 0 4px 14px rgba(46, 33, 23, 0.18); outline: none; resize: none;
+}
+textarea.sheet-inline-input { font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+
+/* The preview scrolls inside its resizable box; the tools stay at its top. */
+.preview-resize.scrolling { overflow: auto; border-radius: 10px; background: var(--paper); }
+.sheet-editor { min-height: 100%; }
+.sheet-editor .sheet-pages { padding: 12px 8px 24px; }
+.sheet-editor-head { position: sticky; top: 0; z-index: 5; background: var(--card); }
+.sheet-editor-bar, .sheet-editor-sub {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  border-bottom: 1px solid var(--paper-deep);
+}
+.sheet-editor-bar { padding: 8px 10px; }
+.sheet-editor-sub { padding: 6px 12px; font-size: 13px; color: var(--ink-soft); }
+.sheet-editor-sub strong { color: var(--ink); font-family: "Sheet Labels", sans-serif; }
+.editor-tools { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.editor-btn {
+  display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; border-radius: 9px;
+  border: 1px solid var(--paper-deep); background: var(--card); color: var(--ink);
+  font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.editor-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.editor-btn:hover:not(:disabled) { background: var(--paper); }
+.editor-btn.active { background: var(--ink); border-color: var(--ink); color: #fff; }
+.editor-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.editor-btn.primary:hover { background: var(--accent-deep); }
+.editor-btn:disabled { opacity: 0.45; cursor: default; }
+.editor-btn.done { margin-left: auto; }
+.editor-swatches { display: inline-flex; gap: 5px; padding: 0 4px; }
+.swatch { width: 22px; height: 22px; border-radius: 999px; border: 2px solid #fff; box-shadow: 0 0 0 1px var(--paper-deep); cursor: pointer; padding: 0; }
+.swatch.active { box-shadow: 0 0 0 2px var(--ink); }
+.editor-status { font-size: 12.5px; color: var(--ink-soft); }
+.editor-link {
+  border: 0; background: none; padding: 2px 4px; font: inherit; font-size: 13px; font-weight: 600;
+  color: var(--accent); cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
+}
+.editor-notice { display: inline-flex; align-items: center; gap: 4px; color: var(--ink); margin-left: auto; }
+@media (max-width: 640px) {
+  .editor-btn span { display: none; }
+  .editor-btn.primary span, .editor-btn.done { display: inline-flex; }
+}
+
+/* Download: one button, three versions. */
+.download-menu { position: relative; }
+.download-menu-list {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; min-width: 250px;
+  background: var(--card); border: 1px solid var(--paper-deep); border-radius: 12px; padding: 6px;
+  box-shadow: 0 14px 40px rgba(46, 33, 23, 0.16); display: flex; flex-direction: column;
+}
+.download-menu-list button {
+  text-align: left; border: 0; background: none; padding: 9px 10px; border-radius: 8px;
+  font: inherit; font-size: 14px; color: var(--ink); cursor: pointer;
+}
+.download-menu-list button:hover:not(:disabled) { background: var(--paper); }
+.download-menu-list button:disabled { opacity: 0.45; cursor: default; }
+.download-menu-list small { display: block; font-size: 12px; color: var(--ink-soft); margin-top: 2px; }
+
+/* The handle sits outside the scrolling box, so it stays put while the sheet
+   scrolls beneath it. */
+.preview-resize-wrap { position: relative; }

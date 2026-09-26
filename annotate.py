@@ -229,9 +229,12 @@ def label_rgb(color):
 
 
 def render(input_pdf, output_pdf, records, font_size=6.5, margin_pt=3.2, color="#000000"):
+    """Draw the labels onto the PDF and return the placed blocks as
+    [(page_number, block), ...] - the same positions, for label_export.py."""
     # margin_pt must clear the notehead's own radius (~2.2pt at 300dpi) plus a
     # visible gap - anything smaller guarantees the label overlaps the notehead
     doc = fitz.open(input_pdf)
+    placed = []
     fill = label_rgb(color)
     fontname = "arial-notenames"
     measure_font = fitz.Font(fontfile=ARIAL_PATH)
@@ -248,6 +251,7 @@ def render(input_pdf, output_pdf, records, font_size=6.5, margin_pt=3.2, color="
     for page_num, page_records in by_page.items():
         shape = shapes[page_num - 1]
         blocks = _layout_page_records(page_records, font_size, measure_font, margin_pt, doc[page_num - 1])
+        placed.extend((page_num, b) for b in blocks)
         for b in blocks:
             fs = b['fs']
             for label, y, x_off, w in zip(b['labels'], b['ys'], b['label_x_offsets'], b['widths']):
@@ -268,6 +272,7 @@ def render(input_pdf, output_pdf, records, font_size=6.5, margin_pt=3.2, color="
     doc.subset_fonts()
     doc.save(output_pdf, garbage=4, deflate=True)
     doc.close()
+    return placed
 
 
 def main():

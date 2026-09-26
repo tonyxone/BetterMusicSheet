@@ -25,6 +25,9 @@ import type { Timeline, TimelineNote } from "@/lib/timeline";
 import { notesAtBeat, measureIndexAt } from "@/lib/timeline";
 import { applyCorrections, validCorrection } from "@/lib/corrections";
 import type { Corrections } from "@/lib/corrections";
+import { EMPTY_EDITS, fetchEdits, type SheetEdits } from "@/lib/edits";
+import { loadLabels, type LabelSet } from "@/lib/labels";
+import { AnnotationLayer } from "../sheet-viewer/annotation-layer";
 import { tempoClock, tempoControl } from "./tempo";
 import { GRACE_SECONDS, SynthEngine, INSTRUMENTS, isInstrumentId, type InstrumentId } from "./synth";
 import { Playback } from "./playback";
@@ -328,6 +331,13 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
   const [variant, setVariant] = useState<SheetVariant>("annotated");
   const [originalData, setOriginalData] = useState<ArrayBuffer | null>(null);
   const [originalBlocked, setOriginalBlocked] = useState<string | null>(null);
+  // The reader's own changes (lib/edits.ts), made in the sheet preview:
+  // retyped names correct playback, and the names and marks are drawn over
+  // the original here too. `overlayReady` holds the sheet back until it is
+  // known which copy to show, rather than flashing the annotated one first.
+  const [sheetEdits, setSheetEdits] = useState<SheetEdits>(EMPTY_EDITS);
+  const [labelSet, setLabelSet] = useState<LabelSet | null>(null);
+  const [overlayReady, setOverlayReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [playing, setPlaying] = useState(false);
@@ -429,9 +439,19 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
         } catch { /* Storage is optional. */ }
         let saved: Corrections = {};
         try {
-          const raw = JSON.parse(localStorage.getItem(`sheet-corrections:${jobId}`) ?? "{}");
-          saved = Object.fromEntries(Object.entries(raw).filter(([, value]) => validCorrection(value))) as Corrections;
-        } catch { /* Browser storage may be unavailable. */ }
+          const { doc } = await fetchEdits(jobId);
+          if (cancelled) return;
+          setSheetEdits(doc);
+          saved = doc.corrections;
+        } catch (err) {
+          // Playback still works without them; fall back to corrections kept
+          // in this browser before edits were saved on the server.
+          console.error("Loading saved edits failed:", err);
+          try {
+            const raw = JSON.parse(localStorage.getItem(`sheet-corrections:${jobId}`) ?? "{}");
+            saved = Object.fromEntries(Object.entries(raw).filter(([, value]) => validCorrection(value))) as Corrections;
+          } catch { /* Browser storage may be unavailable. */ }
+        }
         setTimeline(applyCorrections(tl, saved));
       } catch (err) {
         console.error("Loading the sheet for playback failed:", err);
@@ -439,36 +459,58 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
       }
     })();
 
-    // The annotated PDF is a visual aid. Playback is driven entirely by the
-    // timeline and remains usable when the preview request or renderer fails.
+    // The sheet is a visual aid. Playback is driven entirely by the timeline
+    // and remains usable when the preview request or renderer fails.
     void (async () => {
+      let pdf: ArrayBuffer | null = null;
       try {
         const pdfRes = await fetchSheetFile(jobId, "pdf");
         if (!pdfRes.ok) throw new Error(`request failed (${pdfRes.status})`);
-        const pdf = await pdfRes.arrayBuffer();
+        pdf = await pdfRes.arrayBuffer();
         if (!cancelled) setPdfData(pdf);
       } catch (err) {
         // Read as a flag only - playback carries on without the preview.
         console.error("Loading the sheet preview failed:", err);
         if (!cancelled) setPdfError("unavailable");
       }
-    })();
 
-    // Whether the uploaded copy can be shown at all. Play draws through
-    // pdf.js, so a photo upload is ruled out here rather than failing later
-    // with a broken viewer.
-    void (async () => {
+      // Whether the uploaded copy can be shown at all. Play draws through
+      // pdf.js, so a photo upload is ruled out here rather than failing later
+      // with a broken viewer.
+      let originalUsable = false;
       try {
         const assets = await fetchSheetAssets(jobId);
-        if (cancelled || !assets) return;
-        if ("original" in assets && !assets.original) {
+        if (cancelled) return;
+        if (assets && "original" in assets && !assets.original) {
           setOriginalBlocked("The uploaded file isn't stored for this sheet");
-        } else if (assets.original_type && assets.original_type !== "application/pdf") {
+        } else if (assets?.original_type && assets.original_type !== "application/pdf") {
           setOriginalBlocked("This sheet was uploaded as a photo, which Play can't display");
+        } else {
+          originalUsable = !!assets;
         }
       } catch {
         // Leave it offered; the fetch below reports a real failure.
       }
+
+      // With the original and the names as data, the names are drawn over
+      // the original - so moved and retyped ones show here as they do in
+      // the preview. Otherwise the annotated copy is shown as it was made.
+      if (originalUsable) {
+        try {
+          const res = await fetchSheetFile(jobId, "original");
+          const buffer = res.ok ? await res.arrayBuffer() : null;
+          const header = buffer && new TextDecoder().decode(new Uint8Array(buffer.slice(0, 5)));
+          if (buffer && header === "%PDF-") {
+            const labels = await loadLabels(jobId, pdf, null);
+            if (cancelled) return;
+            setOriginalData(buffer);
+            setLabelSet(labels);
+          }
+        } catch (err) {
+          console.error("Loading the note names failed; showing the annotated copy:", err);
+        }
+      }
+      if (!cancelled) setOverlayReady(true);
     })();
 
     return () => {
@@ -890,7 +932,9 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
   // Null while the original is still on its way, which renders the same
   // "Loading the sheet preview" hint the annotated copy uses - rather than
   // leaving the annotated pages up under a toggle that says Original.
-  const shownPdf = variant === "original" ? originalData : pdfData;
+  const labelsLive = !!labelSet && !!originalData;
+  const shownPdf = variant === "original" ? originalData
+    : !overlayReady ? null : labelsLive ? originalData : pdfData;
 
   return (
     <div className="play-view">
@@ -914,6 +958,15 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
             notes={timeline.notes}
             beat={beat}
             onMeasureClick={handleMeasureClick}
+            overlay={variant === "annotated" ? (page) => (
+              <AnnotationLayer
+                page={page}
+                labels={labelsLive ? labelSet!.items.filter((l) => l.page === page.pageNumber) : []}
+                labelColor={labelSet?.color ?? "#000000"}
+                showLabels={labelsLive}
+                edits={sheetEdits}
+              />
+            ) : undefined}
           />
         ) : (
           <p className="play-hint">
