@@ -15,11 +15,14 @@ export type Subscription = {
   /** Whether a new subscription would start with the 7-day free trial -
    * only an account that has never subscribed before gets one. */
   trial_eligible: boolean;
+  /** A master account: premium without a subscription (the backend's
+   * master users table). Absent from older backends. */
+  master?: boolean;
 };
 
 export const FREE_SUBSCRIPTION: Subscription = {
   tier: "free", plan: null, status: null, started_at: null, current_period_end: null,
-  cancel_at_period_end: false, platform: null, trial_eligible: true,
+  cancel_at_period_end: false, platform: null, trial_eligible: true, master: false,
 };
 
 let cached: Subscription | null = null;

@@ -20,6 +20,7 @@ variable "subnets" { type = list(string) }
 variable "legacy_bucket" { type = string }
 variable "users_table" { type = string }
 variable "subscriptions_table" { type = string }
+variable "master_users_table" { type = string }
 variable "sheets_table" { type = string }
 variable "jobs_table" { type = string }
 variable "secret_parameter" { type = string }
@@ -61,6 +62,7 @@ locals {
     NEW_JOB_FILES_BUCKET  = aws_s3_bucket.files.id
     USERS_TABLE           = var.users_table
     SUBSCRIPTIONS_TABLE   = var.subscriptions_table
+    MASTER_USERS_TABLE    = var.master_users_table
     STRIPE_PRICE_MONTHLY  = var.stripe_price_monthly
     STRIPE_PRICE_YEARLY   = var.stripe_price_yearly
     MUSIC_SHEET_TABLE     = var.sheets_table

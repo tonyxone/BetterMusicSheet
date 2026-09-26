@@ -41,7 +41,7 @@ class ServerlessTests(unittest.TestCase):
             "AWS_REGION": "us-west-1", "AWS_ACCESS_KEY_ID": "testing", "AWS_SECRET_ACCESS_KEY": "testing",
             "USERS_TABLE": "test-users", "MUSIC_SHEET_TABLE": "test-sheets",
             "ANNOTATION_JOB_TABLE": "test-jobs", "JOB_CONTROL_TABLE": "test-control",
-            "SUBSCRIPTIONS_TABLE": "test-subscriptions",
+            "SUBSCRIPTIONS_TABLE": "test-subscriptions", "MASTER_USERS_TABLE": "test-master-users",
             "JOB_FILES_BUCKET": "legacy-files", "NEW_JOB_FILES_BUCKET": "new-files",
             "BACKEND_JWT_SECRET": "test-only", "COGNITO_USER_POOL_ID": "us-west-1_test",
             "COGNITO_APP_CLIENT_ID": "test-client",
@@ -50,7 +50,8 @@ class ServerlessTests(unittest.TestCase):
         self.aws = mock_aws()
         self.aws.start()
         self.ddb = boto3.client("dynamodb")
-        for name, key in [("test-users", "user_id"), ("test-subscriptions", "user_id"), ("test-sheets", "music_sheet_id"),
+        for name, key in [("test-users", "user_id"), ("test-subscriptions", "user_id"), ("test-master-users", "user_id"),
+                          ("test-sheets", "music_sheet_id"),
                           ("test-jobs", "job_id"), ("test-control", "user_id")]:
             attrs = [{"AttributeName": key, "AttributeType": "S"}]
             indexes = []
@@ -107,6 +108,16 @@ class ServerlessTests(unittest.TestCase):
         self.assertIsNone(db.get_music_sheet("b"))
         self.assertTrue(worker.process_job("a", runner=fake_runner))
         self.assertEqual(job_state.create("b", USER, "Second.pdf", OPTIONS, 1)["status"], "uploading")
+
+    def test_master_user_store_round_trips_through_dynamodb(self):
+        self.assertFalse(db.is_master_user(USER))
+        db.add_master_user(USER)
+        self.assertTrue(db.is_master_user(USER))
+        self.assertEqual(self.ddb.get_item(TableName="test-master-users", Key={"user_id": {"S": USER}})["Item"],
+                         {"user_id": {"S": USER}})
+        self.assertEqual(auth.get_entitlement(USER)["tier"], "premium")
+        db.remove_master_user(USER)
+        self.assertFalse(db.is_master_user(USER))
 
     def test_subscription_store_round_trips_through_dynamodb(self):
         db.upsert_subscription(USER, "trialing", "monthly", "apple", 100, 200, True,

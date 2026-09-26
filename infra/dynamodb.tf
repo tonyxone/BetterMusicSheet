@@ -37,6 +37,25 @@ resource "aws_dynamodb_table" "subscriptions" {
   }
 }
 
+# Accounts that bypass every subscription check in the web and iOS apps (see
+# ../auth.py get_entitlement). user_id (the Cognito `sub`) is the only field -
+# a row's presence is the grant. Rows are managed by hand, e.g.
+#   aws dynamodb put-item --table-name <name> --item '{"user_id":{"S":"<sub>"}}'
+resource "aws_dynamodb_table" "master_user" {
+  name         = "${var.project}-master-user"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "user_id"
+
+  attribute {
+    name = "user_id"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+}
+
 resource "aws_dynamodb_table" "music_sheet" {
   name         = "${var.project}-music-sheet"
   billing_mode = "PAY_PER_REQUEST"

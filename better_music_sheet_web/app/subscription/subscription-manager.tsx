@@ -65,6 +65,22 @@ export function SubscriptionManager() {
   // Free accounts are on their way to the upgrade page (see the effect above).
   if (free || !subscription) return <div className="wrap medium subscription-page"><p className="subscription-muted">Loading subscription…</p></div>;
 
+  // A master account is premium without paying; unless it also bought a
+  // subscription there is no plan to show and nothing to cancel.
+  if (subscription.master && !subscription.platform) {
+    return (
+      <div className="wrap medium subscription-page">
+        <div className="page-title-row"><h1 className="serif">Your subscription</h1></div>
+        <section className="subscription-card manage-card">
+          <dl>
+            <div><dt>Plan</dt><dd>Master account</dd></div>
+            <div><dt>Status</dt><dd>Full access, no subscription needed</dd></div>
+          </dl>
+        </section>
+      </div>
+    );
+  }
+
   const pending = subscription.cancel_at_period_end;
   return (
     <div className="wrap medium subscription-page">
