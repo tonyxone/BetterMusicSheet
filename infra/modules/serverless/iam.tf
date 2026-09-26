@@ -13,6 +13,13 @@ locals {
     Effect   = "Allow", Action = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:TransactWriteItems"],
     Resource = concat(local.table_arns, [for arn in local.table_arns : "${arn}/index/*"])
   }
+  # Read-only on purpose: being listed here grants premium everywhere (see
+  # ../../../auth.py get_entitlement), so rows are added by hand with an
+  # operator's own credentials and no code path in the app may write one.
+  master_users_statement = {
+    Effect   = "Allow", Action = ["dynamodb:GetItem"],
+    Resource = "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.master_users_table}"
+  }
   new_files_statement = {
     Effect   = "Allow", Action = ["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion"],
     Resource = ["${aws_s3_bucket.files.arn}/jobs/*"]
@@ -40,8 +47,8 @@ resource "aws_iam_role" "api" {
 resource "aws_iam_role_policy" "api" {
   role = aws_iam_role.api.id
   policy = jsonencode({ Version = "2012-10-17", Statement = [
-    local.logs_statement, local.db_statement, local.new_files_statement, local.list_files_statement,
-    local.cognito_delete_statement,
+    local.logs_statement, local.db_statement, local.master_users_statement, local.new_files_statement,
+    local.list_files_statement, local.cognito_delete_statement,
     { Effect = "Allow", Action = ["s3:GetObject", "s3:DeleteObject"], Resource = "arn:aws:s3:::${var.legacy_bucket}/*" },
     { Effect = "Allow", Action = ["s3:ListBucket"], Resource = "arn:aws:s3:::${var.legacy_bucket}" },
     { Effect = "Allow", Action = ["ssm:GetParameter"], Resource = var.secret_parameter }

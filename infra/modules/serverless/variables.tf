@@ -77,6 +77,6 @@ locals {
     MAX_PAGES             = "50"
     MAX_JOB_SECONDS       = "1800"
   }
-  table_arns = [for name in [var.users_table, var.subscriptions_table, var.master_users_table, var.sheets_table, var.jobs_table, aws_dynamodb_table.control.name] :
+  table_arns = [for name in [var.users_table, var.subscriptions_table, var.sheets_table, var.jobs_table, aws_dynamodb_table.control.name] :
   "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${name}"]
 }
