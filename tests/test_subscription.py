@@ -626,7 +626,7 @@ class SubscriptionTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 200, response.text)
                 self.assertEqual(db.get_subscription(APPLE_USER)["status"], expected)
 
-    def test_auto_environment_falls_back_to_sandbox_only_on_not_found(self):
+    def test_auto_environment_falls_back_to_sandbox_on_not_found(self):
         not_found = HTTPError("https://apple.test", 404, "not found", {}, None)
         response = MagicMock()
         response.__enter__.return_value.read.return_value = b'{"ok":true}'
@@ -636,6 +636,29 @@ class SubscriptionTests(unittest.TestCase):
             self.assertEqual(apple_billing._apple_get("/test"), {"ok": True})
             self.assertIn("api.storekit.itunes.apple.com", request.call_args_list[0].args[0].full_url)
             self.assertIn("api.storekit-sandbox.itunes.apple.com", request.call_args_list[1].args[0].full_url)
+
+    def test_auto_environment_falls_back_to_sandbox_while_production_is_unauthorized(self):
+        # Apple's production API rejects every request until the app is released.
+        unauthorized = HTTPError("https://apple.test", 401, "unauthorized", {}, None)
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"ok":true}'
+        with self.apple(), patch.object(apple_billing, "APPLE_ENV", "auto"), \
+                patch.object(apple_billing.jwt, "encode", return_value="client-jwt"), \
+                patch.object(apple_billing, "urlopen", side_effect=[unauthorized, response]) as request:
+            self.assertEqual(apple_billing._apple_get("/test"), {"ok": True})
+            self.assertIn("api.storekit-sandbox.itunes.apple.com", request.call_args_list[1].args[0].full_url)
+
+    def test_other_apple_errors_do_not_fall_back_and_report_the_status(self):
+        for code in (400, 429, 500):
+            failure = HTTPError("https://apple.test", code, "failed", {}, None)
+            with self.subTest(code=code), self.apple(), patch.object(apple_billing, "APPLE_ENV", "auto"), \
+                    patch.object(apple_billing.jwt, "encode", return_value="client-jwt"), \
+                    patch.object(apple_billing, "urlopen", side_effect=[failure]) as request:
+                with self.assertRaises(apple_billing.HTTPException) as raised:
+                    apple_billing._apple_get("/test")
+                self.assertEqual(raised.exception.status_code, 502)
+                self.assertIn(f"HTTP {code}", raised.exception.detail)
+                self.assertEqual(request.call_count, 1)
 
 
 if __name__ == "__main__":

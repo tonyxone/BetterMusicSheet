@@ -90,11 +90,13 @@ def _apple_get(path):
             with urlopen(request, timeout=10) as response:
                 return json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
+            # Production answers 401 until the app's first release, so auto
+            # mode would never reach the sandbox during TestFlight/dev testing.
+            if exc.code in (401, 404) and index + 1 < len(environments):
+                continue
             if exc.code == 404:
-                if index + 1 < len(environments):
-                    continue
                 raise HTTPException(404, "Apple transaction was not found.") from exc
-            raise HTTPException(502, "Apple App Store Server API request failed.") from exc
+            raise HTTPException(502, f"Apple App Store Server API request failed (HTTP {exc.code}).") from exc
         except (URLError, UnicodeDecodeError, ValueError) as exc:
             raise HTTPException(502, "Apple App Store Server API returned an invalid response.") from exc
 
