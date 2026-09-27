@@ -25,6 +25,14 @@ resource "aws_lambda_function" "api" {
       COGNITO_DOMAIN               = var.cognito_domain
       STRIPE_SECRET_KEY            = var.stripe_secret_key
       STRIPE_WEBHOOK_SECRET        = var.stripe_webhook_secret
+      APPLE_KEY_ID                 = var.apple_key_id
+      APPLE_ISSUER_ID              = var.apple_issuer_id
+      APPLE_APP_ID                 = var.apple_app_id
+      APPLE_BUNDLE_ID              = var.apple_bundle_id
+      APPLE_PRIVATE_KEY            = var.apple_private_key
+      APPLE_ENV                    = var.apple_env
+      APPLE_PRODUCT_MONTHLY        = var.apple_product_monthly
+      APPLE_PRODUCT_YEARLY         = var.apple_product_yearly
     })
   }
   logging_config {

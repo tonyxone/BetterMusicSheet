@@ -138,7 +138,7 @@ jobs:
       # its client id var is non-empty. Without this, that var is empty here
       # (it's never in tfvars - see social-signin-env.sh), and the apply
       # below would destroy the real Google/Apple providers. The same secret
-      # also carries the Stripe billing credentials (see stripe.tf) - loaded
+      # also carries Stripe and Apple billing credentials - loaded
       # here too, or Stripe would silently apply as unconfigured.
       #
       # ::add-mask:: BEFORE the value ever reaches $GITHUB_ENV: every step
@@ -153,7 +153,9 @@ jobs:
           source infra/social-signin-env.sh
           for name in google_client_id google_client_secret facebook_app_id facebook_app_secret \
                       apple_services_id apple_team_id apple_key_id apple_private_key \
-                      STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET STRIPE_PRICE_MONTHLY STRIPE_PRICE_YEARLY; do
+                      STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET STRIPE_PRICE_MONTHLY STRIPE_PRICE_YEARLY \
+                      APPLE_KEY_ID APPLE_ISSUER_ID APPLE_APP_ID APPLE_BUNDLE_ID \
+                      APPLE_PRIVATE_KEY APPLE_ENV APPLE_PRODUCT_MONTHLY APPLE_PRODUCT_YEARLY; do
             var="TF_VAR_$name"
             value="${!var:-}"
             if [ -n "$value" ]; then

@@ -112,3 +112,45 @@ locals {
   table_arns = [for name in [var.users_table, var.subscriptions_table, var.sheets_table, var.jobs_table, aws_dynamodb_table.control.name] :
   "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${name}"]
 }
+
+# Only the API Lambda receives Apple billing configuration.
+variable "apple_key_id" {
+  type    = string
+  default = ""
+}
+
+variable "apple_issuer_id" {
+  type    = string
+  default = ""
+}
+
+variable "apple_app_id" {
+  type    = string
+  default = "6814721766"
+}
+
+variable "apple_bundle_id" {
+  type    = string
+  default = "com.bettermusicsheet.app"
+}
+
+variable "apple_private_key" {
+  type      = string
+  default   = ""
+  sensitive = true
+}
+
+variable "apple_env" {
+  type    = string
+  default = "auto"
+}
+
+variable "apple_product_monthly" {
+  type    = string
+  default = "com.bettermusicsheet.app.premium.monthly"
+}
+
+variable "apple_product_yearly" {
+  type    = string
+  default = "com.bettermusicsheet.app.premium.yearly"
+}

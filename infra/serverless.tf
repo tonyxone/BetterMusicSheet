@@ -73,6 +73,14 @@ module "serverless" {
   spot_burst            = var.serverless_spot_burst
   alert_email           = var.alert_email
   stripe_secret_key     = var.STRIPE_SECRET_KEY
+  apple_key_id          = var.APPLE_KEY_ID
+  apple_issuer_id       = var.APPLE_ISSUER_ID
+  apple_app_id          = var.APPLE_APP_ID
+  apple_bundle_id       = var.APPLE_BUNDLE_ID
+  apple_private_key     = var.APPLE_PRIVATE_KEY
+  apple_env             = var.APPLE_ENV
+  apple_product_monthly = var.APPLE_PRODUCT_MONTHLY
+  apple_product_yearly  = var.APPLE_PRODUCT_YEARLY
   stripe_webhook_secret = var.STRIPE_WEBHOOK_SECRET
   stripe_price_monthly  = var.STRIPE_PRICE_MONTHLY
   stripe_price_yearly   = var.STRIPE_PRICE_YEARLY

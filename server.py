@@ -337,7 +337,8 @@ def change_stripe_plan(body: StripePlanRequest, user_id: str = Depends(get_signe
 def apple_transaction(body: AppleTransactionRequest, user_id: str = Depends(get_signed_in_user_id)):
     if user_id is None:
         raise HTTPException(401, "not signed in")
-    return apple_billing.record_transaction(user_id, body.transaction)
+    apple_billing.record_transaction(user_id, body.transaction)
+    return {**get_entitlement(user_id), "trial_eligible": is_trial_eligible(user_id)}
 
 
 @app.post("/api/webhooks/apple")
