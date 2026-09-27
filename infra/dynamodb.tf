@@ -49,6 +49,19 @@ resource "aws_dynamodb_table" "subscriptions" {
     type = "S"
   }
 
+  attribute {
+    name = "subscription_id"
+    type = "S"
+  }
+
+  # Apple notifications and restores name a subscription, not an account, so
+  # the owner is looked up by the provider's id (see ../db.py).
+  global_secondary_index {
+    name            = "subscription_id-index"
+    hash_key        = "subscription_id"
+    projection_type = "ALL"
+  }
+
   point_in_time_recovery {
     enabled = true
   }
