@@ -14,7 +14,7 @@ export default function PrivacyPage() {
         <BackButton />
         <h1 className="serif">Privacy</h1>
       </div>
-      <div className="sub">Last updated 26 September 2026</div>
+      <div className="sub">Last updated 27 September 2026</div>
 
       <p>
         BetterMusicSheet annotates sheet music you upload. This page describes
@@ -37,7 +37,8 @@ export default function PrivacyPage() {
       <h3>An account, only if you create one</h3>
       <p>
         Signing in is optional for browsing the demo. Uploading your own sheets
-        requires a signed-in Premium account. If you sign in,
+        requires a signed-in account. Free accounts can keep one sheet at a time;
+        Premium accounts can keep more. If you sign in,
         sign-in is handled by Amazon Cognito, and the site stores the account
         identifier it issues, your email address, and a display name. It is used
         to attach sheets to your account so they survive a change of browser.
@@ -77,9 +78,31 @@ export default function PrivacyPage() {
       <h3>On your iPhone or iPad</h3>
       <p>
         The app stores sign-in credentials in the device Keychain and caches
-        subscription status and app preferences on the device. The iOS app
-        currently does not show advertisements or start the advertising SDK.
+        subscription status and app preferences on the device. It also caches
+        sheet music, playback data, instrument sounds, and your sheet edits.
         Website analytics described above are separate from the iOS app.
+      </p>
+
+      <h3>Advertisements in the iOS app</h3>
+      <p>
+        The Free plan shows banner ads provided by Google AdMob. Premium does
+        not show ads. The app requests non-personalized ads and does not request
+        access to Apple&apos;s advertising identifier through App Tracking
+        Transparency. Non-personalized ads still involve data collection:
+        Google&apos;s advertising SDK may collect an IP address (used to estimate
+        approximate location), device identifiers, ads viewed and interactions,
+        app interactions, crash logs, performance data, and other diagnostics
+        to serve and measure ads, prevent fraud, and improve its services. Your
+        uploaded sheet music is not provided to AdMob.
+      </p>
+      <p>
+        Google&apos;s User Messaging Platform presents privacy choices where
+        required. You can revisit available choices using Ad Privacy Choices
+        in the app&apos;s Account screen. Google handles advertising data under{" "}
+        <a href="https://policies.google.com/privacy" target="_blank" rel="noreferrer noopener">
+          Google&apos;s privacy policy
+        </a>
+        .
       </p>
 
       <h2>What is not done</h2>

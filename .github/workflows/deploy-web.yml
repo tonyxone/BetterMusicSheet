@@ -1,0 +1,64 @@
+name: Deploy web UI
+
+on:
+  workflow_dispatch:
+
+# Queue with full releases so two static exports cannot overwrite each other.
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy-ui:
+    name: Build and deploy the web UI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: better_music_sheet_web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: better_music_sheet_web
+        run: npm ci
+
+      # NEXT_PUBLIC_* values are inlined into the bundle at build time, not
+      # read at runtime - a static export has no server to read them from.
+      # Leaving the Cognito pair unset just hides the Sign in button (see
+      # lib/cognito.ts); `terraform output` supplies all four values. The
+      # social pair is optional on top of that - empty just means no social
+      # buttons render, the same way an empty Cognito pair hides sign-in
+      # entirely (see cognito_hosted_ui_domain / cognito_social_providers).
+      - name: Build static export
+        working-directory: better_music_sheet_web
+        env:
+          NEXT_PUBLIC_API_BASE: https://${{ vars.API_SUBDOMAIN }}
+          NEXT_PUBLIC_COGNITO_REGION: ${{ vars.AWS_REGION }}
+          NEXT_PUBLIC_COGNITO_CLIENT_ID: ${{ vars.COGNITO_APP_CLIENT_ID }}
+          NEXT_PUBLIC_COGNITO_DOMAIN: ${{ vars.COGNITO_HOSTED_UI_DOMAIN }}
+          NEXT_PUBLIC_COGNITO_SOCIAL_PROVIDERS: ${{ vars.COGNITO_SOCIAL_PROVIDERS }}
+        run: npm run build
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-skip-session-tagging: true
+
+      - name: Sync to S3
+        run: aws s3 sync better_music_sheet_web/out/ "s3://${{ vars.S3_BUCKET }}/" --delete
+
+      - name: Invalidate CloudFront cache
+        if: vars.CLOUDFRONT_DISTRIBUTION_ID != ''
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}" \
+            --paths "/*"
