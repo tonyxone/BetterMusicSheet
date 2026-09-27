@@ -109,6 +109,13 @@ test('stored edits are sanitized entry by entry', () => {
   assert.equal(edits.sanitizeEdits(null).version, 1);
 });
 
+test('a colour set on a name (by the iOS app) survives sanitizing and is drawn', () => {
+  const doc = edits.sanitizeEdits({ labels: { L1: { color: '#C0392B' }, L2: { color: 'red', dx: 1 } } });
+  assert.deepEqual({ ...doc.labels.L1 }, { color: '#C0392B' });
+  assert.deepEqual({ ...doc.labels.L2 }, { dx: 1 });
+  assert.equal(edits.resolveLabel(item, doc).color, '#C0392B');
+});
+
 test('a label resolves to its moved, retyped or hidden form', () => {
   const doc = { ...edits.EMPTY_EDITS, labels: { L1: { dx: 3, dy: -1, text: 'D' } } };
   const moved = edits.resolveLabel({ ...item, x: 10, y: 20 }, doc);

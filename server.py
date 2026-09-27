@@ -337,7 +337,8 @@ def change_stripe_plan(body: StripePlanRequest, user_id: str = Depends(get_signe
 def apple_transaction(body: AppleTransactionRequest, user_id: str = Depends(get_signed_in_user_id)):
     if user_id is None:
         raise HTTPException(401, "not signed in")
-    return apple_billing.record_transaction(user_id, body.transaction)
+    apple_billing.record_transaction(user_id, body.transaction)
+    return {**get_entitlement(user_id), "trial_eligible": is_trial_eligible(user_id)}
 
 
 @app.post("/api/webhooks/apple")
@@ -474,7 +475,7 @@ async def submit_sheet(
         job = reserve_upload(body, user_id)
         try:
             if IS_PRODUCTION:
-                storage._s3.upload_file(str(raw), storage.job_bucket(job), job["input_key"])
+                storage._s3_for(job).upload_file(str(raw), storage.job_bucket(job), job["input_key"])
                 version = storage.input_info(job)["VersionId"]
             else:
                 shutil.copyfile(raw, storage._local_path(job["input_key"]))

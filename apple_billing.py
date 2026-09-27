@@ -6,6 +6,7 @@ the App Store Server API remains the authoritative source for transactions.
 import base64
 import json
 import time
+from urllib.parse import quote
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -49,8 +50,8 @@ def _require_api_settings():
         ("APPLE_PRODUCT_MONTHLY", APPLE_PRODUCT_MONTHLY),
         ("APPLE_PRODUCT_YEARLY", APPLE_PRODUCT_YEARLY),
     )
-    if APPLE_ENV not in ("sandbox", "production"):
-        raise HTTPException(503, "Apple billing is not configured: APPLE_ENV must be sandbox or production.")
+    if APPLE_ENV not in ("sandbox", "production", "auto"):
+        raise HTTPException(503, "Apple billing is not configured: APPLE_ENV must be sandbox, production, or auto.")
 
 
 def _decode_jws(token, label="JWS"):
@@ -81,22 +82,26 @@ def _apple_get(path):
     our own signed request. That is the only source subscription state is
     read from - never a JWS someone posted to us (see handle_webhook)."""
     _require_api_settings()
-    host = "api.storekit-sandbox.itunes.apple.com" if APPLE_ENV == "sandbox" else "api.storekit.itunes.apple.com"
-    request = Request(f"https://{host}{path}", headers={"Authorization": f"Bearer {_client_jwt()}"})
-    try:
-        with urlopen(request, timeout=10) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
-        if exc.code == 404:
-            raise HTTPException(404, "Apple transaction was not found.") from exc
-        raise HTTPException(502, "Apple App Store Server API request failed.") from exc
-    except (URLError, UnicodeDecodeError, ValueError) as exc:
-        raise HTTPException(502, "Apple App Store Server API returned an invalid response.") from exc
+    environments = ("production", "sandbox") if APPLE_ENV == "auto" else (APPLE_ENV,)
+    for index, environment in enumerate(environments):
+        host = "api.storekit-sandbox.itunes.apple.com" if environment == "sandbox" else "api.storekit.itunes.apple.com"
+        request = Request(f"https://{host}{path}", headers={"Authorization": f"Bearer {_client_jwt()}"})
+        try:
+            with urlopen(request, timeout=10) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            if exc.code == 404:
+                if index + 1 < len(environments):
+                    continue
+                raise HTTPException(404, "Apple transaction was not found.") from exc
+            raise HTTPException(502, "Apple App Store Server API request failed.") from exc
+        except (URLError, UnicodeDecodeError, ValueError) as exc:
+            raise HTTPException(502, "Apple App Store Server API returned an invalid response.") from exc
 
 
 def _fetch_transaction(transaction_id):
     """One transaction, as Apple has it (Get Transaction Info)."""
-    payload = _apple_get(f"/inApps/v1/transactions/{transaction_id}")
+    payload = _apple_get(f"/inApps/v1/transactions/{quote(str(transaction_id), safe='')}")
     transaction = payload.get("signedTransactionInfo", payload.get("transactionInfo"))
     if isinstance(transaction, str):
         transaction = _decode_jws(transaction, "transaction")
@@ -112,7 +117,7 @@ def _fetch_subscription(original_transaction_id):
     Transaction info alone can't say whether the subscriber turned
     auto-renew off - i.e. cancelled - so this is what both the iOS report and
     the webhook sync from."""
-    payload = _apple_get(f"/inApps/v1/subscriptions/{original_transaction_id}")
+    payload = _apple_get(f"/inApps/v1/subscriptions/{quote(str(original_transaction_id), safe='')}")
     for group in payload.get("data") or []:
         for last in group.get("lastTransactions") or []:
             if last.get("originalTransactionId") != original_transaction_id:
@@ -122,6 +127,7 @@ def _fetch_subscription(original_transaction_id):
             renewal = last.get("signedRenewalInfo")
             renewal = _decode_jws(renewal, "renewal") if isinstance(renewal, str) else None
             if transaction:
+                transaction["_appleStatus"] = last.get("status")
                 return transaction, renewal
     raise HTTPException(404, "Apple transaction was not found.")
 
@@ -155,8 +161,26 @@ def _sync_transaction(user_id, transaction, renewal=None):
     auto_renew = transaction.get("autoRenewStatus")
     if auto_renew is None and renewal:
         auto_renew = renewal.get("autoRenewStatus")
-    active = not transaction.get("revocationDate") and period_end and period_end > int(time.time())
+    # A grace-period entitlement comes from Apple's current status, not the
+    # notification's claimed type. Billing retry without grace grants no access.
+    if transaction.get("_appleStatus") == 4 and renewal:
+        grace_end = _timestamp(renewal.get("gracePeriodExpiresDate"))
+        if grace_end:
+            period_end = max(period_end or 0, grace_end)
+    active = (not transaction.get("revocationDate") and period_end
+              and period_end > int(time.time()) and transaction.get("_appleStatus") not in (2, 3, 5))
     status = "expired" if not active else ("trialing" if transaction.get("offerType") in (1, "1") else "active")
+    owner = db.get_subscription_by_platform_id("apple", original_transaction_id)
+    if owner and owner["user_id"] != user_id:
+        raise HTTPException(409, "This Apple subscription belongs to another account. Sign in to that account to restore it.")
+    account_token = transaction.get("appAccountToken")
+    if account_token:
+        if str(account_token).lower() != str(user_id).lower():
+            raise HTTPException(409, "This Apple purchase belongs to another account. Sign in to the account used to purchase it.")
+    elif not owner:
+        # Legacy purchases may be restored by their already recorded owner;
+        # an unbound transaction cannot be claimed simply by knowing its ID.
+        raise HTTPException(409, "This Apple purchase has no account link. Contact support to recover it.")
     if not can_record_subscription(user_id, "apple", original_transaction_id):
         raise HTTPException(409, "This account already has an active subscription.")
     db.upsert_subscription(
@@ -176,6 +200,8 @@ def record_transaction(user_id, signed_transaction):
     # the id to look up; Apple confirms the transaction exists, and the state
     # recorded is the subscription's current one, renewal status included.
     transaction = _fetch_transaction(transaction_id)
+    if transaction.get("appAccountToken") and str(transaction["appAccountToken"]).lower() != str(user_id).lower():
+        raise HTTPException(409, "This Apple purchase belongs to another account.")
     if transaction.get("bundleId") != APPLE_BUNDLE_ID:
         raise HTTPException(400, "Apple transaction bundle ID does not match this app.")
     original_transaction_id = transaction.get("originalTransactionId")
@@ -203,12 +229,14 @@ def handle_webhook(payload):
     """
     _require(("APPLE_BUNDLE_ID", APPLE_BUNDLE_ID))
     try:
-        token = payload.decode("utf-8") if isinstance(payload, bytes) else payload
-    except UnicodeDecodeError as exc:
-        raise HTTPException(400, "Invalid Apple notification payload.") from exc
+        envelope = json.loads(payload)
+        token = envelope.get("signedPayload") if isinstance(envelope, dict) else None
+    except (UnicodeDecodeError, ValueError, TypeError) as exc:
+        raise HTTPException(400, "Invalid Apple notification body.") from exc
+    if not isinstance(token, str):
+        raise HTTPException(400, "Apple notification body must contain signedPayload.")
     notification = _decode_jws(token, "notification")
-    if notification.get("notificationType") not in (
-            "DID_CHANGE_RENEWAL_STATUS", "EXPIRED", "REFUND", "RENEWAL", "DID_RENEW"):
+    if notification.get("notificationType") == "TEST":
         return {"received": True}
     data = notification.get("data")
     if not isinstance(data, dict):

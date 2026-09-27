@@ -59,7 +59,10 @@ if ($secret -isnot [psobject] -or $secret -is [string]) {
 $known = @(
     "google_client_id", "google_client_secret",
     "facebook_app_id", "facebook_app_secret",
-    "apple_services_id", "apple_team_id", "apple_key_id", "apple_private_key"
+    "apple_services_id", "apple_team_id", "apple_key_id", "apple_private_key",
+    "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "STRIPE_PRICE_MONTHLY", "STRIPE_PRICE_YEARLY",
+    "APPLE_KEY_ID", "APPLE_ISSUER_ID", "APPLE_APP_ID", "APPLE_BUNDLE_ID",
+    "APPLE_PRIVATE_KEY", "APPLE_ENV", "APPLE_PRODUCT_MONTHLY", "APPLE_PRODUCT_YEARLY"
 )
 
 $loaded = @()

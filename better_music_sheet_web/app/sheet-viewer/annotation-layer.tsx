@@ -357,7 +357,7 @@ export function AnnotationLayer({
             )}
             <text
               x={l.x} y={l.y} fontSize={l.size} textAnchor="middle" className="sheet-label"
-              fill={labelColor} stroke="#fff" strokeWidth={l.size * 0.16} paintOrder="stroke"
+              fill={l.color ?? labelColor} stroke="#fff" strokeWidth={l.size * 0.16} paintOrder="stroke"
             >
               {l.text}
             </text>

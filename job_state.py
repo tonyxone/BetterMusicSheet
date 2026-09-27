@@ -41,6 +41,11 @@ def create(job_id, user_id, name, options, size):
            "error": None, "stage": "Uploading sheet", "labeled_groups": None,
            **options}
     if IS_PRODUCTION:
+        # Where this region's API sends the upload. The row is replicated to
+        # every region; this is how the others find the files (see storage.py).
+        import storage
+        job.update(files_bucket=os.environ["NEW_JOB_FILES_BUCKET"], files_region=storage.own_region())
+    if IS_PRODUCTION:
         stored = {**job, "font_size": Decimal(str(job["font_size"]))}
         # The lock has no short TTL: the reconciler explicitly releases abandoned
         # uploads and terminal jobs, so an active processing job never loses it.

@@ -279,6 +279,43 @@ class ServerlessTests(unittest.TestCase):
         for kind in ("output", "timeline"):
             self.assertIn("s3.us-west-1.amazonaws.com", storage.presign_artifact(done, kind))
 
+    def test_a_job_records_the_region_holding_its_files(self):
+        job = job_state.create("a", USER, "Test.pdf", OPTIONS, 3)
+        self.assertEqual((job["files_bucket"], job["files_region"]), ("new-files", "us-west-1"))
+        self.assertEqual(db.get_annotation_job("a")["files_region"], "us-west-1")
+
+    def test_another_regions_job_is_read_from_its_own_bucket(self):
+        # Uploaded through the us-east-1 API; this region serves it anyway.
+        east = boto3.client("s3", region_name="us-east-1")
+        east.create_bucket(Bucket="east-files")
+        job = job_state.create("a", USER, "Test.pdf", OPTIONS, 3)
+        db.update_annotation_job("a", files_bucket="east-files", files_region="us-east-1",
+                                 status="done", output_key="jobs/east/output")
+        east.put_object(Bucket="east-files", Key="jobs/east/output", Body=b"%PDF-east")
+        moved = db.get_annotation_job("a")
+        self.assertEqual(storage.job_bucket(moved), "east-files")
+        url = storage.presign_artifact(moved, "output")
+        self.assertIn("east-files.s3.us-east-1.amazonaws.com", url)
+        self.assertEqual(storage.read_artifact(moved, "output")["Body"].read(), b"%PDF-east")
+        self.assertNotIn("east-files", storage.create_upload(job, "application/pdf")["url"])
+
+    def test_jobs_from_before_regions_were_recorded_use_the_home_bucket(self):
+        job = job_state.create("a", USER, "Test.pdf", OPTIONS, 3)
+        older = {k: v for k, v in job.items() if k not in ("files_bucket", "files_region")}
+        with patch.dict(os.environ, {"AWS_REGION": "us-east-1", "NEW_JOB_FILES_BUCKET": "east-files",
+                                     "FILES_HOME_REGION": "us-west-1", "FILES_HOME_BUCKET": "new-files"}):
+            self.assertEqual((storage.job_bucket(older), storage.job_region(older)), ("new-files", "us-west-1"))
+            self.assertFalse(storage.is_own_job(older))
+        self.assertTrue(storage.is_own_job(older))
+
+    def test_controller_leaves_another_regions_jobs_alone(self):
+        job = job_state.create("a", USER, "Test.pdf", OPTIONS, 3)
+        db.update_annotation_job("a", files_region="us-east-1", files_bucket="east-files")
+        controller.reconcile(self.sqs, self.queue, job["upload_expires_at"] + 1)
+        # Not expired here: only us-east-1's controller may decide that.
+        self.assertEqual(db.get_annotation_job("a")["status"], "uploading")
+        self.assertFalse(self.sqs.receive_message(QueueUrl=self.queue).get("Messages"))
+
     def test_presigned_artifacts_declare_their_media_type(self):
         # Pre-migration objects are stored as binary/octet-stream. The browser
         # builds a blob from the response, so an octet-stream PDF downloads

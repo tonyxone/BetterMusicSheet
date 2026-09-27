@@ -1,5 +1,34 @@
 variable "project" { type = string }
 variable "region" { type = string }
+# Appended to every resource name. Empty for the original (us-west-1) copy,
+# so none of its resources are renamed; set for any other region's copy,
+# since IAM roles and S3 bucket names are global and would otherwise collide.
+variable "suffix" {
+  type    = string
+  default = ""
+}
+# The user pool lives in one region; this copy of the API may run in another
+# (see ../../auth.py, which otherwise assumes its own region).
+variable "cognito_region" { type = string }
+# Where jobs that don't record a region keep their files: every job from before
+# the service ran in two regions, and every legacy sheet (see ../../storage.py).
+variable "files_home_region" { type = string }
+variable "files_home_bucket" {
+  type    = string
+  default = ""
+}
+# Other regions' job-file buckets. A visitor may be routed to this region for a
+# sheet uploaded in another, so the API can read, write edits to, and delete
+# files there too. The worker and controller only ever touch their own bucket.
+variable "other_file_buckets" {
+  type    = list(string)
+  default = []
+}
+# The legacy bucket's CORS rules belong to exactly one copy of this module.
+variable "manage_legacy_cors" {
+  type    = bool
+  default = true
+}
 variable "api_image" {
   type = string
   validation {
@@ -54,9 +83,12 @@ data "aws_caller_identity" "current" {}
 data "aws_ecs_cluster" "existing" { cluster_name = var.cluster_name }
 
 locals {
-  name = "${var.project}-v2"
+  name = "${var.project}-v2${var.suffix}"
   environment = {
     APP_ENV               = "production"
+    COGNITO_REGION        = var.cognito_region
+    FILES_HOME_REGION     = var.files_home_region
+    FILES_HOME_BUCKET     = var.files_home_bucket != "" ? var.files_home_bucket : aws_s3_bucket.files.id
     JOB_BACKEND           = "sqs"
     JOB_FILES_BUCKET      = var.legacy_bucket
     NEW_JOB_FILES_BUCKET  = aws_s3_bucket.files.id
@@ -79,4 +111,46 @@ locals {
   }
   table_arns = [for name in [var.users_table, var.subscriptions_table, var.sheets_table, var.jobs_table, aws_dynamodb_table.control.name] :
   "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${name}"]
+}
+
+# Only the API Lambda receives Apple billing configuration.
+variable "apple_key_id" {
+  type    = string
+  default = ""
+}
+
+variable "apple_issuer_id" {
+  type    = string
+  default = ""
+}
+
+variable "apple_app_id" {
+  type    = string
+  default = "6814721766"
+}
+
+variable "apple_bundle_id" {
+  type    = string
+  default = "com.bettermusicsheet.app"
+}
+
+variable "apple_private_key" {
+  type      = string
+  default   = ""
+  sensitive = true
+}
+
+variable "apple_env" {
+  type    = string
+  default = "auto"
+}
+
+variable "apple_product_monthly" {
+  type    = string
+  default = "com.bettermusicsheet.app.premium.monthly"
+}
+
+variable "apple_product_yearly" {
+  type    = string
+  default = "com.bettermusicsheet.app.premium.yearly"
 }

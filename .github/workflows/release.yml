@@ -116,6 +116,14 @@ jobs:
     # Only runs for the serverless target - legacy's ECS API isn't
     # Terraform's to manage (see infra/README.md).
     if: ${{ !cancelled() && !failure() && needs.preflight.outputs.deploy == 'true' && needs.preflight.outputs.target == 'serverless' }}
+    # What Terraform says is deployed in us-east-1 (see infra/us-east-1.tf) -
+    # the deploy job below reads these rather than keeping its own copy.
+    outputs:
+      us-east-1: ${{ steps.regions.outputs.enabled }}
+      us-east-1-api: ${{ steps.regions.outputs.api }}
+      us-east-1-controller: ${{ steps.regions.outputs.controller }}
+      us-east-1-cluster: ${{ steps.regions.outputs.cluster }}
+      us-east-1-worker: ${{ steps.regions.outputs.worker }}
     steps:
       - uses: actions/checkout@v4
 
@@ -130,7 +138,7 @@ jobs:
       # its client id var is non-empty. Without this, that var is empty here
       # (it's never in tfvars - see social-signin-env.sh), and the apply
       # below would destroy the real Google/Apple providers. The same secret
-      # also carries the Stripe billing credentials (see stripe.tf) - loaded
+      # also carries Stripe and Apple billing credentials - loaded
       # here too, or Stripe would silently apply as unconfigured.
       #
       # ::add-mask:: BEFORE the value ever reaches $GITHUB_ENV: every step
@@ -145,7 +153,9 @@ jobs:
           source infra/social-signin-env.sh
           for name in google_client_id google_client_secret facebook_app_id facebook_app_secret \
                       apple_services_id apple_team_id apple_key_id apple_private_key \
-                      STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET STRIPE_PRICE_MONTHLY STRIPE_PRICE_YEARLY; do
+                      STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET STRIPE_PRICE_MONTHLY STRIPE_PRICE_YEARLY \
+                      APPLE_KEY_ID APPLE_ISSUER_ID APPLE_APP_ID APPLE_BUNDLE_ID \
+                      APPLE_PRIVATE_KEY APPLE_ENV APPLE_PRODUCT_MONTHLY APPLE_PRODUCT_YEARLY; do
             var="TF_VAR_$name"
             value="${!var:-}"
             if [ -n "$value" ]; then
@@ -161,6 +171,34 @@ jobs:
               echo "$value" >> "$GITHUB_ENV"
               echo "BMS_SECRET_EOF" >> "$GITHUB_ENV"
             fi
+          done
+
+      # A Lambda can only run an image from its own region's ECR. Replication
+      # (infra/us-east-1.tf) copies each push to us-east-1, usually within a
+      # minute or two, and the apply below points the us-east-1 functions at
+      # this release's tags - so they have to be there first. Nothing to wait
+      # for until the release that creates that repository has run.
+      - name: Wait for the images to reach us-east-1
+        env:
+          API_IMAGE: ${{ needs.push-image.outputs.api-image }}
+          WORKER_IMAGE: ${{ needs.push-image.outputs.image }}
+        run: |
+          REPOSITORY="${WORKER_IMAGE#*/}"; REPOSITORY="${REPOSITORY%:*}"
+          if ! aws ecr describe-repositories --region us-east-1 --repository-names "$REPOSITORY" > /dev/null 2>&1; then
+            echo "No us-east-1 repository yet - nothing to wait for."
+            exit 0
+          fi
+          for TAG in "${WORKER_IMAGE##*:}" "${API_IMAGE##*:}"; do
+            for attempt in $(seq 1 60); do
+              if aws ecr describe-images --region us-east-1 --repository-name "$REPOSITORY" \
+                   --image-ids imageTag="$TAG" > /dev/null 2>&1; then
+                echo "$TAG is in us-east-1."
+                continue 2
+              fi
+              sleep 15
+            done
+            echo "$TAG did not replicate to us-east-1 within 15 minutes."
+            exit 1
           done
 
       - uses: hashicorp/setup-terraform@v3
@@ -218,6 +256,18 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$CODE"
+
+      - name: Read which regions to deploy
+        id: regions
+        run: |
+          terraform -chdir=infra output -json > outputs.json
+          {
+            echo "enabled=$(jq -r '.us_east_1_enabled.value // false' outputs.json)"
+            echo "api=$(jq -r '.us_east_1_api_function.value // ""' outputs.json)"
+            echo "controller=$(jq -r '.us_east_1_controller_function.value // ""' outputs.json)"
+            echo "cluster=$(jq -r '.us_east_1_cluster.value // ""' outputs.json)"
+            echo "worker=$(jq -r '.us_east_1_worker_service.value // ""' outputs.json)"
+          } >> "$GITHUB_OUTPUT"
 
   deploy-legacy:
     name: Deploy the ECS API service
@@ -337,6 +387,73 @@ jobs:
           task-definition: ${{ steps.render.outputs.task-definition }}
           service: ${{ vars.WORKER_ECS_SERVICE }}
           cluster: ${{ vars.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      # ---- the same again in us-east-1, once Terraform has created it ----
+      # (see infra/us-east-1.tf). Same images, replicated to that region's ECR
+      # before apply-infra ran.
+
+      - name: Configure AWS credentials for us-east-1
+        if: needs.apply-infra.outputs.us-east-1 == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+          role-skip-session-tagging: true
+
+      - name: Name the us-east-1 images
+        if: needs.apply-infra.outputs.us-east-1 == 'true'
+        id: east-images
+        env:
+          API_IMAGE: ${{ needs.push-image.outputs.api-image }}
+          WORKER_IMAGE: ${{ needs.push-image.outputs.image }}
+          FROM: .dkr.ecr.${{ vars.AWS_REGION }}.
+        run: |
+          echo "api=${API_IMAGE/$FROM/.dkr.ecr.us-east-1.}" >> "$GITHUB_OUTPUT"
+          echo "worker=${WORKER_IMAGE/$FROM/.dkr.ecr.us-east-1.}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy Lambda code in us-east-1
+        if: needs.apply-infra.outputs.us-east-1 == 'true'
+        env:
+          API_IMAGE: ${{ steps.east-images.outputs.api }}
+          API_FUNCTION: ${{ needs.apply-infra.outputs.us-east-1-api }}
+          CONTROLLER_FUNCTION: ${{ needs.apply-infra.outputs.us-east-1-controller }}
+        run: |
+          for FUNCTION in "$API_FUNCTION" "$CONTROLLER_FUNCTION"; do
+            aws lambda update-function-code --function-name "$FUNCTION" --image-uri "$API_IMAGE" --query 'FunctionName'
+            aws lambda wait function-updated --function-name "$FUNCTION"
+          done
+
+      - name: Fetch the us-east-1 worker task definition
+        if: needs.apply-infra.outputs.us-east-1 == 'true'
+        env:
+          CLUSTER: ${{ needs.apply-infra.outputs.us-east-1-cluster }}
+          SERVICE: ${{ needs.apply-infra.outputs.us-east-1-worker }}
+        run: |
+          RUNNING=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query 'services[0].taskDefinition' --output text)
+          FAMILY=$(aws ecs describe-task-definition --task-definition "$RUNNING" --query 'taskDefinition.family' --output text)
+          aws ecs describe-task-definition \
+            --task-definition "$FAMILY" \
+            --query taskDefinition \
+            | jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' \
+            > task-definition-us-east-1.json
+
+      - name: Point it at the new image
+        if: needs.apply-infra.outputs.us-east-1 == 'true'
+        id: render-east
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition-us-east-1.json
+          container-name: worker
+          image: ${{ steps.east-images.outputs.worker }}
+
+      - name: Register the new revision and deploy it in us-east-1
+        if: needs.apply-infra.outputs.us-east-1 == 'true'
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-east.outputs.task-definition }}
+          service: ${{ needs.apply-infra.outputs.us-east-1-worker }}
+          cluster: ${{ needs.apply-infra.outputs.us-east-1-cluster }}
           wait-for-service-stability: true
 
   deploy-ui:

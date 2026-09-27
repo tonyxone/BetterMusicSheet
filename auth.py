@@ -88,7 +88,7 @@ def _subscription_entitlement(user_id):
     # Do not depend on a provider webhook arriving at the exact cancellation
     # instant. A scheduled cancellation remains premium through its precise
     # period-end second, then becomes free on the next entitlement check.
-    if (subscription["cancel_at_period_end"]
+    if ((subscription["cancel_at_period_end"] or subscription["platform"] == "apple")
             and subscription["current_period_end"] is not None
             and subscription["current_period_end"] <= int(time.time())):
         return free

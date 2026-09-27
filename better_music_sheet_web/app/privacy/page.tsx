@@ -14,11 +14,11 @@ export default function PrivacyPage() {
         <BackButton />
         <h1 className="serif">Privacy</h1>
       </div>
-      <div className="sub">Last updated 12 September 2026</div>
+      <div className="sub">Last updated 26 September 2026</div>
 
       <p>
         BetterMusicSheet annotates sheet music you upload. This page describes
-        everything the site stores about you and how to remove it. It is written
+        what the website and iOS app store about you and how to remove it. It is written
         to be read, not to be impressive.
       </p>
 
@@ -36,7 +36,8 @@ export default function PrivacyPage() {
 
       <h3>An account, only if you create one</h3>
       <p>
-        Signing in is optional; uploading works without it. If you do sign in,
+        Signing in is optional for browsing the demo. Uploading your own sheets
+        requires a signed-in Premium account. If you sign in,
         sign-in is handled by Amazon Cognito, and the site stores the account
         identifier it issues, your email address, and a display name. It is used
         to attach sheets to your account so they survive a change of browser.
@@ -63,6 +64,24 @@ export default function PrivacyPage() {
         site and no advertising scripts are loaded.
       </p>
 
+      <h3>Subscriptions on the web and iOS</h3>
+      <p>
+        Apple processes purchases made in the iOS app; Stripe processes purchases
+        on the website. We store the provider, plan, subscription identifier,
+        subscription status, and subscription dates against your account so
+        Premium access works on both platforms. We do not receive your full
+        payment card details from Apple. An Apple purchase includes an account
+        identifier so it can be linked to the account that bought it.
+      </p>
+
+      <h3>On your iPhone or iPad</h3>
+      <p>
+        The app stores sign-in credentials in the device Keychain and caches
+        subscription status and app preferences on the device. The iOS app
+        currently does not show advertisements or start the advertising SDK.
+        Website analytics described above are separate from the iOS app.
+      </p>
+
       <h2>What is not done</h2>
       <p>
         Your sheet music is not sold, shared, published, or used to train
@@ -82,8 +101,13 @@ export default function PrivacyPage() {
       <h2>Removing your data</h2>
       <p>
         Delete individual sheets from the <Link href="/history">Library</Link> page.
-        To remove an account and everything attached to it, or to ask what is
-        held about you, email{" "}
+        You can delete your account from the Account screen in the iOS app.
+        Delete individual sheets first if you want to remove their uploaded files;
+        account deletion removes the sign-in account and database records, but
+        does not automatically erase every retained file. Account deletion does
+        not cancel a subscription billed by Apple: manage that subscription in
+        Apple Account Settings. To request removal of retained files or ask what
+        is held about you, email{" "}
         <a href="mailto:privacy@bettermusicsheet.com">privacy@bettermusicsheet.com</a>.
       </p>
 
