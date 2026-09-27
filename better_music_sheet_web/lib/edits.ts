@@ -14,7 +14,9 @@ import { validCorrection, type Corrections, type NoteCorrection } from "./correc
 import { retypedMidi, type LabelItem } from "./labels";
 import type { Timeline } from "./timeline";
 
-export type LabelEdit = { dx?: number; dy?: number; text?: string; hidden?: boolean };
+/** ``color`` is a reader-chosen colour for this one name ("#rrggbb"),
+ * set by the iOS app; absent, the sheet's own label colour is used. */
+export type LabelEdit = { dx?: number; dy?: number; text?: string; hidden?: boolean; color?: string };
 export type TextNote = { id: string; page: number; x: number; y: number; text: string; size: number; color: string };
 export type Stroke = {
   id: string; page: number; tool: "pen" | "highlighter"; color: string; width: number;
@@ -47,6 +49,7 @@ export function sanitizeEdits(value: unknown): SheetEdits {
     if (finite(e.dy)) edit.dy = e.dy;
     if (typeof e.text === "string") edit.text = e.text.slice(0, 40);
     if (e.hidden === true) edit.hidden = true;
+    if (typeof e.color === "string" && COLOR.test(e.color)) edit.color = e.color;
     if (Object.keys(edit).length) labels[id] = edit;
   }
   const texts = (Array.isArray(raw.texts) ? raw.texts : []).filter((t): t is TextNote =>
@@ -69,7 +72,7 @@ export function isEmptyEdits(doc: SheetEdits) {
 export function resolveLabel(item: LabelItem, edits: SheetEdits) {
   const e = edits.labels[item.id];
   if (e?.hidden) return null;
-  return { ...item, x: item.x + (e?.dx ?? 0), y: item.y + (e?.dy ?? 0), text: e?.text ?? item.text, edited: !!e };
+  return { ...item, x: item.x + (e?.dx ?? 0), y: item.y + (e?.dy ?? 0), text: e?.text ?? item.text, edited: !!e, color: e?.color };
 }
 
 export type ResolvedLabel = NonNullable<ReturnType<typeof resolveLabel>>;

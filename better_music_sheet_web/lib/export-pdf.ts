@@ -78,11 +78,11 @@ export async function exportCustomizedPdf({ base, labels, edits }: {
     }
 
     if (labels) {
-      const [r, g, b] = rgbOf(labels.color);
       for (const item of labels.items) {
         if (item.page !== pageNumber) continue;
         const label = resolveLabel(item, edits);
         if (!label || !label.text.trim()) continue;
+        const [r, g, b] = rgbOf(label.color ?? labels.color);
         const text = printable(label.text);
         if (!fits(text)) continue;
         const width = font.widthOfTextAtSize(text, label.size);
