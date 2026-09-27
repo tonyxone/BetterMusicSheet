@@ -53,13 +53,24 @@ if ($secret -isnot [psobject] -or $secret -is [string]) {
     return
 }
 
+# The Sign in with Apple keys were once named apple_* without "cognito". A
+# secret still using those names would load no Apple sign-in, and Terraform
+# would then delete the live Apple provider - so refuse instead.
+$legacy = @("apple_services_id", "apple_team_id", "apple_key_id", "apple_private_key") |
+    Where-Object { $secret.PSObject.Properties.Name -contains $_ }
+if ($legacy -and -not $secret.apple_cognito_services_id) {
+    Write-Error ("social-signin-env: the secret uses the old apple_* Sign in with Apple names ({0}). " -f ($legacy -join ", ") +
+        "Rename them to apple_cognito_services_id, apple_cognito_team_id, apple_cognito_key_id and apple_cognito_private_key.")
+    return
+}
+
 # Exactly the variables cognito-idp.tf declares. A provider switches on in
 # Terraform the moment its id is non-empty, so exporting a stray TF_VAR_ would
 # quietly try to create a provider with no credentials.
 $known = @(
     "google_client_id", "google_client_secret",
     "facebook_app_id", "facebook_app_secret",
-    "apple_services_id", "apple_team_id", "apple_key_id", "apple_private_key",
+    "apple_cognito_services_id", "apple_cognito_team_id", "apple_cognito_key_id", "apple_cognito_private_key",
     "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "STRIPE_PRICE_MONTHLY", "STRIPE_PRICE_YEARLY",
     "APPLE_KEY_ID", "APPLE_ISSUER_ID", "APPLE_APP_ID", "APPLE_BUNDLE_ID",
     "APPLE_PRIVATE_KEY", "APPLE_ENV", "APPLE_PRODUCT_MONTHLY", "APPLE_PRODUCT_YEARLY"
@@ -89,16 +100,16 @@ if ($loaded.Count -eq 0) {
 # Values are never echoed - only which variables are now set, and enough shape
 # for the .p8 to be checked at a glance.
 Write-Host "Exported: $(($loaded | ForEach-Object { 'TF_VAR_' + $_ }) -join ' ')"
-if ($env:TF_VAR_apple_private_key) {
+if ($env:TF_VAR_apple_cognito_private_key) {
     # Non-empty lines only, so the count matches the .sh script's for the
     # same key (a PEM normally ends with a trailing newline).
-    $lines = (($env:TF_VAR_apple_private_key -split "`n") | Where-Object { $_ -ne "" }).Count
-    if ($env:TF_VAR_apple_private_key -notmatch "BEGIN PRIVATE KEY") {
-        Write-Warning "apple_private_key has no BEGIN PRIVATE KEY line - paste the .p8 whole, header and footer included."
+    $lines = (($env:TF_VAR_apple_cognito_private_key -split "`n") | Where-Object { $_ -ne "" }).Count
+    if ($env:TF_VAR_apple_cognito_private_key -notmatch "BEGIN PRIVATE KEY") {
+        Write-Warning "apple_cognito_private_key has no BEGIN PRIVATE KEY line - paste the .p8 whole, header and footer included."
     } elseif ($lines -lt 3) {
-        Write-Warning "apple_private_key is a single line - its newlines were lost. Store it with \n escapes in the JSON secret."
+        Write-Warning "apple_cognito_private_key is a single line - its newlines were lost. Store it with \n escapes in the JSON secret."
     } else {
-        Write-Host "  apple_private_key looks like a PEM ($lines lines)."
+        Write-Host "  apple_cognito_private_key looks like a PEM ($lines lines)."
     }
 }
 if ($skipped.Count -gt 0) {

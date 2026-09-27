@@ -47,6 +47,6 @@ alert_email = "your-address@example.com"
 # /oauth2/idpresponse URL, plus a Sign in with Apple key (.p8). Apple sends the
 # user's name only on their FIRST authorization, so a mistake here cannot be
 # retried without removing the app from the account's Apple ID settings.
-# Store `apple_team_id`, `apple_services_id`, `apple_key_id`, and
-# `apple_private_key` in the same Secrets Manager secret used for Google. The
+# Store `apple_cognito_team_id`, `apple_cognito_services_id`, `apple_cognito_key_id`, and
+# `apple_cognito_private_key` in the same Secrets Manager secret used for Google. The
 # PowerShell wrapper loads them; do not add the values to serverless.tfvars.

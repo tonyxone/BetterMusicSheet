@@ -37,7 +37,7 @@ if [[ ! -f "$VAR_FILE" ]]; then
     exit 1
 fi
 
-REQUIRED_VARS=(google_client_id google_client_secret apple_services_id apple_team_id apple_key_id apple_private_key)
+REQUIRED_VARS=(google_client_id google_client_secret apple_cognito_services_id apple_cognito_team_id apple_cognito_key_id apple_cognito_private_key)
 
 # `source file` with no explicit arguments inherits *this* script's current
 # positional parameters (e.g. --auto-approve) as the sourced script's "$@" -

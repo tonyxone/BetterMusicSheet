@@ -15,10 +15,10 @@
 #   {
 #     "google_client_id": "...",
 #     "google_client_secret": "...",
-#     "apple_services_id": "com.bettermusicsheet.signin",
-#     "apple_team_id": "ABCDE12345",
-#     "apple_key_id": "KEY1234567",
-#     "apple_private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",
+#     "apple_cognito_services_id": "com.bettermusicsheet.signin",
+#     "apple_cognito_team_id": "ABCDE12345",
+#     "apple_cognito_key_id": "KEY1234567",
+#     "apple_cognito_private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",
 #     "STRIPE_SECRET_KEY": "sk_...",
 #     "STRIPE_WEBHOOK_SECRET": "whsec_...",
 #     "STRIPE_PRICE_MONTHLY": "price_...",
@@ -59,11 +59,22 @@ _bms_load_social_secret() {
         return 1
     fi
 
+    # The Sign in with Apple keys were once named apple_* without "cognito".
+    # A secret still using those names would load no Apple sign-in at all, and
+    # Terraform would then delete the live Apple provider - so refuse instead.
+    if printf '%s' "$json" | jq -e '(.apple_cognito_services_id // "") == "" and
+            ([.apple_services_id, .apple_team_id, .apple_key_id, .apple_private_key] | any(. != null))' >/dev/null; then
+        echo "social-signin-env: the secret uses the old apple_* Sign in with Apple names." >&2
+        echo "  Rename them to apple_cognito_services_id, apple_cognito_team_id," >&2
+        echo "  apple_cognito_key_id and apple_cognito_private_key." >&2
+        return 1
+    fi
+
     # Billing and Sign in with Apple use separate keys. An incomplete sign-in
     # key can otherwise fail halfway through apply after other resources change.
     local required=() missing=() required_key
-    if printf '%s' "$json" | jq -e '(.apple_services_id // "") != ""' >/dev/null; then
-        required+=(apple_services_id apple_team_id apple_key_id apple_private_key)
+    if printf '%s' "$json" | jq -e '(.apple_cognito_services_id // "") != ""' >/dev/null; then
+        required+=(apple_cognito_services_id apple_cognito_team_id apple_cognito_key_id apple_cognito_private_key)
     fi
     if printf '%s' "$json" | jq -e '[.APPLE_KEY_ID // "", .APPLE_ISSUER_ID // "", .APPLE_PRIVATE_KEY // ""] | any(. != "")' >/dev/null; then
         required+=(APPLE_KEY_ID APPLE_ISSUER_ID APPLE_PRIVATE_KEY)
@@ -75,7 +86,7 @@ _bms_load_social_secret() {
     done
     if [[ ${#missing[@]} -gt 0 ]]; then
         echo "social-signin-env: incomplete Apple credentials; missing or empty: ${missing[*]}" >&2
-        echo "  Preserve lowercase apple_* sign-in keys separately from uppercase APPLE_* billing keys." >&2
+        echo "  Keep the apple_cognito_* sign-in keys separate from the uppercase APPLE_* billing keys." >&2
         return 1
     fi
 
@@ -85,7 +96,7 @@ _bms_load_social_secret() {
     # credentials.
     local known=" google_client_id google_client_secret \
 facebook_app_id facebook_app_secret \
-apple_services_id apple_team_id apple_key_id apple_private_key \
+apple_cognito_services_id apple_cognito_team_id apple_cognito_key_id apple_cognito_private_key \
 STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET STRIPE_PRICE_MONTHLY STRIPE_PRICE_YEARLY \
 APPLE_KEY_ID APPLE_ISSUER_ID APPLE_APP_ID APPLE_BUNDLE_ID APPLE_PRIVATE_KEY APPLE_ENV APPLE_PRODUCT_MONTHLY APPLE_PRODUCT_YEARLY "
 
@@ -127,17 +138,17 @@ APPLE_KEY_ID APPLE_ISSUER_ID APPLE_APP_ID APPLE_BUNDLE_ID APPLE_PRIVATE_KEY APPL
         summary="$summary TF_VAR_$key"
     done
     echo "Exported:$summary"
-    if [[ -n "${TF_VAR_apple_private_key:-}" ]]; then
+    if [[ -n "${TF_VAR_apple_cognito_private_key:-}" ]]; then
         local lines
-        lines=$(printf '%s' "$TF_VAR_apple_private_key" | wc -l)
-        if [[ "$TF_VAR_apple_private_key" != *"BEGIN PRIVATE KEY"* ]]; then
-            echo "WARNING: apple_private_key has no BEGIN PRIVATE KEY line -" >&2
+        lines=$(printf '%s' "$TF_VAR_apple_cognito_private_key" | wc -l)
+        if [[ "$TF_VAR_apple_cognito_private_key" != *"BEGIN PRIVATE KEY"* ]]; then
+            echo "WARNING: apple_cognito_private_key has no BEGIN PRIVATE KEY line -" >&2
             echo "  paste the .p8 whole, header and footer included." >&2
         elif [[ "$lines" -lt 2 ]]; then
-            echo "WARNING: apple_private_key is a single line - its newlines" >&2
+            echo "WARNING: apple_cognito_private_key is a single line - its newlines" >&2
             echo "  were lost. Store it with \\n escapes in the JSON secret." >&2
         else
-            echo "  apple_private_key looks like a PEM ($((lines + 1)) lines)."
+            echo "  apple_cognito_private_key looks like a PEM ($((lines + 1)) lines)."
         fi
     fi
     if [[ ${#skipped[@]} -gt 0 ]]; then

@@ -21,10 +21,10 @@ if ($AutoApprove -and $Command -ne "apply") {
 $terraformVariables = @(
     "google_client_id",
     "google_client_secret",
-    "apple_services_id",
-    "apple_team_id",
-    "apple_key_id",
-    "apple_private_key"
+    "apple_cognito_services_id",
+    "apple_cognito_team_id",
+    "apple_cognito_key_id",
+    "apple_cognito_private_key"
 )
 $previousEnvironment = @{}
 foreach ($variableName in $terraformVariables) {
