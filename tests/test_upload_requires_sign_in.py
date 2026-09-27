@@ -77,6 +77,48 @@ class UploadRequiresSignInTests(unittest.TestCase):
         self.assertEqual(db.get_annotation_job(job_id)["user_id"], USER)
         enqueue.assert_called_once_with(job_id)
 
+    def upload(self, user_id=USER):
+        files = {"file": ("Song.pdf", b"%PDF-1.4 test", "application/pdf")}
+        with patch.object(server, "enqueue_local"):
+            response = self.client.post("/api/sheets", files=files, headers=self.signed_in(user_id))
+        if response.status_code == 202:
+            self.addCleanup(db.delete_annotation_job, response.json()["job_id"])
+            self.addCleanup(db.delete_music_sheet, response.json()["music_sheet_id"])
+        return response
+
+    def finish(self, job_id, status="done"):
+        job = db.get_annotation_job(job_id)
+        db.update_annotation_job(job_id, status=status)
+        job_state.release(job)
+
+    def test_a_free_account_keeps_one_sheet_at_a_time(self):
+        free = "33333333-3333-4333-8333-333333333333"
+        first = self.upload(free)
+        self.assertEqual(first.status_code, 202, first.text)
+        self.finish(first.json()["job_id"])
+
+        second = self.upload(free)
+        self.assertEqual(second.status_code, 403)
+        self.assertIn("free plan keeps 1 sheet", second.json()["detail"])
+
+        self.assertEqual(self.client.delete(f"/api/sheets/{first.json()['job_id']}",
+                                            headers=self.signed_in(free)).status_code, 204)
+        self.assertEqual(self.upload(free).status_code, 202)
+
+    def test_a_failed_sheet_does_not_use_the_free_slot(self):
+        free = "44444444-4444-4444-8444-444444444444"
+        first = self.upload(free)
+        self.finish(first.json()["job_id"], status="failed")
+        self.assertEqual(self.upload(free).status_code, 202)
+
+    def test_premium_accounts_have_no_sheet_limit(self):
+        premium = "55555555-5555-4555-8555-555555555555"
+        with patch.object(server, "get_entitlement", return_value={"tier": "premium"}):
+            for _ in range(3):
+                response = self.upload(premium)
+                self.assertEqual(response.status_code, 202, response.text)
+                self.finish(response.json()["job_id"])
+
     def test_a_guests_previously_uploaded_job_still_reads_and_lists(self):
         """Fallout check: gating new uploads must not touch reads of content
         a guest already owns from before this change."""

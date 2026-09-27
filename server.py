@@ -48,6 +48,9 @@ if not SERVERLESS:
 STATIC_DIR = Path(__file__).parent / "static"
 
 ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
+# How many sheets a free account may keep. Failed and deleted jobs don't count,
+# so a failed upload can be retried and deleting a sheet frees the slot.
+FREE_SHEET_LIMIT = 1
 
 # Fixed values keep rasterization cost predictable. Auto leaves the opening
 # pass at Audiveris's 300-DPI default and can selectively re-read unclear
@@ -398,6 +401,14 @@ def reserve_upload(body, user_id):
     # concurrent new uploads without relying on an eventually consistent GSI.
     if db.get_in_progress_job(user_id):
         raise HTTPException(409, "You already have a sheet processing. Wait for it to finish.")
+    # One job in progress at a time (above, and atomically in job_state), so
+    # two concurrent uploads can't both slip under the limit.
+    if get_entitlement(user_id)["tier"] != "premium":
+        kept = [job for job in db.list_annotation_jobs(user_id)
+                if job["status"] not in ("failed", "deleting", "deleted")]
+        if len(kept) >= FREE_SHEET_LIMIT:
+            raise HTTPException(403, "The free plan keeps 1 sheet at a time. Delete your current sheet to "
+                                     "upload another, or go Premium for unlimited sheets.")
     try:
         return job_state.create(uuid.uuid4().hex, user_id, body.filename,
                                 body.model_dump(include={"style", "octave", "font_size", "dpi", "auto_retry", "color"}),
