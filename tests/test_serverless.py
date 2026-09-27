@@ -61,6 +61,10 @@ class ServerlessTests(unittest.TestCase):
                 indexes.append({"IndexName": "user_id-index", "KeySchema": [
                     {"AttributeName": "user_id", "KeyType": "HASH"},
                     {"AttributeName": "created_at", "KeyType": "RANGE"}], "Projection": {"ProjectionType": "ALL"}})
+            if name == "test-subscriptions":
+                attrs.append({"AttributeName": "subscription_id", "AttributeType": "S"})
+                indexes.append({"IndexName": "subscription_id-index", "KeySchema": [
+                    {"AttributeName": "subscription_id", "KeyType": "HASH"}], "Projection": {"ProjectionType": "ALL"}})
             if name == "test-jobs":
                 attrs += [{"AttributeName": "status", "AttributeType": "S"},
                           {"AttributeName": "next_check_at", "AttributeType": "N"}]
@@ -126,6 +130,13 @@ class ServerlessTests(unittest.TestCase):
         self.assertEqual(subscription["status"], "trialing")
         self.assertEqual(subscription["plan"], "monthly")
         self.assertEqual(subscription["subscription_id"], "original_123")
+
+    def test_subscription_owner_is_found_by_provider_id(self):
+        db.upsert_subscription(USER, "active", "monthly", "apple", 100, 200, False,
+                               subscription_id="original_123")
+        self.assertEqual(db.get_subscription_by_platform_id("apple", "original_123")["user_id"], USER)
+        self.assertIsNone(db.get_subscription_by_platform_id("stripe", "original_123"))
+        self.assertIsNone(db.get_subscription_by_platform_id("apple", "original_456"))
 
     def test_replaced_worker_cannot_publish_or_renew_lease(self):
         self.upload()

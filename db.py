@@ -388,13 +388,17 @@ if SUBSCRIPTIONS_TABLE:
         return _clean(item) if item else None
 
     def get_subscription_by_platform_id(platform, subscription_id):
-        response = _subscriptions_table.scan(
-            FilterExpression="#platform = :platform AND subscription_id = :subscription_id",
-            ExpressionAttributeNames={"#platform": "platform"},
-            ExpressionAttributeValues={":platform": platform, ":subscription_id": subscription_id},
+        # A Query on the index, not a Scan: the API role may not Scan, and a
+        # filtered Scan only searches the first 1 MB page of the table.
+        response = _subscriptions_table.query(
+            IndexName="subscription_id-index",
+            KeyConditionExpression="subscription_id = :subscription_id",
+            ExpressionAttributeValues={":subscription_id": str(subscription_id)},
         )
-        items = response.get("Items", [])
-        return _clean(items[0]) if items else None
+        for item in response.get("Items", []):
+            if item.get("platform") == platform:
+                return _clean(item)
+        return None
 
     def upsert_subscription(user_id, status, plan, platform, current_period_start,
                             current_period_end, cancel_at_period_end,
