@@ -820,6 +820,19 @@ class AccuracyTests(unittest.TestCase):
         self.assertEqual(t['notes'][0]['midi'], 89)
         self.assertEqual(annotate.records_from_resolved(p['resolved'], octave=True)[0]['labels'], ['F6'])
 
+    def test_scanned_page_octave_lines_come_from_the_picture(self):
+        # Page 1 has a line running on past its last system; page 2 has none.
+        pages = {1: ({1: [(0, 200, 1)]}, {'above': 1}), 2: ({}, {})}
+        found = MagicMock(side_effect=lambda omr, page, carried: pages[page])
+        with patch('score_notes.is_scanned', return_value=True), \
+             patch('score_notes.ottava_intervals', found):
+            p, t = self.build([[[(-4, 0, 1, None)]], [[(-4, 0, 1, None)]]],
+                              measure(ATTR + note('F', octave=5, duration=4))
+                              + measure('<print new-page="yes"/>' + note('F', octave=5, duration=4), 2))
+        self.assertEqual([n['midi'] for n in t['notes']], [89, 77])
+        # What is still running at the foot of page 1 is handed on to page 2.
+        self.assertEqual({c.args[1]: c.args[2] for c in found.call_args_list}, {1: None, 2: {'above': 1}})
+
     def test_staffless_bass_part_retains_its_clef(self):
         part = ET.fromstring('<part>' + measure('<attributes><clef><sign>F</sign><line>4</line></clef></attributes><note><pitch><step>D</step><octave>3</octave></pitch><duration>1</duration></note>') + '</part>')
         ns, _ = musicxml._parse_part(part, 1, 2)

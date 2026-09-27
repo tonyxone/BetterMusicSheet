@@ -13,6 +13,7 @@ from audiveris_heads import (
 )
 from labels import PITCH_REF, step_of, octave_of
 from pdf_marks import octave_intervals, metronome_marks
+from scan import is_scanned, ottava_intervals
 
 STEP = {'C': 0, 'D': 2, 'E': 4, 'F': 5, 'G': 7, 'A': 9, 'B': 11}
 ALTER = {'SHARP': 1, 'FLAT': -1, 'NATURAL': 0, 'DOUBLE_SHARP': 2, 'DOUBLE_FLAT': -2}
@@ -163,6 +164,8 @@ def resolve_score_notes(pdf_path, omr_path, num_pages, page_omr_overrides=None):
     from annotate import pdf_clef_timeline
     pages, all_notes = {}, []
     inherited_keys, inherited_clefs = {}, {}
+    # An octave line still running at the foot of a scanned page, for the next.
+    carried_octaves = None
     with pymupdf.open(pdf_path) as doc:
         for page in range(1, num_pages + 1):
             src = (page_omr_overrides or {}).get(page, {}).get('omr', omr_path)
@@ -179,6 +182,14 @@ def resolve_score_notes(pdf_path, omr_path, num_pages, page_omr_overrides=None):
                 r['bbox_pt'] = [box[0] * sx, box[1] * sy, box[2] * sx, box[3] * sy] if box else None
             pdf_clefs = pdf_clef_timeline(doc, page, {s: tuple(y * sy for y in ys) for s, ys in staff_lines.items()})
             pdf_octaves = octave_intervals(doc[page - 1], {s: tuple(y * sy for y in ys) for s, ys in staff_lines.items()})
+            if is_scanned(doc[page - 1]):
+                # A scan has no vector marks to read; find the lines in the
+                # picture recognition itself worked from.
+                found, carried_octaves = ottava_intervals(src, page, carried_octaves)
+                pdf_octaves = {staff: [(left * sx, right * sx, amount) for left, right, amount in spans]
+                               for staff, spans in found.items()}
+            else:
+                carried_octaves = None
             pdf_tempos = metronome_marks(doc[page - 1])
             omr_clefs = load_omr_clefs(src, page)
             keys, alters = load_key_timeline(src, page), load_alter_map(src, page)
