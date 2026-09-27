@@ -60,6 +60,36 @@ def load_staff_lines(omr_path, sheet_index):
     return result
 
 
+def load_staff_extents(omr_path, sheet_index):
+    """Return {staff_id: (left, right, header_stop)} in pixels.
+
+    ``header_stop`` is where the staff's clef/key/time header ends - the
+    first x any of its music can occupy. None when Audiveris recorded no
+    header for that staff.
+    """
+    root = _parse_sheet(omr_path, sheet_index)
+    result = {}
+    for staff in root.iter('staff'):
+        if staff.get('left') is None or staff.get('right') is None:
+            continue
+        header = staff.find('header')
+        stop = header.get('stop') if header is not None else None
+        result[int(staff.get('id'))] = (float(staff.get('left')), float(staff.get('right')),
+                                        float(stop) if stop is not None else None)
+    return result
+
+
+def load_binary_image(omr_path, sheet_index):
+    """Audiveris's own black-and-white rendering of the page, as PNG bytes -
+    the picture every pixel coordinate in the .omr refers to. None when the
+    book does not carry one."""
+    with zipfile.ZipFile(omr_path) as z:
+        try:
+            return z.read(f"sheet#{sheet_index}/BINARY.png")
+        except KeyError:
+            return None
+
+
 def load_staff_barlines(omr_path, sheet_index):
     """Return {staff_id: [x_px, ...]} — barline x positions, sorted."""
     root = _parse_sheet(omr_path, sheet_index)

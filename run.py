@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pymupdf as fitz
 
+import scan
 from audiveris_heads import (
     _parse_sheet, load_sheet_heads, load_staff_lines, load_system_staff_groups,
 )
@@ -127,8 +128,16 @@ NOT_MUSIC_MESSAGE = (
 )
 
 
-def run_audiveris(pdf_path, out_dir, dpi=None, sheets=None, switches=None):
+def run_audiveris(pdf_path, out_dir, dpi=None, sheets=None, switches=None, binarize=False):
+    """Recognize ``pdf_path`` into ``out_dir``; returns the .mxl and .omr.
+
+    ``binarize`` has Audiveris read a black-and-white copy of the scanned pages
+    instead, made at the same DPI it will read them at - see scan.py.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
+    source = pdf_path
+    if binarize:
+        source = scan.prepare_for_recognition(pdf_path, out_dir / "input", dpi, sheets)
     if sys.platform == "win32":
         cmd = [str(AUDIVERIS_EXE), "-batch", "-export", "-output", str(out_dir)]
     else:
@@ -156,7 +165,8 @@ def run_audiveris(pdf_path, out_dir, dpi=None, sheets=None, switches=None):
         # output .omr (e.g. "-sheets 3" still produces sheet#3, not sheet#1),
         # so callers can read it back with that same page number.
         cmd += ["-sheets"] + [str(s) for s in sheets]
-    cmd += ["--", str(pdf_path)]
+    # The copy keeps the original's name, so the output is named alike.
+    cmd += ["--", str(source)]
     subprocess.run(cmd, check=True)
     stem = pdf_path.stem
     mxl = out_dir / f"{stem}.mxl"
@@ -304,6 +314,75 @@ def has_any_staff(omr_path, num_pages):
     return False
 
 
+def system_sizes(omr_path, num_pages):
+    """Staves recognized in each system of the document, in reading order."""
+    sizes = []
+    for page in range(1, num_pages + 1):
+        try:
+            sizes += [len(group) for group in load_system_staff_groups(str(omr_path), page)]
+        except Exception:
+            continue
+    return sizes
+
+
+def missing_staves(omr_path, num_pages):
+    """Staves recognition dropped from systems that should have them.
+
+    Every system of a score carries the same staves, so a system with fewer
+    than the fullest one has lost some - and with them a hand's notes, its
+    bar structure (Audiveris merged three bars of a one-staff system into
+    one), and playback from there on. Counted against the fullest system
+    rather than the commonest, because a badly read scan can lose a staff
+    from half its systems or more: one upload kept 10 of 20 intact.
+    """
+    sizes = system_sizes(omr_path, num_pages)
+    return sum(max(sizes) - size for size in sizes) if sizes else 0
+
+
+def reread_binarized(pdf_path, work_dir, omr_path, num_pages, dpi=None, log=print):
+    """Re-read a scan that lost staves from a black-and-white copy of it.
+
+    See scan.py for why a digitally rendered scan loses staves and why
+    binarizing it first recovers them. Returns (mxl, omr) of the re-read when
+    it recovered staves without placing fewer notes, else None - including when
+    nothing in the document is a scan clean enough to binarize safely.
+
+    Only offered where staves went missing. On scans that keep all their
+    staves the copy reads about as well, not better - over three such test
+    scores it moved the notehead count by -1.3% to +1.3% of what the
+    engraving prints, at every threshold tried - so there it would buy a
+    difference, not an improvement. Where staves were lost it recovered all
+    of them: 30 of 40 staves to 40, and 21 of 30 to 30.
+    """
+    target = work_dir / "binarized"
+    source = scan.prepare_for_recognition(pdf_path, target / "input", dpi)
+    if source == Path(pdf_path):
+        return None
+    log(f"[1b/3] {missing_staves(omr_path, num_pages)} staves were not recognized; re-reading "
+        f"the scan should take {describe_duration(estimated_seconds(pdf_path, dpi or DEFAULT_DPI))}:")
+    try:
+        mxl, omr = run_audiveris(source, target, dpi=dpi)
+    except (subprocess.CalledProcessError, RuntimeError):
+        print("  the re-read failed; keeping the original recognition")
+        return None
+
+    def placed(book):
+        total = 0
+        for page in range(1, num_pages + 1):
+            try:
+                total += placed_head_ratio(book, page)[1]
+            except Exception:
+                continue
+        return total
+
+    staves = sum(system_sizes(omr, num_pages))
+    if staves > sum(system_sizes(omr_path, num_pages)) and placed(omr) >= placed(omr_path):
+        print(f"  the black-and-white copy found {staves} staves - keeping it")
+        return mxl, omr
+    print("  no better; keeping the original recognition")
+    return None
+
+
 def placed_head_ratio(omr_path, page):
     """How many detected noteheads Audiveris's RHYTHMS step actually placed.
 
@@ -336,7 +415,6 @@ def staff_interline_pt(pdf_path, page):
     Returns None when the page has no vector staff lines, which is the scanned
     case, and precisely the one where a higher DPI is worth trying.
     """
-    ys = set()
     try:
         doc = fitz.open(pdf_path)
     except (OSError, RuntimeError, ValueError):
@@ -346,15 +424,7 @@ def staff_interline_pt(pdf_path, page):
     with doc:
         if not 1 <= page <= doc.page_count:
             return None
-        for drawing in doc[page - 1].get_drawings():
-            for item in drawing["items"]:
-                # Engravers draw staff lines as either hairline strokes or very
-                # flat filled rectangles; both are long and horizontal.
-                if (item[0] == "l" and abs(item[1].y - item[2].y) < .3
-                        and abs(item[2].x - item[1].x) > 100):
-                    ys.add(round(item[1].y, 2))
-                elif item[0] == "re" and item[1].height < 1.5 and item[1].width > 100:
-                    ys.add(round(item[1].y0 + item[1].height / 2, 2))
+        ys = scan.vector_staff_rule_ys(doc[page - 1])
     ordered = sorted(ys)
     # Gaps within one staff only: anything larger is the space between staves.
     gaps = [b - a for a, b in zip(ordered, ordered[1:]) if 2 < b - a < 15]
@@ -644,7 +714,8 @@ def _recovered_more_music(new, old):
             and new["quality"] >= old["quality"] + MIN_RETRY_QUALITY_GAIN)
 
 
-def retry_sparse_pages(pdf_path, work_dir, counts, sparse_pages, num_pages=None, base_dpi=None):
+def retry_sparse_pages(pdf_path, work_dir, counts, sparse_pages, num_pages=None, base_dpi=None,
+                       binarize=False):
     """Re-read each flagged page, trying variants until one recovers the music.
 
     Returns {page: {"omr": path, "mxl": path}} for pages a re-read improved;
@@ -653,7 +724,9 @@ def retry_sparse_pages(pdf_path, work_dir, counts, sparse_pages, num_pages=None,
     Both halves of Audiveris's output are kept, not just the .omr: anything
     reading rhythm from the MusicXML (see timeline.py) has to read the SAME
     recognition pass this page's pixel data came from, or the two sources
-    disagree on note counts for exactly the pages that needed a retry.
+    disagree on note counts for exactly the pages that needed a retry. For the
+    same reason ``binarize`` says the pass in ``work_dir`` read a binarized
+    copy of the scan (see reread_binarized), and the re-reads do too.
     """
     overrides = {}
     if num_pages is None:
@@ -705,7 +778,8 @@ def retry_sparse_pages(pdf_path, work_dir, counts, sparse_pages, num_pages=None,
                 continue
             retry_dir = work_dir / f"_retry_p{page}_{index}"
             try:
-                mxl, omr = run_audiveris(pdf_path, retry_dir, **variant)
+                mxl, omr = run_audiveris(pdf_path, retry_dir,
+                                         **({**variant, "binarize": True} if binarize else variant))
             except subprocess.CalledProcessError:
                 print(f"    {label}: Audiveris failed; trying the next approach")
                 continue
@@ -789,7 +863,14 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
         raise ValueError(NOT_MUSIC_MESSAGE)
 
     page_overrides = {}
+    binarized = False
     if auto_retry:
+        if missing_staves(omr, num_pages):
+            reread = reread_binarized(pdf_path, work_dir, omr, num_pages, dpi, log)
+            if reread:
+                mxl, omr = reread
+                # The page re-reads below compare against, and re-read, this pass.
+                work_dir, binarized = Path(omr).parent, True
         counts, sparse = find_sparse_pages(omr, num_pages, mxl, pdf_path)
         if sparse:
             # The first honest moment to say a score will take a while: which
@@ -803,7 +884,8 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
             low, high = estimated_retry_seconds(pdf_path, sparse, detection_failures)
             log(f"[1b/3] {len(sparse)} page(s) look incomplete; re-reading them should "
                 f"take {describe_duration(low, high)}:")
-            page_overrides = retry_sparse_pages(pdf_path, work_dir, counts, sparse, num_pages, dpi)
+            page_overrides = retry_sparse_pages(pdf_path, work_dir, counts, sparse, num_pages, dpi,
+                                                binarize=binarized)
 
     log("[2/3] Matching pitches to notehead positions ...")
     from annotate import build_records, render
