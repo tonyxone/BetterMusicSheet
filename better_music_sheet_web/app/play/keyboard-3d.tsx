@@ -18,8 +18,9 @@
 // Rendered on demand rather than in a requestAnimationFrame loop - nothing
 // animates continuously, so a render loop would redraw identical frames.
 
-import { useEffect, useMemo, useRef } from "react";
+import { Component, useEffect, useMemo, useRef, type ReactNode } from "react";
 import * as THREE from "three";
+import { FlatKeyboard } from "./keyboard-flat";
 import {
   BLACK_W,
   COLOR_LEFT,
@@ -354,4 +355,31 @@ export function Keyboard3D({
   );
 }
 
-export default Keyboard3D;
+/** Swaps in the flat keyboard when the 3D one fails - in practice, when
+ * `new WebGLRenderer()` throws because the browser can't create a WebGL
+ * context. Uncaught, that error unmounted the whole Play page. */
+class KeyboardFallback extends Component<{ fallback: ReactNode; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.warn("3D keyboard unavailable, drawing a flat one instead:", error);
+  }
+
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
+}
+
+export function PianoKeyboard(props: { activeKeys: ActiveKey[]; showKeyNames?: boolean }) {
+  return (
+    <KeyboardFallback fallback={<FlatKeyboard {...props} />}>
+      <Keyboard3D {...props} />
+    </KeyboardFallback>
+  );
+}
+
+export default PianoKeyboard;
