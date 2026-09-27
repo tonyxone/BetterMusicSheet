@@ -9,6 +9,7 @@ export function Footer() {
         <Link href="/about">About</Link>
         <Link href="/privacy">Privacy</Link>
         <Link href="/terms">Terms</Link>
+        <Link href="/support">Support</Link>
         {/* Reachable from every page rather than only from inside About: a
             visitor who wants to report a badly-read sheet should not have to
             go looking for the address. */}

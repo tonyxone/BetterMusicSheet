@@ -47,7 +47,10 @@ export default function PrivacyPage() {
       <h3>The files you upload, and what is made from them</h3>
       <p>
         Uploaded PDFs and images are stored in Amazon S3, along with the
-        annotated PDF and the playback data generated from them. A record of the
+        annotated PDF and the playback data generated from them. In the iOS
+        app, an image can be a photo you take with the camera or pick from your
+        photo library; the app only opens the camera or your photos when you
+        choose to add a sheet, and only the photo you choose is uploaded. A record of the
         job — the filename, the options you chose, timestamps, and whether it
         succeeded — is stored in Amazon DynamoDB. Everything is held in AWS&apos;s
         <code>us-west-1</code> region in the United States.
