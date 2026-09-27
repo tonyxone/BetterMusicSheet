@@ -59,6 +59,26 @@ _bms_load_social_secret() {
         return 1
     fi
 
+    # Billing and Sign in with Apple use separate keys. An incomplete sign-in
+    # key can otherwise fail halfway through apply after other resources change.
+    local required=() missing=() required_key
+    if printf '%s' "$json" | jq -e '(.apple_services_id // "") != ""' >/dev/null; then
+        required+=(apple_services_id apple_team_id apple_key_id apple_private_key)
+    fi
+    if printf '%s' "$json" | jq -e '[.APPLE_KEY_ID // "", .APPLE_ISSUER_ID // "", .APPLE_PRIVATE_KEY // ""] | any(. != "")' >/dev/null; then
+        required+=(APPLE_KEY_ID APPLE_ISSUER_ID APPLE_PRIVATE_KEY)
+    fi
+    for required_key in "${required[@]}"; do
+        if ! printf '%s' "$json" | jq -e --arg key "$required_key" '.[$key] | type == "string" and length > 0' >/dev/null; then
+            missing+=("$required_key")
+        fi
+    done
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo "social-signin-env: incomplete Apple credentials; missing or empty: ${missing[*]}" >&2
+        echo "  Preserve lowercase apple_* sign-in keys separately from uppercase APPLE_* billing keys." >&2
+        return 1
+    fi
+
     # The variables cognito-idp.tf and stripe.tf declare. A social provider
     # switches on in Terraform the moment its id is non-empty, so exporting a
     # stray TF_VAR_ would quietly try to create a provider with no
