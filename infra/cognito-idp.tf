@@ -42,25 +42,25 @@ variable "facebook_app_secret" {
   sensitive   = true
 }
 
-variable "apple_services_id" {
+variable "apple_cognito_services_id" {
   description = "Apple Services ID, e.g. com.bettermusicsheet.signin - NOT the app bundle id. Empty disables Apple sign-in."
   type        = string
   default     = ""
 }
 
-variable "apple_team_id" {
+variable "apple_cognito_team_id" {
   description = "Apple Developer team ID (10 characters, top right of developer.apple.com)"
   type        = string
   default     = ""
 }
 
-variable "apple_key_id" {
+variable "apple_cognito_key_id" {
   description = "Key ID of the Sign in with Apple private key"
   type        = string
   default     = ""
 }
 
-variable "apple_private_key" {
+variable "apple_cognito_private_key" {
   description = "Contents of the .p8 private key downloaded from Apple, newlines included"
   type        = string
   default     = ""
@@ -70,7 +70,7 @@ variable "apple_private_key" {
 locals {
   google_enabled   = var.google_client_id != ""
   facebook_enabled = var.facebook_app_id != ""
-  apple_enabled    = var.apple_services_id != ""
+  apple_enabled    = var.apple_cognito_services_id != ""
 
   # Cognito matches these names exactly, and they are also what the frontend
   # puts in the hosted UI's `identity_provider` query parameter.
@@ -158,10 +158,10 @@ resource "aws_cognito_identity_provider" "apple" {
   provider_type = "SignInWithApple"
 
   provider_details = {
-    client_id        = var.apple_services_id
-    team_id          = var.apple_team_id
-    key_id           = var.apple_key_id
-    private_key      = var.apple_private_key
+    client_id        = var.apple_cognito_services_id
+    team_id          = var.apple_cognito_team_id
+    key_id           = var.apple_cognito_key_id
+    private_key      = var.apple_cognito_private_key
     authorize_scopes = "email name"
   }
 

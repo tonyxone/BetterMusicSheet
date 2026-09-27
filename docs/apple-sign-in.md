@@ -3,7 +3,7 @@
 Everything in this repo is already written for Apple - the provider resource
 (`infra/cognito-idp.tf`), the button (`better_music_sheet_web/app/sign-in-modal.tsx`)
 and the code exchange (`server.py` -> `auth.exchange_authorization_code`). Apple
-is dormant only because `apple_services_id` is empty. This is a
+is dormant only because `apple_cognito_services_id` is empty. This is a
 credentials-and-config job; no code changes.
 
 It differs from Google in three ways worth knowing before you start:
@@ -39,7 +39,7 @@ The domain field rejects a `https://` prefix; the return URL requires one.
 Everything is under [developer.apple.com/account](https://developer.apple.com/account)
 -> **Certificates, Identifiers & Profiles**.
 
-### 1. Team ID  ->  `apple_team_id`
+### 1. Team ID  ->  `apple_cognito_team_id`
 
 Account -> **Membership details**. Ten characters, e.g. `ABCDE12345`. It is also
 shown in the top-right of the portal next to your team name.
@@ -57,7 +57,7 @@ in with Apple enabled. You never deploy an iOS app, but the record has to exist.
    "Enable as a primary App ID" (the default in the Edit sheet).
 5. Continue -> **Register**.
 
-### 3. Services ID  ->  `apple_services_id`
+### 3. Services ID  ->  `apple_cognito_services_id`
 
 This is the value Cognito sends as its `client_id`, and it is *not* the bundle
 ID from step 2. Apple treats a Services ID as the web-facing identity.
@@ -81,7 +81,7 @@ next to the domain. Ignore both. They exist for Sign in with Apple JS running on
 your own page; this flow redirects to Apple and back through Cognito, and you
 could not host a file on `amazoncognito.com` anyway.
 
-### 4. Key  ->  `apple_key_id` and `apple_private_key`
+### 4. Key  ->  `apple_cognito_key_id` and `apple_cognito_private_key`
 
 1. **Keys** -> **+**.
 2. Key Name: `Better Music Sheet Sign in with Apple`.
@@ -90,7 +90,7 @@ could not host a file on `amazoncognito.com` anyway.
 4. Continue -> **Register**.
 5. **Download** the `.p8`. Apple allows this exactly once - there is no second
    chance, only issuing a new key. The Key ID (ten characters, also in the
-   filename `AuthKey_XXXXXXXXXX.p8`) is `apple_key_id`.
+   filename `AuthKey_XXXXXXXXXX.p8`) is `apple_cognito_key_id`.
 
 Keep the file out of the repo: `infra/**/*.tfvars` is gitignored, but `*.p8` is
 not. It goes into the Secrets Manager secret below; delete the download once it
@@ -105,10 +105,10 @@ the Terraform variable names from `infra/cognito-idp.tf`:
 {
   "google_client_id": "...",
   "google_client_secret": "...",
-  "apple_services_id": "com.bettermusicsheet.signin",
-  "apple_team_id": "ABCDE12345",
-  "apple_key_id": "KEY1234567",
-  "apple_private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+  "apple_cognito_services_id": "com.bettermusicsheet.signin",
+  "apple_cognito_team_id": "ABCDE12345",
+  "apple_cognito_key_id": "KEY1234567",
+  "apple_cognito_private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
 }
 ```
 

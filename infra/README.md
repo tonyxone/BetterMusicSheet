@@ -91,7 +91,7 @@ matches exactly and which is what `trailingSlash` in
 ### Running Terraform with social-provider credentials
 
 Google's `google_client_id` and `google_client_secret`, plus Apple's
-`apple_team_id`, `apple_services_id`, `apple_key_id`, and `apple_private_key`,
+`apple_cognito_team_id`, `apple_cognito_services_id`, `apple_cognito_key_id`, and `apple_cognito_private_key`,
 are stored as key/value pairs in the `better_music_sheet_singin_provider` AWS
 Secrets Manager secret.
 Use the wrapper for your platform instead of invoking `terraform plan` or
