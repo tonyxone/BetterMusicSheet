@@ -41,9 +41,7 @@ def reconcile(sqs, queue_url, now):
                     updated = accept_input(job["job_id"])
                     if updated["status"] == "uploading":
                         if job["upload_expires_at"] < now:
-                            if job_state.change(job["job_id"], {"status": status}, status="failed",
-                                                 error="Upload expired. Please upload the file again."):
-                                job_state.release(job)
+                            job_state.fail(job, {"status": status}, "Upload expired. Please upload the file again.")
                         else:
                             job_state.change(job["job_id"], {"status": status}, next_check_at=now + 60)
                     elif updated["status"] == "queued":
@@ -60,10 +58,9 @@ def reconcile(sqs, queue_url, now):
                     # start. Fail it so the user sees an error instead of a
                     # spinner. Matching queued_at loses the race to a worker
                     # that claims (or re-queues) it meanwhile.
-                    if job_state.change(job["job_id"], {"status": status, "queued_at": job.get("queued_at")},
-                                        status="failed", stage="Processing failed",
-                                        error="We couldn't start annotating this sheet. Please try uploading it again."):
-                        job_state.release(job)
+                    job_state.fail(job, {"status": status, "queued_at": job.get("queued_at")},
+                                   "We couldn't start annotating this sheet. Please try uploading it again.",
+                                   stage="Processing failed")
                 elif status == "queued":
                     # Repair notification loss and producer crashes. Duplicates
                     # are harmless because the worker uses a conditional claim.
@@ -88,9 +85,7 @@ def drain_dlq(sqs, url, now):
                 # A duplicate may exhaust its receive count while another copy
                 # succeeds. Only actual processing attempts determine failure.
                 if job["attempt_count"] >= 3:
-                    if job_state.change(job_id, expected, status="failed", error="Processing failed after three attempts."):
-                        job_state.release(job)
-                    else:
+                    if not job_state.fail(job, expected, "Processing failed after three attempts."):
                         handled = False
                 else:
                     job_state.change(job_id, expected, next_check_at=now)

@@ -46,6 +46,11 @@ locals {
       Condition = { StringLike = { "s3:prefix" = ["jobs/*"] } }
     }],
   )
+  # Job failure and needs-review emails (../../../alerts.py). Every role that
+  # can end a job - API, controller and worker - sends its own.
+  alerts_statement = {
+    Effect = "Allow", Action = ["sns:Publish"], Resource = aws_sns_topic.alerts.arn
+  }
   cognito_delete_statement = {
     Effect   = "Allow", Action = ["cognito-idp:ListUsers", "cognito-idp:AdminDeleteUser"],
     Resource = "arn:aws:cognito-idp:${var.cognito_region}:${data.aws_caller_identity.current.account_id}:userpool/${var.cognito_pool}"
@@ -60,7 +65,7 @@ resource "aws_iam_role_policy" "api" {
   role = aws_iam_role.api.id
   policy = jsonencode({ Version = "2012-10-17", Statement = concat([
     local.logs_statement, local.db_statement, local.master_users_statement, local.new_files_statement,
-    local.list_files_statement, local.cognito_delete_statement,
+    local.list_files_statement, local.cognito_delete_statement, local.alerts_statement,
     { Effect = "Allow", Action = ["s3:GetObject", "s3:DeleteObject"], Resource = "arn:aws:s3:::${var.legacy_bucket}/*" },
     { Effect = "Allow", Action = ["s3:ListBucket"], Resource = "arn:aws:s3:::${var.legacy_bucket}" },
     { Effect = "Allow", Action = ["ssm:GetParameter"], Resource = var.secret_parameter }
@@ -73,7 +78,7 @@ resource "aws_iam_role" "controller" {
 resource "aws_iam_role_policy" "controller" {
   role = aws_iam_role.controller.id
   policy = jsonencode({ Version = "2012-10-17", Statement = [
-    local.logs_statement, local.db_statement, local.list_files_statement,
+    local.logs_statement, local.db_statement, local.list_files_statement, local.alerts_statement,
     { Effect = "Allow", Action = ["s3:GetObject", "s3:GetObjectVersion", "s3:DeleteObject", "s3:DeleteObjectVersion"], Resource = "${aws_s3_bucket.files.arn}/jobs/*" },
     { Effect = "Allow", Action = ["sqs:SendMessage", "sqs:GetQueueAttributes"], Resource = aws_sqs_queue.jobs.arn },
     { Effect = "Allow", Action = ["sqs:ReceiveMessage", "sqs:DeleteMessage"], Resource = aws_sqs_queue.failed.arn },
@@ -87,7 +92,7 @@ resource "aws_iam_role" "worker" {
 resource "aws_iam_role_policy" "worker" {
   role = aws_iam_role.worker.id
   policy = jsonencode({ Version = "2012-10-17", Statement = [
-    local.db_statement,
+    local.db_statement, local.alerts_statement,
     { Effect = "Allow", Action = ["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject"], Resource = "${aws_s3_bucket.files.arn}/jobs/*" },
     { Effect = "Allow", Action = ["s3:ListBucket"], Resource = aws_s3_bucket.files.arn },
     { Effect = "Allow", Action = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility"], Resource = aws_sqs_queue.jobs.arn },

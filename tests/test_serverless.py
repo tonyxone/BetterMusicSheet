@@ -188,6 +188,72 @@ class ServerlessTests(unittest.TestCase):
         self.assertIsNotNone(assets["pdf"])
         self.assertIsNone(assets["timeline"])
 
+    def alert_inbox(self):
+        """Subscribe a queue to a fresh alerts topic; returns a reader of what arrived."""
+        topic = boto3.client("sns").create_topic(Name="test-alerts")["TopicArn"]
+        inbox = self.sqs.create_queue(QueueName="test-alert-inbox")["QueueUrl"]
+        arn = self.sqs.get_queue_attributes(QueueUrl=inbox, AttributeNames=["QueueArn"])["Attributes"]["QueueArn"]
+        boto3.client("sns").subscribe(TopicArn=topic, Protocol="sqs", Endpoint=arn)
+        os.environ["ALERTS_TOPIC_ARN"] = topic
+
+        def read():
+            messages = self.sqs.receive_message(QueueUrl=inbox, MaxNumberOfMessages=10).get("Messages", [])
+            return [json.loads(m["Body"]) for m in messages]
+        return read
+
+    def test_final_processing_failure_alerts_once_with_the_sheet_and_where_it_is(self):
+        read = self.alert_inbox()
+        job = self.upload()
+        runner = Mock(side_effect=RuntimeError("bad recognition"))
+        self.assertFalse(worker.process_job("a", runner=runner))
+        self.assertFalse(worker.process_job("a", runner=runner))
+        self.assertEqual(read(), [], "a retried attempt is not a failure yet")
+        self.assertTrue(worker.process_job("a", runner=runner))
+        alerts = read()
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["Subject"], "Sheet failed: Summer.pdf")
+        body = alerts[0]["Message"]
+        for expected in (USER, job["music_sheet_id"], "Summer.pdf", "bad recognition",
+                         f"s3://new-files/{job['input_key']} (us-west-1)"):
+            self.assertIn(expected, body)
+
+    def test_controller_failures_alert(self):
+        read = self.alert_inbox()
+        abandoned = job_state.create("a", USER, "夏日漱石.pdf", OPTIONS, 3)
+        controller.reconcile(self.sqs, self.queue, abandoned["upload_expires_at"] + 1)
+        [alert] = read()
+        # SNS subjects must be ASCII; the full name is in the body.
+        self.assertEqual(alert["Subject"], "Sheet failed: ????.pdf")
+        self.assertIn("夏日漱石.pdf", alert["Message"])
+        self.assertIn("Upload expired", alert["Message"])
+
+    def test_rough_recognition_alerts_but_a_clean_sheet_does_not(self):
+        read = self.alert_inbox()
+        self.upload()
+        self.assertTrue(worker.process_job("a", runner=fake_runner))
+        self.assertEqual(read(), [])
+
+        def rough(job, directory, tick):
+            fake_runner(job, directory, tick)
+            warning = "Recognized duration differs from the time signature; playback timing is inferred."
+            (directory / "timeline.json").write_text(json.dumps({"version": 1, "notes": [], "measures": [
+                {"warnings": [warning] if i < 6 else []} for i in range(10)]}))
+            return 7
+
+        self.upload("b", user="22222222")
+        self.assertTrue(worker.process_job("b", runner=rough))
+        [alert] = read()
+        self.assertEqual(alert["Subject"], "Sheet needs review: Summer.pdf")
+        self.assertIn("6 of 10 measures have recognition warnings", alert["Message"])
+        self.assertIn("Annotated:  s3://new-files/jobs/22222222/b/attempts/", alert["Message"])
+
+    def test_an_alert_that_cannot_be_sent_does_not_change_the_outcome(self):
+        os.environ["ALERTS_TOPIC_ARN"] = "arn:aws:sns:us-west-1:123456789012:missing"
+        self.upload()
+        self.assertTrue(worker.process_job("a", runner=Mock(side_effect=processor.InvalidSheet("not music"))))
+        self.assertEqual(db.get_annotation_job("a")["status"], "failed")
+        job_state.create("b", USER, "Next.pdf", OPTIONS, 1)
+
     def test_source_version_pinned_even_if_upload_url_is_reused(self):
         job = self.upload(data=b"first")
         self.s3.put_object(Bucket="new-files", Key=job["input_key"], Body=b"changed")
@@ -256,6 +322,47 @@ class ServerlessTests(unittest.TestCase):
         controller.reconcile(self.sqs, self.queue, job["upload_expires_at"] + 61)
         self.assertFalse(self.s3.list_object_versions(Bucket="new-files").get("Versions"))
         self.assertEqual(self.client.get("/api/sheets/a/assets", headers=self.headers).status_code, 404)
+
+    def test_cancelling_a_queued_job_removes_it_and_frees_the_upload_slot(self):
+        self.upload()
+        self.assertEqual(self.client.delete("/api/sheets/a", headers=self.headers).status_code, 204)
+        self.assertEqual(self.client.get("/api/sheets", headers=self.headers).json(), [])
+        self.assertEqual(self.client.get("/api/sheets/a", headers=self.headers).status_code, 404)
+        self.assertFalse(self.s3.list_object_versions(Bucket="new-files").get("Versions"))
+        job_state.create("b", USER, "Next.pdf", OPTIONS, 1)
+        # The queue message still arrives; the worker acks it without running.
+        runner = Mock(side_effect=fake_runner)
+        self.assertTrue(worker.process_job("a", runner=runner))
+        runner.assert_not_called()
+
+    def test_cancelling_mid_processing_revokes_the_lease_and_sweeps_late_output(self):
+        self.upload()
+        leases = []
+
+        def runner(job, directory, check):
+            self.assertEqual(self.client.delete("/api/sheets/a", headers=self.headers).status_code, 204)
+            # keep_alive's next heartbeat fails like this, and the following
+            # check() then stops the recognition process.
+            with self.assertRaises(job_state.LeaseLost):
+                job_state.heartbeat(job)
+            leases.append("lost")
+            # A worker between checks may still publish, as this one does.
+            return fake_runner(job, directory, check)
+
+        self.assertFalse(worker.process_job("a", runner=runner))
+        self.assertEqual(leases, ["lost"])
+        self.assertEqual(self.client.get("/api/sheets", headers=self.headers).json(), [])
+        self.assertEqual(self.client.get("/api/sheets/a", headers=self.headers).status_code, 404)
+        job_state.create("b", USER, "Next.pdf", OPTIONS, 1)
+        tombstone = db.get_annotation_job("a")
+        self.assertEqual(tombstone["status"], "deleted")
+        self.assertGreaterEqual(tombstone["next_check_at"], tombstone["lease_until"] + 60)
+        self.assertTrue(self.s3.list_object_versions(Bucket="new-files").get("Versions"))
+        controller.reconcile(self.sqs, self.queue, tombstone["next_check_at"])
+        self.assertFalse(self.s3.list_object_versions(Bucket="new-files").get("Versions"))
+        # Redelivery of the unacked message is a no-op.
+        self.assertTrue(worker.process_job("a", runner=fake_runner))
+        self.assertEqual(db.get_annotation_job("a")["status"], "deleted")
 
     def test_direct_upload_policy_and_input_validation(self):
         # Body validation runs ahead of the sign-in check, so these two still

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { clientApiFetch } from "@/lib/client-api";
 import { fetchSheetAssets, fetchSheetFile } from "@/lib/sheet-files";
 import { SheetToggle, type SheetVariant } from "../sheet-toggle";
@@ -28,6 +28,9 @@ export function JobStatus() {
   const [job, setJob] = useState<AnnotationJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Set while a cancel request is in flight: the job is about to 404, which
+  // must not surface as a status-check error.
+  const cancellingRef = useRef(false);
   // Which copy the preview shows. Owned here rather than by the preview
   // itself: the control sits with the page's other actions, a level above it.
   const [variant, setVariant] = useState<SheetVariant>("annotated");
@@ -58,6 +61,11 @@ export function JobStatus() {
     async function poll() {
       try {
         const res = await clientApiFetch(`/api/sheets/${jobId}`);
+        if (cancelled) return;
+        if (cancellingRef.current) {
+          timer.current = setTimeout(poll, POLL_INTERVAL_MS);
+          return;
+        }
         if (!res.ok) throw new Error(`status check failed (${res.status})`);
         const data: AnnotationJob = await res.json();
         if (cancelled) return;
@@ -118,6 +126,7 @@ export function JobStatus() {
           <div className="stage-spinner" />
           <div className="stage-text">{job.stage || "Queued…"}</div>
         </div>
+        <CancelAnnotation jobId={jobId} sheetName={job.sheet_name} cancellingRef={cancellingRef} />
       </div>
     );
   }
@@ -152,6 +161,80 @@ export function JobStatus() {
         <PreviewPanel jobId={jobId} variant={variant} customizedRef={customizedRef} />
       </div>
     </div>
+  );
+}
+
+// Cancelling deletes the job outright - the worker notices at its next
+// heartbeat and stops - so nothing is left behind in the library.
+function CancelAnnotation({ jobId, sheetName, cancellingRef }: {
+  jobId: string;
+  sheetName?: string | null;
+  cancellingRef: MutableRefObject<boolean>;
+}) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function close() {
+    if (busy) return;
+    setOpen(false);
+    setError(null);
+  }
+
+  async function confirm() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    cancellingRef.current = true;
+    try {
+      const res = await clientApiFetch(`/api/sheets/${jobId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null) as { detail?: string } | null;
+        throw new Error(body?.detail || `Could not cancel this sheet (${res.status}).`);
+      }
+      router.replace("/upload");
+    } catch (err) {
+      cancellingRef.current = false;
+      setError(err instanceof Error ? err.message : "Could not cancel this sheet.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <button type="button" className="btn-pill ghost" style={{ marginTop: 24 }} onClick={() => setOpen(true)}>
+        Cancel
+      </button>
+      {open && (
+        <div className="modal-backdrop" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) close();
+        }}>
+          <div className="modal-card delete-modal" role="alertdialog" aria-modal="true" aria-labelledby="cancel-title"
+            style={{ textAlign: "left" }}>
+            <button type="button" className="modal-close" onClick={close} disabled={busy} title="Close" aria-label="Close">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m6 6 12 12M18 6 6 18" />
+              </svg>
+            </button>
+            <h2 id="cancel-title" className="modal-title">Stop annotating?</h2>
+            <p className="modal-sub">
+              <strong>{sheetName || "This sheet"}</strong> will be removed along with its uploaded file,
+              and won&apos;t appear in your library.
+            </p>
+            {error && <div className="modal-error">{error}</div>}
+            <div className="modal-actions">
+              <button type="button" className="btn-pill ghost" onClick={close} disabled={busy}>
+                Keep going
+              </button>
+              <button type="button" className="btn-pill danger" onClick={() => void confirm()} disabled={busy}>
+                {busy ? "Cancelling…" : "Stop and remove"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 

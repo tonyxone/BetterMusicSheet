@@ -433,8 +433,7 @@ def create_upload(body: UploadRequest, user_id: str = Depends(get_signed_in_user
         }[Path(body.filename).suffix.lower()])
     except Exception:
         # A reservation that cannot return a URL must not block future uploads.
-        job_state.change(job["job_id"], {"status": "uploading"}, status="failed", error="Could not prepare upload.")
-        job_state.release(job)
+        job_state.fail(job, {"status": "uploading"}, "Could not prepare upload.")
         raise
     return {"job_id": job["job_id"], "upload": upload}
 
@@ -494,8 +493,7 @@ async def submit_sheet(
             job_state.ready(job["job_id"], version)
             enqueue_local(job["job_id"])
         except Exception:
-            job_state.change(job["job_id"], {"status": "uploading"}, status="failed", error="Upload failed.")
-            job_state.release(job)
+            job_state.fail(job, {"status": "uploading"}, "Upload failed.")
             raise
     return {"job_id": job["job_id"], "music_sheet_id": job["music_sheet_id"], "status": "queued"}
 
@@ -545,9 +543,12 @@ def job_status(job_id: str, user_id: str = Depends(get_current_user_id)):
 def delete_job(job_id: str, user_id: str = Depends(get_current_user_id)):
     """Delete one history item and, when no other row shares them, its files.
 
-    Queued/processing jobs cannot be deleted because the in-process worker
-    may still be reading or recreating their artifacts.  Same-named uploads
-    share storage keys by design, so those files are retained while another
+    Deleting an active job is how the user cancels it. The worker's leased
+    writes fence on status, so its next heartbeat (within 30s) raises
+    LeaseLost and stops the recognition process; anything it publishes in
+    between is swept by the tombstone's later reconcile pass. Legacy rows
+    have no such fencing and still refuse. Same-named legacy uploads share
+    storage keys by design, so those files are retained while another
     history item still needs them.
     """
     if job_id == DEMO_JOB_ID:
@@ -556,20 +557,32 @@ def delete_job(job_id: str, user_id: str = Depends(get_current_user_id)):
         # right, even by a request that spoofs the demo's own owner id.
         raise HTTPException(403, "The demo sheet can't be deleted.")
     job = _owned_job_or_404(job_id, user_id)
-    if job["status"] in ("uploading", "queued", "processing"):
-        raise HTTPException(409, "Wait for this sheet to finish processing before deleting it.")
 
     if job.get("storage_version") == 2:
-        # Tombstones survive until outstanding upload URLs expire. The reconciler
-        # removes late uploads too, so a reused presigned URL cannot resurrect files.
-        if not job_state.change(job_id, {"status": job["status"]}, status="deleting", next_check_at=int(time.time())):
+        # An active job can change under us (claimed, requeued or finished by
+        # the worker); re-read and try again rather than bounce the user.
+        for _ in range(3):
+            if job["status"] in ("deleting", "deleted"):
+                return Response(status_code=204)
+            if job_state.change(job_id, {"status": job["status"]}, status="deleting", next_check_at=int(time.time())):
+                break
+            job = _owned_job_or_404(job_id, user_id)
+        else:
             raise HTTPException(409, "This sheet changed; refresh and try again.")
         storage.delete_job_files(job)
         db.delete_music_sheet(job["music_sheet_id"])
         job_state.release(job)
+        # Tombstones survive until outstanding upload URLs expire, and past a
+        # cancelled worker's lease. The reconciler removes late uploads and
+        # late-published outputs too, so neither can resurrect files.
+        now = int(time.time())
         job_state.change(job_id, {"status": "deleting"}, status="deleted",
-                         next_check_at=max(int(time.time()) + 60, job["upload_expires_at"] + 60))
+                         next_check_at=max(now + 60, job["upload_expires_at"] + 60,
+                                           int(job.get("lease_until") or 0) + 60))
         return Response(status_code=204)
+
+    if job["status"] in job_state.ACTIVE:
+        raise HTTPException(409, "Wait for this sheet to finish processing before deleting it.")
 
     jobs = db.list_annotation_jobs(user_id)
     other_jobs = [candidate for candidate in jobs if candidate["job_id"] != job_id]

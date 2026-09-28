@@ -108,6 +108,8 @@ locals {
     MAX_UPLOAD_BYTES      = "10485760"
     MAX_PAGES             = "50"
     MAX_JOB_SECONDS       = "1800"
+    # Per-sheet failure and needs-review emails (../../../alerts.py).
+    ALERTS_TOPIC_ARN = aws_sns_topic.alerts.arn
   }
   table_arns = [for name in [var.users_table, var.subscriptions_table, var.sheets_table, var.jobs_table, aws_dynamodb_table.control.name] :
   "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${name}"]
