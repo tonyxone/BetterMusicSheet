@@ -260,7 +260,7 @@ run clean.
 `alert_email`, `budget_email`.
 
 **Why 4 workers.** The account's regional Fargate quota allows far more, but
-each worker is 2 vCPU / 4 GB, and an unexpected upload burst at a higher cap
+each worker is 4 vCPU / 8 GB, and an unexpected upload burst at a higher cap
 turns directly into an unexpected bill.
 
 **Why a queue rather than Lambda for recognition.** Audiveris runs long, and a
