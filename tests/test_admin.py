@@ -3,12 +3,15 @@
 The part that matters most is the first test class: to anyone but an admin,
 every admin route must look exactly like a route that doesn't exist.
 """
+import importlib
+import sys
 import time
 import unittest
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+import apple_billing
 import auth
 import config
 import db
@@ -157,6 +160,34 @@ class CancellationDatesTests(unittest.TestCase):
     def test_the_providers_own_times_win(self):
         row = self.upsert("expired", False, canceled_at=150, ended_at=180)
         self.assertEqual((row["canceled_at"], row["ended_at"]), (150, 180))
+
+
+class IsolationTests(AdminTestCase):
+    """Nothing the dashboard adds may take the rest of the app down with it."""
+
+    def test_the_api_serves_everyone_else_if_the_admin_module_cannot_load(self):
+        self.addCleanup(importlib.reload, server)  # runs last, with admin loadable again
+        broken = patch.dict(sys.modules, {"admin": None})  # makes `import admin` raise
+        broken.start()
+        self.addCleanup(broken.stop)
+        importlib.reload(server)
+        with TestClient(server.app) as client:
+            self.assertEqual(client.get("/api/health").status_code, 200)
+            self.assertEqual(client.get("/api/sheets", headers={"X-Guest-Id": GUEST}).status_code, 200)
+            self.assertEqual(client.get("/api/admin/me", headers=token(ADMIN)).status_code, 404)
+
+    def test_an_unreadable_admin_table_is_a_404_not_an_error(self):
+        with patch.object(db, "is_admin", side_effect=RuntimeError("no such table")):
+            self.assertEqual(self.client.get("/api/admin/me", headers=token(ADMIN)).status_code, 404)
+
+    def test_a_broken_cancellation_record_never_fails_a_subscription(self):
+        with patch.object(db, "_cancellation", side_effect=RuntimeError("boom")):
+            db.upsert_subscription(SUBSCRIBER, "active", "monthly", "stripe", 100, 200, True, subscription_id="s")
+        self.assertEqual(db.get_subscription(SUBSCRIBER)["status"], "active")
+
+    def test_an_unreadable_apple_revocation_date_never_fails_a_sync(self):
+        self.assertEqual(apple_billing._ended_at({"revocationDate": "junk"}, 100), 100)
+        self.assertIsNone(apple_billing._ended_at({"revocationDate": "junk"}, None))
 
 
 if __name__ == "__main__":

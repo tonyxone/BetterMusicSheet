@@ -146,6 +146,30 @@ class ServerlessTests(unittest.TestCase):
         db.upsert_subscription(USER, "active", "monthly", "stripe", 300, 400, False, subscription_id="sub_2")
         self.assertFalse({"canceled_at", "ended_at"} & set(db.get_subscription(USER)))
 
+    def test_a_failed_cancellation_record_never_fails_the_subscription(self):
+        with patch.object(db, "_record_cancellation", side_effect=RuntimeError("boom")):
+            db.upsert_subscription(USER, "active", "monthly", "stripe", 100, 200, True, subscription_id="sub_1")
+        self.assertEqual(db.get_subscription(USER)["status"], "active")
+
+    def test_review_reasons_are_kept_on_the_finished_job(self):
+        self.upload()
+        with patch.object(worker.alerts, "assess", return_value={"reasons": ["rough"]}):
+            self.assertTrue(worker.process_job("a", runner=fake_runner))
+        self.assertEqual(db.get_annotation_job("a")["review_reasons"], ["rough"])
+
+    def test_a_failed_review_record_never_fails_the_sheet(self):
+        self.upload()
+        real = job_state.change
+
+        def change(job_id, expected, **fields):
+            if "review_reasons" in fields:
+                raise RuntimeError("boom")
+            return real(job_id, expected, **fields)
+        with patch.object(worker.alerts, "assess", return_value={"reasons": ["rough"]}),                 patch.object(job_state, "change", change):
+            self.assertTrue(worker.process_job("a", runner=fake_runner))
+        job = db.get_annotation_job("a")
+        self.assertEqual((job["status"], job.get("review_reasons")), ("done", None))
+
     def test_admin_dashboard_reads_dynamodb(self):
         self.assertFalse(db.is_admin(USER))
         self.assertEqual(self.client.get("/api/admin/users", headers=self.signed_in()).status_code, 404)

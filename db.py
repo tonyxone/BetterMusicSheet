@@ -21,6 +21,7 @@ callers (server.py) never touch boto3 types directly.
 """
 import threading
 import time
+import traceback
 from decimal import Decimal
 
 from config import ADMIN_TABLE, IS_PRODUCTION, MASTER_USERS_TABLE, SUBSCRIPTIONS_TABLE
@@ -345,11 +346,15 @@ else:
                 row["subscription_id"] = subscription_id
             if started_at is not None:
                 row["started_at"] = started_at
-            for key, (applies, when) in _cancellation(status, cancel_at_period_end, canceled_at, ended_at).items():
-                if applies:
-                    row[key] = when or row.get(key) or now
-                else:
-                    row.pop(key, None)
+            try:
+                for key, (applies, when) in _cancellation(status, cancel_at_period_end, canceled_at, ended_at).items():
+                    if applies:
+                        row[key] = when or row.get(key) or now
+                    else:
+                        row.pop(key, None)
+            except Exception:
+                # Only the admin dashboard reads these; see the DynamoDB store.
+                traceback.print_exc()
 
     def all_subscriptions():
         with _lock:
@@ -487,8 +492,22 @@ if SUBSCRIPTIONS_TABLE:
                 fields[key] = value
         names = {f"#{key}": key for key in fields}
         values = {f":{key}": value for key, value in fields.items()}
-        sets = [f"#{key} = :{key}" for key in fields]
-        removes = []
+        _subscriptions_table.update_item(
+            Key={"user_id": user_id},
+            UpdateExpression="SET " + ", ".join(f"#{key} = :{key}" for key in fields),
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=values,
+        )
+        # A separate write, after the one that grants access: it only feeds
+        # the admin dashboard, so it must never be able to fail a purchase,
+        # a renewal or a cancellation.
+        try:
+            _record_cancellation(user_id, status, cancel_at_period_end, canceled_at, ended_at)
+        except Exception:
+            traceback.print_exc()
+
+    def _record_cancellation(user_id, status, cancel_at_period_end, canceled_at, ended_at):
+        names, values, sets, removes = {}, {}, [], []
         for key, (applies, when) in _cancellation(status, cancel_at_period_end, canceled_at, ended_at).items():
             names[f"#{key}"] = key
             if not applies:
@@ -497,12 +516,17 @@ if SUBSCRIPTIONS_TABLE:
                 values[f":{key}"] = when
                 sets.append(f"#{key} = :{key}")
             else:
-                sets.append(f"#{key} = if_not_exists(#{key}, :updated_at)")
+                values[":now"] = int(time.time())
+                sets.append(f"#{key} = if_not_exists(#{key}, :now)")
+        expression = " ".join(part for part in (
+            "SET " + ", ".join(sets) if sets else "", "REMOVE " + ", ".join(removes) if removes else "") if part)
         _subscriptions_table.update_item(
             Key={"user_id": user_id},
-            UpdateExpression="SET " + ", ".join(sets) + (" REMOVE " + ", ".join(removes) if removes else ""),
+            UpdateExpression=expression,
+            # Never create a row: the write above just made sure there is one.
+            ConditionExpression="attribute_exists(user_id)",
             ExpressionAttributeNames=names,
-            ExpressionAttributeValues=values,
+            **({"ExpressionAttributeValues": values} if values else {}),
         )
 
     def all_subscriptions():

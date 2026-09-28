@@ -7,10 +7,13 @@ or forged token and an ordinary account all get the same answer, so nothing
 here even confirms the dashboard exists.
 
 Read-only on purpose: nothing here changes a user, a job or a subscription.
+And isolated: an error in any route here is that one request's 500, and
+server.py still serves everything else if this module can't even be loaded.
 """
 import os
 import statistics
 import time
+import traceback
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -33,7 +36,13 @@ def require_admin(authorization: str = Header(None)):
         # A bad token would otherwise answer 401 - which a route that doesn't
         # exist never does.
         user_id = None
-    if user_id is None or not db.is_admin(user_id):
+    try:
+        admin = user_id is not None and db.is_admin(user_id)
+    except Exception:
+        # e.g. the admin table missing in this region. Still just a 404.
+        traceback.print_exc()
+        admin = False
+    if not admin:
         raise HTTPException(404, "Not Found")
     return user_id
 

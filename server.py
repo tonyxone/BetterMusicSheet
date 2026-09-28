@@ -22,7 +22,6 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-import admin
 import db
 import storage
 import apple_billing
@@ -98,7 +97,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(admin.router)
+# The admin dashboard (admin.py) is an extra for the operator. If it can't
+# even be loaded, everything else must still be served - /api/admin/* is then
+# just a 404 - so a mistake there can never take the API down with it.
+try:
+    import admin
+    app.include_router(admin.router)
+except Exception:
+    traceback.print_exc()
 
 
 job_queue = queue.Queue()

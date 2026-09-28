@@ -133,6 +133,22 @@ def run_processor(job, directory, tick):
         stop_process(process)
 
 
+def record_review(job, quality):
+    """Keep why a finished sheet was emailed as needing review on its job, so
+    the admin dashboard can list them.
+
+    Written after the job is already done, and only while it still is (a
+    compare-and-set, so a sheet deleted meanwhile is never recreated). Best
+    effort: it only feeds the dashboard, so it must never fail a sheet."""
+    reasons = (quality or {}).get("reasons")
+    if not reasons:
+        return
+    try:
+        job_state.change(job["job_id"], {"status": "done"}, review_reasons=[str(r) for r in reasons])
+    except Exception:
+        traceback.print_exc()
+
+
 def process_job(job_id, extend=lambda: None, runner=run_processor):
     from processor import InvalidSheet
     token = uuid.uuid4().hex
@@ -197,11 +213,9 @@ def process_job(job_id, extend=lambda: None, runner=run_processor):
             labels_key = storage.publish(job, "labels", labels) if labels.exists() else None
             check()
             quality = alerts.assess(timeline)
-            # Why the sheet was emailed as needing review, kept on the job so
-            # the admin dashboard can list them; None when it looked fine.
             job_state.finish(job, status="done", labeled_groups=count, output_key=output_key,
-                             timeline_key=timeline_key, labels_key=labels_key, stage="Complete", error=None,
-                             review_reasons=(quality or {}).get("reasons") or None)
+                             timeline_key=timeline_key, labels_key=labels_key, stage="Complete", error=None)
+        record_review(job, quality)
         alerts.job_done(job, quality, output_key)
         return True
     except job_state.LeaseLost:
