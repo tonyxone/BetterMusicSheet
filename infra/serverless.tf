@@ -60,6 +60,7 @@ module "serverless" {
   users_table           = aws_dynamodb_table.users.name
   subscriptions_table   = aws_dynamodb_table.subscriptions.name
   master_users_table    = aws_dynamodb_table.master_user.name
+  admin_table           = aws_dynamodb_table.admin.name
   sheets_table          = aws_dynamodb_table.music_sheet.name
   jobs_table            = aws_dynamodb_table.annotation_job.name
   secret_parameter      = aws_ssm_parameter.backend_jwt_secret.arn

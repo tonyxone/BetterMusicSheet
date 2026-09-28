@@ -42,6 +42,7 @@ class ServerlessTests(unittest.TestCase):
             "USERS_TABLE": "test-users", "MUSIC_SHEET_TABLE": "test-sheets",
             "ANNOTATION_JOB_TABLE": "test-jobs", "JOB_CONTROL_TABLE": "test-control",
             "SUBSCRIPTIONS_TABLE": "test-subscriptions", "MASTER_USERS_TABLE": "test-master-users",
+            "ADMIN_TABLE": "test-admins", "JOB_QUEUE_URL": "", "JOB_DLQ_URL": "",
             "JOB_FILES_BUCKET": "legacy-files", "NEW_JOB_FILES_BUCKET": "new-files",
             "BACKEND_JWT_SECRET": "test-only", "COGNITO_USER_POOL_ID": "us-west-1_test",
             "COGNITO_APP_CLIENT_ID": "test-client",
@@ -51,7 +52,7 @@ class ServerlessTests(unittest.TestCase):
         self.aws.start()
         self.ddb = boto3.client("dynamodb")
         for name, key in [("test-users", "user_id"), ("test-subscriptions", "user_id"), ("test-master-users", "user_id"),
-                          ("test-sheets", "music_sheet_id"),
+                          ("test-admins", "user_id"), ("test-sheets", "music_sheet_id"),
                           ("test-jobs", "job_id"), ("test-control", "user_id")]:
             attrs = [{"AttributeName": key, "AttributeType": "S"}]
             indexes = []
@@ -80,6 +81,7 @@ class ServerlessTests(unittest.TestCase):
         self.sqs = boto3.client("sqs")
         self.queue = self.sqs.create_queue(QueueName="test-jobs")["QueueUrl"]
         self.dlq = self.sqs.create_queue(QueueName="test-failed")["QueueUrl"]
+        os.environ.update(JOB_QUEUE_URL=self.queue, JOB_DLQ_URL=self.dlq)
         for module in (config, db, storage, job_state, worker, server, controller):
             importlib.reload(module)
         self.client = TestClient(server.app)
@@ -130,6 +132,38 @@ class ServerlessTests(unittest.TestCase):
         self.assertEqual(subscription["status"], "trialing")
         self.assertEqual(subscription["plan"], "monthly")
         self.assertEqual(subscription["subscription_id"], "original_123")
+
+    def test_cancellation_dates_are_set_and_removed_in_dynamodb(self):
+        db.upsert_subscription(USER, "active", "monthly", "stripe", 100, 200, True,
+                               subscription_id="sub_1", canceled_at=150)
+        self.assertEqual(db.get_subscription(USER)["canceled_at"], 150)
+        self.assertNotIn("ended_at", db.get_subscription(USER))
+        db.upsert_subscription(USER, "expired", "monthly", "stripe", 100, 200, True, subscription_id="sub_1")
+        ended = db.get_subscription(USER)
+        # Kept, not moved to "now"; the end had no provider time, so it's now.
+        self.assertEqual(ended["canceled_at"], 150)
+        self.assertGreater(ended["ended_at"], 1_000_000_000)
+        db.upsert_subscription(USER, "active", "monthly", "stripe", 300, 400, False, subscription_id="sub_2")
+        self.assertFalse({"canceled_at", "ended_at"} & set(db.get_subscription(USER)))
+
+    def test_admin_dashboard_reads_dynamodb(self):
+        self.assertFalse(db.is_admin(USER))
+        self.assertEqual(self.client.get("/api/admin/users", headers=self.signed_in()).status_code, 404)
+        db.add_admin(USER)
+        db.save_user_identity(USER, "me@example.com", "Me")
+        done = self.upload()
+        self.assertTrue(worker.process_job(done["job_id"], runner=fake_runner))
+        users = self.client.get("/api/admin/users", headers=self.signed_in()).json()
+        self.assertEqual([(u["email"], u["uploads"]) for u in users], [("me@example.com", 1)])
+        files = self.client.get("/api/admin/uploads/a/files", headers=self.signed_in()).json()
+        self.assertTrue(files["direct"])
+        self.assertIn("new-files", files["original"])
+        self.assertIn("new-files", files["annotated"])
+        system = self.client.get("/api/admin/system", headers=self.signed_in()).json()
+        self.assertEqual((system["region"], system["queue"]["dead_letter"]), ("us-west-1", 0))
+        # No worker service in this test account - that panel reports the
+        # error instead of failing the whole page.
+        self.assertIn("error", system["workers"])
 
     def test_subscription_owner_is_found_by_provider_id(self):
         db.upsert_subscription(USER, "active", "monthly", "apple", 100, 200, False,

@@ -197,8 +197,11 @@ def process_job(job_id, extend=lambda: None, runner=run_processor):
             labels_key = storage.publish(job, "labels", labels) if labels.exists() else None
             check()
             quality = alerts.assess(timeline)
+            # Why the sheet was emailed as needing review, kept on the job so
+            # the admin dashboard can list them; None when it looked fine.
             job_state.finish(job, status="done", labeled_groups=count, output_key=output_key,
-                             timeline_key=timeline_key, labels_key=labels_key, stage="Complete", error=None)
+                             timeline_key=timeline_key, labels_key=labels_key, stage="Complete", error=None,
+                             review_reasons=(quality or {}).get("reasons") or None)
         alerts.job_done(job, quality, output_key)
         return True
     except job_state.LeaseLost:

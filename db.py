@@ -10,7 +10,11 @@ server.py), keyed by whichever id identified the request.
 
 Subscriptions are the exception: they use DynamoDB whenever
 SUBSCRIPTIONS_TABLE is set, local dev included (see the block near the end),
-and so do master users whenever MASTER_USERS_TABLE is set (the last block).
+and so do master users and admins whenever their tables are set (the last
+blocks).
+
+The all_* functions read a whole table, for the admin dashboard only (see
+admin.py). Fine at this project's size; nothing a visitor calls uses them.
 
 Wherever DynamoDB is used, its Decimal numbers are converted to int/float so
 callers (server.py) never touch boto3 types directly.
@@ -19,10 +23,13 @@ import threading
 import time
 from decimal import Decimal
 
-from config import IS_PRODUCTION, MASTER_USERS_TABLE, SUBSCRIPTIONS_TABLE
+from config import ADMIN_TABLE, IS_PRODUCTION, MASTER_USERS_TABLE, SUBSCRIPTIONS_TABLE
 
 
 _SUBSCRIPTION_STATUSES = {"trialing", "active", "canceled", "expired", "past_due"}
+# Statuses of a subscription that has stopped for good, as opposed to one that
+# is merely set to stop at its period end (cancel_at_period_end).
+_SUBSCRIPTION_ENDED = {"canceled", "expired"}
 _SUBSCRIPTION_PLANS = {"monthly", "yearly"}
 _SUBSCRIPTION_PLATFORMS = {"stripe", "apple"}
 
@@ -45,6 +52,31 @@ def _clean(value):
     if isinstance(value, list):
         return [_clean(v) for v in value]
     return value
+
+
+def _cancellation(status, cancel_at_period_end, canceled_at, ended_at):
+    """The subscription's cancellation fields, as {field: (applies, time)}.
+
+    canceled_at is when it stopped renewing (cancelled, or set to cancel at
+    period end); ended_at is when access actually ended. A field that no
+    longer applies - the subscriber resumed, or subscribed again - is removed.
+    `time` is the provider's own, when it sent one; otherwise the store keeps
+    the time it first heard, rather than moving it on every later sync."""
+    return {
+        "canceled_at": (cancel_at_period_end or status in _SUBSCRIPTION_ENDED, canceled_at),
+        "ended_at": (status in _SUBSCRIPTION_ENDED, ended_at),
+    }
+
+
+def _scan(table):
+    """Every row of a DynamoDB table, across as many pages as it takes."""
+    items, kwargs = [], {}
+    while True:
+        response = table.scan(**kwargs)
+        items += response["Items"]
+        if "LastEvaluatedKey" not in response:
+            return _clean(items)
+        kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
 
 
 if IS_PRODUCTION:
@@ -199,6 +231,17 @@ if IS_PRODUCTION:
     def delete_annotation_job(job_id):
         _annotation_job_table.delete_item(Key={"job_id": job_id})
 
+    # ---- whole tables, for the admin dashboard ----
+
+    def all_users():
+        return _scan(_users_table)
+
+    def all_music_sheets():
+        return _scan(_music_sheet_table)
+
+    def all_annotation_jobs():
+        return _scan(_annotation_job_table)
+
 else:
     # No AWS dependency at all: plain dicts guarded by a lock, since the
     # background job worker thread and request-handling threads both touch
@@ -283,8 +326,10 @@ else:
 
     def upsert_subscription(user_id, status, plan, platform, current_period_start,
                             current_period_end, cancel_at_period_end,
-                            subscription_id=None, started_at=None):
+                            subscription_id=None, started_at=None,
+                            canceled_at=None, ended_at=None):
         _validate_subscription(status, plan, platform)
+        now = int(time.time())
         with _lock:
             row = _subscriptions.setdefault(user_id, {"user_id": user_id})
             row.update({
@@ -294,12 +339,21 @@ else:
                 "current_period_start": current_period_start,
                 "current_period_end": current_period_end,
                 "cancel_at_period_end": cancel_at_period_end,
-                "updated_at": int(time.time()),
+                "updated_at": now,
             })
             if subscription_id is not None:
                 row["subscription_id"] = subscription_id
             if started_at is not None:
                 row["started_at"] = started_at
+            for key, (applies, when) in _cancellation(status, cancel_at_period_end, canceled_at, ended_at).items():
+                if applies:
+                    row[key] = when or row.get(key) or now
+                else:
+                    row.pop(key, None)
+
+    def all_subscriptions():
+        with _lock:
+            return [dict(s) for s in _subscriptions.values()]
 
     # ---- music_sheet ----
 
@@ -364,6 +418,20 @@ else:
         with _lock:
             _annotation_jobs.pop(job_id, None)
 
+    # ---- whole tables, for the admin dashboard ----
+
+    def all_users():
+        with _lock:
+            return [dict(u) for u in _users.values()]
+
+    def all_music_sheets():
+        with _lock:
+            return [dict(s) for s in _music_sheets.values()]
+
+    def all_annotation_jobs():
+        with _lock:
+            return [dict(j) for j in _annotation_jobs.values()]
+
 
 # ---- subscriptions: DynamoDB whenever a table is named ----
 #
@@ -402,7 +470,8 @@ if SUBSCRIPTIONS_TABLE:
 
     def upsert_subscription(user_id, status, plan, platform, current_period_start,
                             current_period_end, cancel_at_period_end,
-                            subscription_id=None, started_at=None):
+                            subscription_id=None, started_at=None,
+                            canceled_at=None, ended_at=None):
         _validate_subscription(status, plan, platform)
         fields = {
             "status": status,
@@ -418,12 +487,26 @@ if SUBSCRIPTIONS_TABLE:
                 fields[key] = value
         names = {f"#{key}": key for key in fields}
         values = {f":{key}": value for key, value in fields.items()}
+        sets = [f"#{key} = :{key}" for key in fields]
+        removes = []
+        for key, (applies, when) in _cancellation(status, cancel_at_period_end, canceled_at, ended_at).items():
+            names[f"#{key}"] = key
+            if not applies:
+                removes.append(f"#{key}")
+            elif when:
+                values[f":{key}"] = when
+                sets.append(f"#{key} = :{key}")
+            else:
+                sets.append(f"#{key} = if_not_exists(#{key}, :updated_at)")
         _subscriptions_table.update_item(
             Key={"user_id": user_id},
-            UpdateExpression="SET " + ", ".join(f"#{key} = :{key}" for key in fields),
+            UpdateExpression="SET " + ", ".join(sets) + (" REMOVE " + ", ".join(removes) if removes else ""),
             ExpressionAttributeNames=names,
             ExpressionAttributeValues=values,
         )
+
+    def all_subscriptions():
+        return _scan(_subscriptions_table)
 
 
 # ---- master users: accounts that bypass every subscription check ----
@@ -450,6 +533,9 @@ if MASTER_USERS_TABLE:
     def remove_master_user(user_id):
         _master_users_table.delete_item(Key={"user_id": user_id})
 
+    def all_master_users():
+        return {row["user_id"] for row in _scan(_master_users_table)}
+
 else:
     _master_users = set()
     _master_users_lock = threading.Lock()
@@ -465,3 +551,43 @@ else:
     def remove_master_user(user_id):
         with _master_users_lock:
             _master_users.discard(user_id)
+
+    def all_master_users():
+        with _master_users_lock:
+            return set(_master_users)
+
+
+# ---- admins: accounts that may open the admin dashboard ----
+#
+# Same shape as master users - user_id only, a row's presence is the grant -
+# and managed the same way, by hand; nothing in the app writes this table.
+# Separate on purpose: premium access and seeing everyone's data are
+# different powers. Without a table (local dev and tests by default) the set
+# starts empty; add_admin exists for tests and for trying the dashboard
+# locally.
+if ADMIN_TABLE:
+    import os
+
+    import boto3
+
+    _admin_table = boto3.resource(
+        "dynamodb", region_name=os.environ.get("AWS_REGION", "us-west-1"),
+    ).Table(ADMIN_TABLE)
+
+    def is_admin(user_id):
+        return "Item" in _admin_table.get_item(Key={"user_id": user_id})
+
+    def add_admin(user_id):
+        _admin_table.put_item(Item={"user_id": user_id})
+
+else:
+    _admins = set()
+    _admins_lock = threading.Lock()
+
+    def is_admin(user_id):
+        with _admins_lock:
+            return user_id in _admins
+
+    def add_admin(user_id):
+        with _admins_lock:
+            _admins.add(user_id)
