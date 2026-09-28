@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pymupdf as fitz
 
+import page_size
 import scan
 from audiveris_heads import (
     _parse_sheet, load_sheet_heads, load_staff_lines, load_system_staff_groups,
@@ -150,9 +151,11 @@ def run_audiveris(pdf_path, out_dir, dpi=None, sheets=None, switches=None, binar
         # dense/small engraving (16th-note runs etc.), causing it to miss
         # noteheads outright rather than just misreading them. Raising the
         # loader's own DPI also requires raising its max-pixel-count safety
-        # cap, which is sized for the 300dpi default.
+        # cap, which is sized for the 300dpi default. Larger pages never get
+        # here - see page_size.py.
         cmd += ["-constant", f"org.audiveris.omr.image.ImageLoading.pdfResolution={dpi}",
-                "-constant", f"org.audiveris.omr.step.LoadStep.maxPixelCount={dpi * dpi * 200}"]
+                "-constant", "org.audiveris.omr.step.LoadStep.maxPixelCount="
+                             f"{dpi * dpi * page_size.MAX_PAGE_SQUARE_INCHES}"]
     for name, enabled in (switches or {}).items():
         # Audiveris's own optional detectors, all off by default. One that is
         # wrong for a given score costs accuracy rather than just time, so they
@@ -209,10 +212,12 @@ RETRY_PASS_OVERHEAD = 1.75
 
 
 def page_megapixels(pdf_path, dpi=DEFAULT_DPI):
-    """Rasterized size of each page, in megapixels, as Audiveris will see it."""
+    """Rasterized size of each page, in megapixels, as Audiveris will see it -
+    an oversized page at the size page_size.py shrinks it to."""
     try:
         with fitz.open(pdf_path) as doc:
-            return [(page.rect.width * dpi / 72) * (page.rect.height * dpi / 72) / 1e6
+            return [(page.rect.width * dpi / 72) * (page.rect.height * dpi / 72)
+                    * page_size.page_scale(page) ** 2 / 1e6
                     for page in doc]
     except (OSError, RuntimeError, ValueError):
         return []
@@ -849,6 +854,10 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
     """
     pdf_path = Path(pdf_path)
     work_dir = Path(work_dir)
+    # Everything below reads the shrunk copy of an oversized page, and what it
+    # produces is scaled back to the upload's pages at the end.
+    upload = pdf_path
+    pdf_path, scales = page_size.shrink_oversized(upload, work_dir / "page-size")
 
     log(f"[1/3] Running Audiveris OMR on {pdf_path.name} ...")
     try:
@@ -909,7 +918,8 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
             from timeline import build_timeline
             tl = build_timeline(str(pdf_path), str(mxl), str(omr), num_pages,
                                 page_omr_overrides=page_overrides, prepared_score=prepared)
-            Path(timeline_path).write_text(json.dumps(tl), encoding="utf-8")
+            Path(timeline_path).write_text(json.dumps(
+                page_size.restore_timeline(tl, scales) if scales else tl), encoding="utf-8")
             log(f"[2b/3] Playback timeline: {len(tl['measures'])} measures, "
                 f"{len(tl['notes'])} notes")
         except Exception as e:
@@ -917,13 +927,19 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
 
     log(f"[3/3] Rendering {output} ...")
     placed = render(str(pdf_path), str(output), records, font_size=font_size, color=color)
+    if scales:
+        page_size.restore_pdf(output, upload, scales)
     if labels_path is not None:
         try:
             import json
 
             from label_export import labels_document
-            Path(labels_path).write_text(json.dumps(labels_document(
-                placed, tl, font_size=font_size, color=color), ensure_ascii=False), encoding="utf-8")
+            # Matched to the timeline's notes while both are still in the
+            # shrunk copy's points.
+            document = labels_document(placed, tl, font_size=font_size, color=color)
+            if scales:
+                document = page_size.restore_labels(document, scales)
+            Path(labels_path).write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
         except Exception as e:
             log(f"Label export failed, label editing unavailable for this sheet: {e}")
     log(f"Done: {output} ({len(records)} labeled beat-groups)")
