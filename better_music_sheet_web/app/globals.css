@@ -132,8 +132,8 @@ main {
 }
 .dropzone.has-file { border-color: var(--accent); background: rgba(217, 164, 65, 0.06); }
 .dropzone .icon { font-size: 32px; margin-bottom: 10px; }
-.dropzone .title { font-size: 16px; font-weight: 600; word-break: break-all; }
-.dropzone .detail { font-size: 13.5px; color: var(--ink-soft); margin-top: 6px; word-break: break-all; }
+.dropzone .title { font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
+.dropzone .detail { font-size: 13.5px; color: var(--ink-soft); margin-top: 6px; overflow-wrap: anywhere; }
 
 details.options { margin-top: 18px; }
 details.options summary {
