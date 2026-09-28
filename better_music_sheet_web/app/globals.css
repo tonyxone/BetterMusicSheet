@@ -971,3 +971,61 @@ textarea.sheet-inline-input { font-family: system-ui, -apple-system, "Segoe UI",
   color: #6b5847; white-space: nowrap;
 }
 .flat-key.lit span { color: #fff; }
+
+/* ---- Admin dashboard (app/admin/) ---- */
+.admin-page .page-title-row { margin-bottom: 20px; }
+.admin-page h1 { font-size: 2rem; font-weight: 600; }
+.admin-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--paper-deep); margin-bottom: 20px; overflow-x: auto; }
+.admin-tabs button {
+  border: none; background: none; padding: 10px 16px; font: inherit; font-weight: 600; color: var(--ink-soft);
+  cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap;
+}
+.admin-tabs button:hover { color: var(--ink); }
+.admin-tabs button.active { color: var(--ink); border-bottom-color: var(--accent); }
+.admin-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.admin-toolbar-end { display: flex; align-items: center; gap: 12px; margin-left: auto; }
+.btn-pill.admin-small { padding: 7px 16px; font-size: 13px; }
+.admin-input {
+  flex: 1 1 260px; max-width: 380px; padding: 9px 14px; border: 1px solid var(--paper-deep); border-radius: 999px;
+  background: var(--card); font: inherit; color: var(--ink);
+}
+.admin-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.admin-filters button {
+  border: 1px solid var(--paper-deep); background: var(--card); color: var(--ink-soft); border-radius: 999px;
+  padding: 6px 14px; font: inherit; font-size: 13px; cursor: pointer;
+}
+.admin-filters button.active { border-color: var(--ink); color: var(--ink); font-weight: 600; }
+.admin-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.admin-tile { background: var(--card); border: 1px solid var(--paper-deep); border-radius: 14px; padding: 16px 18px; }
+.admin-tile-label { font-size: 13px; color: var(--ink-soft); }
+.admin-tile-value { font-size: 1.9rem; font-weight: 600; margin: 4px 0 2px; }
+.admin-heading { font-size: 1.2rem; margin: 8px 0 12px; }
+.admin-table-wrap { overflow-x: auto; background: var(--card); border: 1px solid var(--paper-deep); border-radius: 14px; }
+.admin-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.admin-table th {
+  text-align: left; font-size: 12px; font-weight: 600; color: var(--ink-soft); padding: 10px 12px;
+  border-bottom: 1px solid var(--paper-deep); white-space: nowrap;
+}
+.admin-table td { padding: 10px 12px; border-bottom: 1px solid var(--paper-deep); vertical-align: top; }
+.admin-table tr:last-child > td { border-bottom: none; }
+.admin-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.admin-table .nowrap { white-space: nowrap; }
+.admin-row { cursor: pointer; }
+.admin-row:hover > td { background: var(--paper); }
+.admin-caret { display: inline-block; width: 16px; color: var(--ink-soft); }
+.admin-expanded > td { background: var(--paper); padding: 12px; }
+.admin-expanded .admin-table-wrap { border-radius: 10px; }
+.admin-sub { font-size: 12px; color: var(--ink-soft); margin-top: 2px; }
+.admin-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; word-break: break-all; }
+.admin-error-text { color: var(--danger); font-size: 13px; }
+.admin-link { border: none; background: none; padding: 0; font: inherit; color: var(--accent); cursor: pointer; text-decoration: underline; }
+.admin-badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.admin-badge.good { background: var(--success-bg); color: var(--success); }
+.admin-badge.bad { background: var(--danger-bg); color: var(--danger); }
+.admin-badge.warn { background: #F6EBD2; color: #7A5A12; }
+.admin-badge.info { background: var(--paper-deep); color: var(--ink); }
+.admin-badge.muted { background: transparent; border: 1px solid var(--paper-deep); color: var(--ink-soft); }
+.admin-not-found { display: flex; align-items: center; justify-content: center; gap: 20px; min-height: 50vh; padding: 0 16px; }
+.admin-not-found h1 { margin: 0; padding-right: 20px; border-right: 1px solid var(--ink-soft); font-size: 24px; font-weight: 500; }
+.admin-not-found p { margin: 0; font-size: 14px; }
+@media (max-width: 560px) { .wrap.wide.admin-page { padding: 24px 16px 80px; } }

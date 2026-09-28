@@ -234,6 +234,7 @@ module "serverless_us_east_1" {
   users_table           = aws_dynamodb_table.users.name
   subscriptions_table   = aws_dynamodb_table.subscriptions.name
   master_users_table    = aws_dynamodb_table.master_user.name
+  admin_table           = aws_dynamodb_table.admin.name
   sheets_table          = aws_dynamodb_table.music_sheet.name
   jobs_table            = aws_dynamodb_table.annotation_job.name
   secret_parameter      = aws_ssm_parameter.backend_jwt_secret_us_east_1[0].arn
@@ -263,7 +264,7 @@ module "serverless_us_east_1" {
   # The Lambdas read the tables' us-east-1 replicas from their first request.
   depends_on = [
     aws_dynamodb_table.users, aws_dynamodb_table.subscriptions, aws_dynamodb_table.master_user,
-    aws_dynamodb_table.music_sheet, aws_dynamodb_table.annotation_job,
+    aws_dynamodb_table.admin, aws_dynamodb_table.music_sheet, aws_dynamodb_table.annotation_job,
     aws_ecs_cluster_capacity_providers.us_east_1, aws_route_table_association.us_east_1,
   ]
 }

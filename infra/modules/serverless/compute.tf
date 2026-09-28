@@ -33,6 +33,11 @@ resource "aws_lambda_function" "api" {
       APPLE_ENV                    = var.apple_env
       APPLE_PRODUCT_MONTHLY        = var.apple_product_monthly
       APPLE_PRODUCT_YEARLY         = var.apple_product_yearly
+      # The admin dashboard (../../../admin.py): who may open it, and which
+      # worker service its system view describes.
+      ADMIN_TABLE    = var.admin_table
+      WORKER_CLUSTER = var.cluster_name
+      WORKER_SERVICE = "${local.name}-worker"
     })
   }
   logging_config {

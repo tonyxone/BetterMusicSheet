@@ -47,6 +47,10 @@ output "master_user_table" {
   value = aws_dynamodb_table.master_user.name
 }
 
+output "admin_table" {
+  value = aws_dynamodb_table.admin.name
+}
+
 output "music_sheet_table" {
   value = aws_dynamodb_table.music_sheet.name
 }

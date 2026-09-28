@@ -148,6 +148,10 @@ def _sync_subscription(subscription, deleted=False):
         # start, it doesn't move on each renewal. Per subscription, so a
         # rejoining account shows its new start, not its first-ever one.
         started_at=_value(subscription, "start_date"),
+        # Stripe's own times, for the admin dashboard. canceled_at is when the
+        # cancellation was requested, even one that waits for the period end.
+        canceled_at=_value(subscription, "canceled_at"),
+        ended_at=_value(subscription, "ended_at"),
     )
     return db.get_subscription(user_id)
 

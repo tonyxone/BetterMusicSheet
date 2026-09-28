@@ -1,0 +1,296 @@
+"""API for the private admin dashboard (better_music_sheet_web/app/admin/).
+
+Every route answers exactly as a route that doesn't exist would - 404 with
+FastAPI's own "Not Found" body - unless the caller is signed in as an account
+listed in the admin table (see db.is_admin). A visitor, a guest, an expired
+or forged token and an ordinary account all get the same answer, so nothing
+here even confirms the dashboard exists.
+
+Read-only on purpose: nothing here changes a user, a job or a subscription.
+And isolated: an error in any route here is that one request's 500, and
+server.py still serves everything else if this module can't even be loaded.
+"""
+import os
+import statistics
+import time
+import traceback
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi.responses import FileResponse
+
+import config
+import db
+import storage
+from auth import get_signed_in_user_id
+
+DAY = 86400
+ACTIVE = ("uploading", "queued", "processing")
+REMOVED = ("deleting", "deleted")
+
+
+def require_admin(authorization: str = Header(None)):
+    try:
+        user_id = get_signed_in_user_id(authorization)
+    except HTTPException:
+        # A bad token would otherwise answer 401 - which a route that doesn't
+        # exist never does.
+        user_id = None
+    try:
+        admin = user_id is not None and db.is_admin(user_id)
+    except Exception:
+        # e.g. the admin table missing in this region. Still just a 404.
+        traceback.print_exc()
+        admin = False
+    if not admin:
+        raise HTTPException(404, "Not Found")
+    return user_id
+
+
+router = APIRouter(prefix="/api/admin", dependencies=[Depends(require_admin)])
+
+
+def _subscription_view(subscription, now):
+    if subscription is None:
+        return None
+    period_end = subscription.get("current_period_end")
+    # Mirrors auth._subscription_entitlement, which reads one account at a
+    # time: a scheduled cancellation (and every Apple period) stops granting
+    # access at its period end, whether or not the provider has said so yet.
+    lapsed = ((subscription.get("cancel_at_period_end") or subscription.get("platform") == "apple")
+              and period_end is not None and period_end <= now)
+    return {
+        "status": subscription.get("status"),
+        "plan": subscription.get("plan"),
+        "platform": subscription.get("platform"),
+        "started_at": subscription.get("started_at"),
+        "current_period_end": period_end,
+        "cancel_at_period_end": bool(subscription.get("cancel_at_period_end")),
+        "canceled_at": subscription.get("canceled_at"),
+        "ended_at": subscription.get("ended_at"),
+        "premium": subscription.get("status") in ("active", "trialing") and not lapsed,
+    }
+
+
+def _job_view(job, sheet_names, users=None):
+    queued, updated = job.get("queued_at"), job.get("updated_at")
+    view = {
+        "job_id": job["job_id"],
+        "user_id": job["user_id"],
+        "sheet_name": job.get("sheet_name") or sheet_names.get(job.get("music_sheet_id")),
+        "status": job.get("status"),
+        "stage": job.get("stage"),
+        "error": job.get("error"),
+        "review_reasons": job.get("review_reasons"),
+        "created_at": job.get("created_at"),
+        "updated_at": updated,
+        # Queue to finish, so it includes waiting for a worker to start.
+        "seconds": updated - queued if job.get("status") == "done" and queued and updated else None,
+        "size": job.get("size"),
+        "attempts": job.get("attempt_count"),
+        "region": storage.job_region(job) if config.IS_PRODUCTION else None,
+    }
+    if users is not None:
+        owner = users.get(job["user_id"])
+        view["owner_email"] = owner.get("email") if owner else None
+        # Only signed-in accounts have a users row (see db.py).
+        view["guest"] = owner is None
+    return view
+
+
+def _jobs():
+    """Every real upload - the bundled demo sheet is not one."""
+    return [job for job in db.all_annotation_jobs() if job["user_id"] != config.DEMO_OWNER_ID]
+
+
+def _sheet_names():
+    return {sheet["music_sheet_id"]: sheet.get("sheet_name") for sheet in db.all_music_sheets()}
+
+
+@router.get("/me")
+def me(user_id: str = Depends(require_admin)):
+    user = db.get_user(user_id) or {}
+    return {"user_id": user_id, "email": user.get("email"), "display_name": user.get("display_name")}
+
+
+@router.get("/overview")
+def overview():
+    now = int(time.time())
+    users = db.all_users()
+    subscriptions = [_subscription_view(s, now) for s in db.all_subscriptions()]
+    jobs = _jobs()
+    recent = [j for j in jobs if (j.get("created_at") or 0) >= now - 30 * DAY]
+    done = [j for j in recent if j.get("status") == "done"]
+    failed = [j for j in recent if j.get("status") == "failed"]
+    seconds = [j["updated_at"] - j["queued_at"] for j in done if j.get("queued_at") and j.get("updated_at")]
+    premium = [s for s in subscriptions if s["premium"]]
+    return {
+        "users": {
+            "total": len(users),
+            "new_7d": sum((u.get("created_at") or 0) >= now - 7 * DAY for u in users),
+            "new_30d": sum((u.get("created_at") or 0) >= now - 30 * DAY for u in users),
+        },
+        "subscriptions": {
+            "premium": len(premium),
+            "trialing": sum(s["status"] == "trialing" for s in premium),
+            "canceling": sum(s["cancel_at_period_end"] for s in premium),
+            "stripe": sum(s["platform"] == "stripe" for s in premium),
+            "apple": sum(s["platform"] == "apple" for s in premium),
+            "ended": sum(not s["premium"] for s in subscriptions),
+        },
+        "uploads": {
+            "total": len(jobs),
+            "last_7d": sum((j.get("created_at") or 0) >= now - 7 * DAY for j in jobs),
+            "last_30d": len(recent),
+            "failed_30d": len(failed),
+            "review_30d": sum(bool(j.get("review_reasons")) for j in done),
+            "failure_rate_30d": len(failed) / (len(done) + len(failed)) if done or failed else None,
+            "median_seconds_30d": statistics.median(seconds) if seconds else None,
+            "in_progress": sum(j.get("status") in ACTIVE for j in jobs),
+        },
+    }
+
+
+@router.get("/users")
+def users():
+    now = int(time.time())
+    subscriptions = {s["user_id"]: s for s in db.all_subscriptions()}
+    masters = db.all_master_users()
+    uploads = {}
+    for job in _jobs():
+        if job.get("status") not in REMOVED:
+            uploads.setdefault(job["user_id"], []).append(job)
+    rows = []
+    for user in db.all_users():
+        mine = uploads.get(user["user_id"], [])
+        rows.append({
+            "user_id": user["user_id"],
+            "email": user.get("email"),
+            "display_name": user.get("display_name"),
+            "created_at": user.get("created_at"),
+            "master": user["user_id"] in masters,
+            "subscription": _subscription_view(subscriptions.get(user["user_id"]), now),
+            "uploads": len(mine),
+            "failed": sum(j.get("status") == "failed" for j in mine),
+            "last_upload_at": max((j.get("created_at") or 0 for j in mine), default=None),
+        })
+    return sorted(rows, key=lambda row: row["created_at"] or 0, reverse=True)
+
+
+@router.get("/users/{user_id}/uploads")
+def user_uploads(user_id: str):
+    """Everything the account uploaded, newest first - deleted ones included,
+    marked as such, since "they deleted it" is worth knowing too."""
+    names = {s["music_sheet_id"]: s.get("sheet_name") for s in db.list_music_sheets(user_id)}
+    return [_job_view(job, names) for job in db.list_annotation_jobs(user_id)]
+
+
+@router.get("/uploads")
+def uploads(status: str = None, limit: int = 500):
+    """Every upload, newest first. `status` narrows it: a job status, or
+    "active" (not finished yet) or "review" (finished, but emailed as needing
+    review)."""
+    users = {u["user_id"]: u for u in db.all_users()}
+    jobs = _jobs()
+    if status == "active":
+        jobs = [j for j in jobs if j.get("status") in ACTIVE]
+    elif status == "review":
+        jobs = [j for j in jobs if j.get("status") == "done" and j.get("review_reasons")]
+    elif status:
+        jobs = [j for j in jobs if j.get("status") == status]
+    jobs.sort(key=lambda j: j.get("created_at") or 0, reverse=True)
+    names = _sheet_names()
+    return [_job_view(job, names, users) for job in jobs[:max(1, min(limit, 2000))]]
+
+
+def _job_or_404(job_id):
+    job = db.get_annotation_job(job_id)
+    if job is None:
+        raise HTTPException(404, "no such job")
+    if not job.get("sheet_name"):
+        sheet = db.get_music_sheet(job["music_sheet_id"])
+        job = {**job, "sheet_name": sheet["sheet_name"] if sheet else job["music_sheet_id"]}
+    return job
+
+
+@router.get("/uploads/{job_id}/files")
+def upload_files(job_id: str):
+    """Links to open the file as uploaded and the annotated result, each None
+    when it isn't there. In production they are short-lived S3 links: an
+    upload can be larger than a Lambda response may be. Locally they are the
+    route below, which needs the admin's token, so `direct` is false."""
+    job = _job_or_404(job_id)
+    done = job.get("status") == "done"
+    if config.IS_PRODUCTION:
+        return {"direct": True, "original": storage.presign_artifact(job, "input"),
+                "annotated": storage.presign_artifact(job, "output") if done else None}
+    return {"direct": False,
+            "original": f"/api/admin/uploads/{job_id}/file/input" if _local_file(job, "input") else None,
+            "annotated": f"/api/admin/uploads/{job_id}/file/output" if done and _local_file(job, "output") else None}
+
+
+def _local_file(job, kind):
+    try:
+        path = Path(storage.read_artifact(job, kind))
+    except FileNotFoundError:
+        return None
+    return path if path.exists() else None
+
+
+@router.get("/uploads/{job_id}/file/{kind}")
+def upload_file(job_id: str, kind: str):
+    """Local development only - see upload_files."""
+    if config.IS_PRODUCTION or kind not in ("input", "output"):
+        raise HTTPException(404, "Not Found")
+    job = _job_or_404(job_id)
+    path = _local_file(job, kind)
+    if path is None:
+        raise HTTPException(404, "no such file")
+    media_type = storage.upload_media_type(job["sheet_name"]) if kind == "input" else "application/pdf"
+    return FileResponse(path, media_type=media_type)
+
+
+def _attempt(read):
+    """One panel of the system view; a failure there shouldn't blank the rest."""
+    try:
+        return read()
+    except Exception as exc:
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+def _queues():
+    import boto3
+    sqs = boto3.client("sqs")
+    names = ["ApproximateNumberOfMessages", "ApproximateNumberOfMessagesNotVisible"]
+    jobs = sqs.get_queue_attributes(QueueUrl=os.environ["JOB_QUEUE_URL"], AttributeNames=names)["Attributes"]
+    failed = sqs.get_queue_attributes(QueueUrl=os.environ["JOB_DLQ_URL"], AttributeNames=names[:1])["Attributes"]
+    return {"waiting": int(jobs["ApproximateNumberOfMessages"]),
+            "in_flight": int(jobs["ApproximateNumberOfMessagesNotVisible"]),
+            "dead_letter": int(failed["ApproximateNumberOfMessages"])}
+
+
+def _workers():
+    import boto3
+    service = boto3.client("ecs").describe_services(
+        cluster=os.environ["WORKER_CLUSTER"], services=[os.environ["WORKER_SERVICE"]])["services"][0]
+    return {"desired": service["desiredCount"], "running": service["runningCount"],
+            "pending": service["pendingCount"],
+            "task_definition": service["taskDefinition"].rsplit("/", 1)[-1]}
+
+
+@router.get("/system")
+def system():
+    """This region's processing pipeline: what is waiting, what is running.
+    Each region reports only itself - open the dashboard through the other
+    region's API to see that one."""
+    now = int(time.time())
+    names = _sheet_names()
+    active = sorted((j for j in _jobs() if j.get("status") in ACTIVE),
+                    key=lambda j: j.get("created_at") or 0)
+    return {
+        "region": storage.own_region() if config.IS_PRODUCTION else "local",
+        "now": now,
+        "queue": _attempt(_queues) if config.SERVERLESS else None,
+        "workers": _attempt(_workers) if config.SERVERLESS else None,
+        "active": [_job_view(job, names) for job in active],
+    }

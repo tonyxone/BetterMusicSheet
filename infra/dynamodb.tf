@@ -106,6 +106,35 @@ resource "aws_dynamodb_table" "master_user" {
   }
 }
 
+# Accounts that may open the admin dashboard (see ../admin.py). Same shape as
+# master_user and managed the same way, by hand:
+#   aws dynamodb put-item --table-name <name> --item '{"user_id":{"S":"<sub>"}}'
+# The API can only read it.
+resource "aws_dynamodb_table" "admin" {
+  name         = "${var.project}-admin"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "user_id"
+
+  attribute {
+    name = "user_id"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  stream_enabled   = local.us_east_1_enabled
+  stream_view_type = local.us_east_1_enabled ? "NEW_AND_OLD_IMAGES" : null
+  dynamic "replica" {
+    for_each = local.us_east_1_enabled ? [local.us_east_1] : []
+    content {
+      region_name            = replica.value
+      point_in_time_recovery = true
+    }
+  }
+}
+
 resource "aws_dynamodb_table" "music_sheet" {
   name         = "${var.project}-music-sheet"
   billing_mode = "PAY_PER_REQUEST"

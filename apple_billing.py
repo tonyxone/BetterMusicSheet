@@ -189,8 +189,23 @@ def _sync_transaction(user_id, transaction, renewal=None):
         user_id, status, _plan(transaction), "apple", period_start, period_end,
         str(auto_renew) == "0", subscription_id=original_transaction_id,
         started_at=_timestamp(transaction.get("originalPurchaseDate")),
+        ended_at=_ended_at(transaction, period_end),
     )
     return db.get_subscription(user_id)
+
+
+def _ended_at(transaction, period_end):
+    """When access ended, for the admin dashboard: a refund's revocation, or a
+    period end that has passed. (Apple doesn't say when renewal was turned
+    off, so db.py records that as when this backend first heard.)
+
+    Only ever a label: a value it can't read gives None - the store then uses
+    the time it heard - and never fails the sync that grants access."""
+    try:
+        revoked = _timestamp(transaction.get("revocationDate"))
+    except HTTPException:
+        revoked = None
+    return revoked or (period_end if period_end and period_end <= int(time.time()) else None)
 
 
 def record_transaction(user_id, signed_transaction):
