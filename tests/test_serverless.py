@@ -263,7 +263,7 @@ class ServerlessTests(unittest.TestCase):
         # way, and this pins that the more specific error wins.
         body = {"filename": "Summer.pdf", "size": 10, **OPTIONS}
         self.assertEqual(self.client.post("/api/uploads", json={**body, "dpi": 650}, headers=self.headers).status_code, 422)
-        self.assertEqual(self.client.post("/api/uploads", json={**body, "size": 30 * 1024 * 1024}, headers=self.headers).status_code, 422)
+        self.assertEqual(self.client.post("/api/uploads", json={**body, "size": 10 * 1024 * 1024 + 1}, headers=self.headers).status_code, 422)
         response = self.client.post("/api/uploads", json={**body, "dpi": 600}, headers=self.signed_in())
         self.assertEqual(response.status_code, 201, response.text)
         import base64

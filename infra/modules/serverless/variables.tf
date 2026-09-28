@@ -105,7 +105,7 @@ locals {
     ALLOWED_ORIGINS       = join(",", var.origins)
     COGNITO_USER_POOL_ID  = var.cognito_pool
     COGNITO_APP_CLIENT_ID = var.cognito_client
-    MAX_UPLOAD_BYTES      = "26214400"
+    MAX_UPLOAD_BYTES      = "10485760"
     MAX_PAGES             = "50"
     MAX_JOB_SECONDS       = "1800"
   }

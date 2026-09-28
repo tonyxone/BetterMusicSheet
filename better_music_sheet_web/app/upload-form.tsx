@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { uploadSheet } from "@/lib/sheet-files";
+import { MAX_UPLOAD_BYTES, uploadSheet } from "@/lib/sheet-files";
 import { useAuth } from "./auth-context";
 import { refreshSubscription } from "@/lib/subscription";
 import { resolveUploadAttempt } from "@/lib/upload-gate";
@@ -111,9 +111,20 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
           />
           <div className="icon">📄</div>
           <div className="title">{file ? file.name : "Drop a PDF or photo here, or click to browse"}</div>
-          <div className="detail">
-            {file ? `${(file.size / 1024).toFixed(0)} KB · ready to annotate` : "PDF, JPG, or PNG - one file at a time"}
-          </div>
+          {!file ? (
+            <>
+              <div className="detail">PDF, JPG, or PNG · up to {MAX_UPLOAD_BYTES / 1024 / 1024} MB · one file at a time</div>
+              <div className="detail">
+                PDF recommended: a digital PDF of the score gives the most accurate labels.
+              </div>
+            </>
+          ) : (
+            <div className="detail">
+              {file.size > MAX_UPLOAD_BYTES
+                ? `${(file.size / 1024 / 1024).toFixed(1)} MB · over the ${MAX_UPLOAD_BYTES / 1024 / 1024} MB limit`
+                : `${(file.size / 1024).toFixed(0)} KB · ready to annotate`}
+            </div>
+          )}
         </label>
 
         <details className="options">
