@@ -54,3 +54,9 @@ test('invalid upload options render a readable validation error', async () => {
   const api = load(async () => Response.json({ detail: [{ msg: 'invalid dpi' }] }, { status: 422 }), () => {});
   await assert.rejects(api.uploadSheet(new File(['pdf'], 'a.pdf'), { dpi: 650 }), /Check the file and options/);
 });
+
+test('a file over the upload limit is refused before anything is sent', async () => {
+  const api = load(() => { throw new Error('must not reach the API'); }, () => { throw new Error('must not reach S3'); });
+  const big = { name: 'score.pdf', type: 'application/pdf', size: api.MAX_UPLOAD_BYTES + 1 };
+  await assert.rejects(api.uploadSheet(big, {}), /at most 10 MB/);
+});

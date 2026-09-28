@@ -52,7 +52,14 @@ export async function fetchSheetFile(jobId: string, kind: SheetFileKind) {
     : clientApiFetch(url);
 }
 
+/** Matches the backend's own cap (MAX_UPLOAD_BYTES in config.py). Checked here
+ * too because the API's refusal is a bare validation error, not a message. */
+export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+
 export async function uploadSheet(file: File, options: Record<string, string | number | boolean | null>) {
+  if (file.size > MAX_UPLOAD_BYTES) {
+    throw new Error(`This file is ${(file.size / 1024 / 1024).toFixed(1)} MB. Files must be at most ${MAX_UPLOAD_BYTES / 1024 / 1024} MB.`);
+  }
   const response = await clientApiFetch("/api/uploads", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ filename: file.name, size: file.size, content_type: file.type, ...options }),
