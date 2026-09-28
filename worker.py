@@ -13,6 +13,7 @@ import uuid
 from pathlib import Path
 from urllib.parse import unquote_plus
 
+import alerts
 import db
 import job_state
 import storage
@@ -92,8 +93,7 @@ def accept_input(job_id, version=None):
     if info is None:
         return job
     if info["ContentLength"] != job["size"] or info["ContentLength"] > MAX_UPLOAD_BYTES:
-        if job_state.change(job_id, {"status": "uploading"}, status="failed", error="Uploaded file size does not match the selected file."):
-            job_state.release(job)
+        job_state.fail(job, {"status": "uploading"}, "Uploaded file size does not match the selected file.")
         return db.get_annotation_job(job_id)
     return job_state.ready(job_id, info.get("VersionId", "local"))
 
@@ -196,8 +196,10 @@ def process_job(job_id, extend=lambda: None, runner=run_processor):
             labels = directory / "labels.json"
             labels_key = storage.publish(job, "labels", labels) if labels.exists() else None
             check()
+            quality = alerts.assess(timeline)
             job_state.finish(job, status="done", labeled_groups=count, output_key=output_key,
                              timeline_key=timeline_key, labels_key=labels_key, stage="Complete", error=None)
+        alerts.job_done(job, quality, output_key)
         return True
     except job_state.LeaseLost:
         return False
@@ -207,6 +209,7 @@ def process_job(job_id, extend=lambda: None, runner=run_processor):
         try:
             if permanent:
                 job_state.finish(job, status="failed", error=str(exc), stage="Processing failed")
+                alerts.job_failed(job, str(exc))
             else:
                 now = int(time.time())
                 job_state.owned(job, status="queued", error=None, stage="Retrying interrupted processing",

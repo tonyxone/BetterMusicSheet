@@ -7,6 +7,7 @@ import os
 import time
 from decimal import Decimal
 
+import alerts
 import db
 from config import IS_PRODUCTION, LEASE_SECONDS, MAX_ATTEMPTS, UPLOAD_SECONDS
 
@@ -108,6 +109,19 @@ def change(job_id, expected, **fields):
         return True
 
 
+def fail(job, expected, error, **fields):
+    """Fail a job still in `expected`, free its upload slot and alert.
+
+    Every path to "failed" outside a leased worker goes through here, so the
+    operator hears about each one exactly once: whoever wins the compare-and-set.
+    """
+    if not change(job["job_id"], expected, status="failed", error=error, **fields):
+        return False
+    release(job)
+    alerts.job_failed(job, error)
+    return True
+
+
 def release(job):
     if not IS_PRODUCTION:
         return
@@ -140,8 +154,7 @@ def claim(job_id, token, now=None):
         expected["lease_owner"] = job["lease_owner"]
         expected["lease_until"] = job["lease_until"]
     if job["attempt_count"] >= MAX_ATTEMPTS:
-        if change(job_id, expected, status="failed", error="Processing failed after three attempts."):
-            release(job)
+        fail(job, expected, "Processing failed after three attempts.")
         return None
     if change(job_id, expected, status="processing", lease_owner=token,
               lease_until=now + LEASE_SECONDS, heartbeat_at=now,
