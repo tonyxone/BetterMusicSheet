@@ -129,6 +129,11 @@ NOT_MUSIC_MESSAGE = (
 )
 
 
+class NotMusic(ValueError):
+    """The upload holds no readable music. A final answer, not a crash:
+    processor.py hands NOT_MUSIC_MESSAGE to the reader instead of retrying."""
+
+
 def run_audiveris(pdf_path, out_dir, dpi=None, sheets=None, switches=None, binarize=False):
     """Recognize ``pdf_path`` into ``out_dir``; returns the .mxl and .omr.
 
@@ -864,12 +869,12 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
         mxl, omr = run_audiveris(pdf_path, work_dir, dpi=dpi)
     except subprocess.CalledProcessError:
         if _no_system_found(work_dir, pdf_path.stem):
-            raise ValueError(NOT_MUSIC_MESSAGE)
+            raise NotMusic(NOT_MUSIC_MESSAGE)
         raise
     num_pages = count_pages(pdf_path)
 
     if not has_any_staff(omr, num_pages):
-        raise ValueError(NOT_MUSIC_MESSAGE)
+        raise NotMusic(NOT_MUSIC_MESSAGE)
 
     page_overrides = {}
     binarized = False

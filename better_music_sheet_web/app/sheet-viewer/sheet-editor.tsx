@@ -126,8 +126,11 @@ export function SheetEditor({ jobId, variant, exportRef }: {
       try {
         const assets = await fetchSheetAssets(jobId).catch(() => null);
         const originalIsPdf = !!assets?.original && (!assets.original_type || assets.original_type === "application/pdf");
+        // No annotated copy yet (names still being added, or that failed):
+        // the API says so with a null, and asking anyway only logs a 404.
+        const noNames = !!assets && assets.pdf === null;
         const [annotated, original, timeline] = await Promise.all([
-          fetchBytes(jobId, "pdf").catch((err) => { console.error(err); return null; }),
+          noNames ? Promise.resolve(null) : fetchBytes(jobId, "pdf").catch((err) => { console.error(err); return null; }),
           originalIsPdf ? fetchBytes(jobId, "original").then((b) => (isPdf(b) ? b : null)).catch(() => null) : Promise.resolve(null),
           fetchSheetFile(jobId, "timeline").then((r) => (r.ok ? r.json() as Promise<Timeline> : null)).catch(() => null),
         ]);

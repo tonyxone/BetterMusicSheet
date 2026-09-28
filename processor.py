@@ -95,12 +95,23 @@ def generate(raw, directory, options):
     return count
 
 
-if __name__ == "__main__":
-    import sys
-    directory = Path(sys.argv[1])
+def main(directory):
+    """Run one job in `directory`; the exit status for worker.py. Anything
+    other than a final answer below propagates, and is retried as a crash."""
+    from run import NotMusic
     try:
         count = generate(directory / "source", directory, json.loads((directory / "options.json").read_text()))
         (directory / "result.json").write_text(json.dumps({"count": count}))
-    except InvalidSheet as exc:
+        return 0
+    except (InvalidSheet, NotMusic) as exc:
+        # A final answer the reader can act on - not a crash to retry. Without
+        # NotMusic here, "no music notation was detected" never reached them:
+        # the worker saw a crash, retried it three times, and showed its own
+        # generic message instead.
         (directory / "result.json").write_text(json.dumps({"error": str(exc), "permanent": True}))
-        sys.exit(2)
+        return 2
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main(Path(sys.argv[1])))

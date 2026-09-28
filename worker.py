@@ -118,7 +118,7 @@ def run_processor(job, directory, tick):
             if STOP.wait(1):
                 raise RuntimeError("Worker stopping; this sheet will be retried.")
             if time.monotonic() >= deadline:
-                raise TimeoutError("This sheet exceeded the processing time limit.")
+                raise TimeoutError(job_state.TOO_LONG)
             tick()
         result = directory / "result.json"
         if result.exists():
@@ -127,7 +127,8 @@ def run_processor(job, directory, tick):
                 from processor import InvalidSheet
                 raise InvalidSheet(data["error"])
         if process.returncode or not result.exists():
-            raise RuntimeError("Recognition failed. Retrying the sheet may help.")
+            # Shown to the reader only once every attempt has failed.
+            raise RuntimeError(job_state.UNREADABLE)
         return data["count"]
     finally:
         stop_process(process)
