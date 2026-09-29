@@ -59,8 +59,7 @@ def reconcile(sqs, queue_url, now):
                     # spinner. Matching queued_at loses the race to a worker
                     # that claims (or re-queues) it meanwhile.
                     job_state.fail(job, {"status": status, "queued_at": job.get("queued_at")},
-                                   "We couldn't start annotating this sheet. Please try uploading it again.",
-                                   stage="Processing failed")
+                                   job_state.NOT_STARTED, stage="Processing failed")
                 elif status == "queued":
                     # Repair notification loss and producer crashes. Duplicates
                     # are harmless because the worker uses a conditional claim.
@@ -85,7 +84,7 @@ def drain_dlq(sqs, url, now):
                 # A duplicate may exhaust its receive count while another copy
                 # succeeds. Only actual processing attempts determine failure.
                 if job["attempt_count"] >= 3:
-                    if not job_state.fail(job, expected, "Processing failed after three attempts."):
+                    if not job_state.fail(job, expected, job_state.UNREADABLE):
                         handled = False
                 else:
                     job_state.change(job_id, expected, next_check_at=now)

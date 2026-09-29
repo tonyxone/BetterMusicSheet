@@ -401,6 +401,17 @@ class UploadRequest(BaseModel):
     color: str = Field(default="#000000", pattern=r"^#[0-9a-fA-F]{6}$")
 
 
+def _check_free_sheet_limit(user_id):
+    """A free account keeps FREE_SHEET_LIMIT sheets; a failed one doesn't
+    count, so reading it again (retry_sheet) counts it once more."""
+    if get_entitlement(user_id)["tier"] != "premium":
+        kept = [job for job in db.list_annotation_jobs(user_id)
+                if job["status"] not in ("failed", "deleting", "deleted")]
+        if len(kept) >= FREE_SHEET_LIMIT:
+            raise HTTPException(403, "The free plan keeps 1 sheet at a time. Delete your current sheet to "
+                                     "upload another, or go Premium for unlimited sheets.")
+
+
 def reserve_upload(body, user_id):
     if Path(body.filename).suffix.lower() not in ALLOWED_EXTENSIONS:
         raise HTTPException(400, "Only PDF, JPG and PNG files are supported.")
@@ -412,12 +423,7 @@ def reserve_upload(body, user_id):
         raise HTTPException(409, "You already have a sheet processing. Wait for it to finish.")
     # One job in progress at a time (above, and atomically in job_state), so
     # two concurrent uploads can't both slip under the limit.
-    if get_entitlement(user_id)["tier"] != "premium":
-        kept = [job for job in db.list_annotation_jobs(user_id)
-                if job["status"] not in ("failed", "deleting", "deleted")]
-        if len(kept) >= FREE_SHEET_LIMIT:
-            raise HTTPException(403, "The free plan keeps 1 sheet at a time. Delete your current sheet to "
-                                     "upload another, or go Premium for unlimited sheets.")
+    _check_free_sheet_limit(user_id)
     try:
         return job_state.create(uuid.uuid4().hex, user_id, body.filename,
                                 body.model_dump(include={"style", "octave", "font_size", "dpi", "auto_retry", "color"}),
@@ -534,18 +540,64 @@ def _readable_job_or_404(job_id, user_id):
     return job
 
 
+def _original_ready(job):
+    """Whether the sheet as uploaded can be shown. Not only once it is done:
+    as soon as the upload finishes, while the note names are still being
+    worked out, and after that failed - a sheet is readable without them."""
+    return job["status"] == "done" or (
+        job.get("storage_version") == 2 and bool(job.get("input_version"))
+        and job["status"] in ("queued", "processing", "failed"))
+
+
+def _with_readiness(job, sheet_name):
+    return {**job, "sheet_name": sheet_name,
+            "original_ready": _original_ready(job), "can_retry": job_state.can_retry(job)}
+
+
 @app.get("/api/sheets")
 def job_history(user_id: str = Depends(get_current_user_id)):
     jobs = [j for j in db.list_annotation_jobs(user_id) if j["status"] not in ("deleting", "deleted")]
     sheets = {s["music_sheet_id"]: s["sheet_name"] for s in db.list_music_sheets(user_id)}
-    return [{**job, "sheet_name": sheets.get(job["music_sheet_id"])} for job in jobs]
+    return [_with_readiness(job, sheets.get(job["music_sheet_id"])) for job in jobs]
 
 
 @app.get("/api/sheets/{job_id}")
 def job_status(job_id: str, user_id: str = Depends(get_current_user_id)):
     job = _readable_job_or_404(job_id, user_id)
     sheet = db.get_music_sheet(job["music_sheet_id"])
-    return {**job, "sheet_name": sheet["sheet_name"] if sheet else None}
+    return _with_readiness(job, sheet["sheet_name"] if sheet else None)
+
+
+@app.post("/api/sheets/{job_id}/retry", status_code=202)
+def retry_sheet(job_id: str, user_id: str = Depends(get_signed_in_user_id)):
+    """Read a failed sheet again, from the file it kept - after a fix, the
+    reader tries again from the sheet itself instead of uploading anew."""
+    if user_id is None:
+        raise HTTPException(401, "Sign in to try this sheet again.")
+    job = _owned_job_or_404(job_id, user_id)
+    if job["status"] != "failed":
+        raise HTTPException(409, "This sheet isn't waiting to be tried again.")
+    if not job_state.can_retry(job):
+        raise HTTPException(409, "This upload didn't finish, so there is nothing to read again. "
+                                 "Please upload the file again.")
+    _check_free_sheet_limit(user_id)
+    try:
+        if not job_state.retry(job):
+            raise HTTPException(409, "This sheet isn't waiting to be tried again.")
+    except job_state.Busy as exc:
+        raise HTTPException(409, "You already have a sheet processing. Wait for it to finish.") from exc
+    if not SERVERLESS:
+        enqueue_local(job_id)
+    elif storage.is_own_job(job):
+        # Sooner than the controller would (it sends queued jobs within a
+        # minute anyway), so a failure here only costs that minute.
+        try:
+            import boto3
+            boto3.client("sqs").send_message(QueueUrl=os.environ["JOB_QUEUE_URL"],
+                                             MessageBody=json.dumps({"job_id": job_id}))
+        except Exception:
+            traceback.print_exc()
+    return job_status(job_id, user_id)
 
 
 @app.delete("/api/sheets/{job_id}", status_code=204)
@@ -657,14 +709,22 @@ def with_sheet_name(job):
 @app.get("/api/sheets/{job_id}/assets")
 def job_assets(job_id: str, user_id: str = Depends(get_current_user_id)):
     job = with_sheet_name(_readable_job_or_404(job_id, user_id))
-    if job["status"] != "done":
+    if not _original_ready(job):
         raise HTTPException(409, "The sheet is not ready yet.")
+    original_type = storage.upload_media_type(job["sheet_name"])
+    if job["status"] != "done":
+        # Names still being worked out, or they failed: the upload alone,
+        # which the reader can already view, mark up and download.
+        return JSONResponse({"direct": IS_PRODUCTION, "pdf": None, "timeline": None, "labels": None,
+                             "original": storage.presign_artifact(job, "input") if IS_PRODUCTION
+                             else f"/api/sheets/{job_id}/original",
+                             "original_type": original_type},
+                            headers={"Cache-Control": "no-store"})
     # "original" is the file as uploaded, for the viewer's original/annotated
     # toggle. It can be absent - a sheet whose upload was cleaned up, or one
     # stored before this was served - so callers treat a null as "no toggle"
     # rather than an error. original_type says whether it is a PDF, which the
     # Play page needs: it renders through pdf.js and cannot show a photo.
-    original_type = storage.upload_media_type(job["sheet_name"])
     # "labels" is the placed note names as data (label_export.py), which the
     # viewer draws itself so they can be moved and retyped. Null for sheets
     # annotated before it existed; the viewer then reads them out of the PDF.
@@ -747,8 +807,8 @@ def job_original(job_id: str, user_id: str = Depends(get_current_user_id)):
     which is the thing the site made. 404 rather than 500 when the upload is
     gone, since a sheet can outlive its input and the toggle simply hides."""
     job = with_sheet_name(_readable_job_or_404(job_id, user_id))
-    if job["status"] != "done":
-        raise HTTPException(409, f"job is '{job['status']}', not done yet")
+    if not _original_ready(job):
+        raise HTTPException(409, f"job is '{job['status']}', not ready yet")
     if SERVERLESS:
         raise HTTPException(409, "Please refresh the page to load the original.")
     if job.get("storage_version") == 2:
@@ -856,7 +916,9 @@ def put_edits(job_id: str, body: EditsRequest, user_id: str = Depends(get_curren
         # The shared fallback identity (no token, no guest id) belongs to
         # nobody in particular; saving under it would pool strangers' edits.
         raise HTTPException(403, "Reload the page to save your changes.")
-    if job["status"] != "done":
+    # Drawings and notes are made on the upload itself, so they can be saved
+    # while the names are still being worked out, and after that failed.
+    if not _original_ready(job):
         raise HTTPException(409, "The sheet is not ready yet.")
     if not isinstance(body.doc.get("version"), int):
         raise HTTPException(422, "Edits need a version number.")

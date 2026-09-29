@@ -18,22 +18,27 @@ export function SheetToggle({
    * upload no longer in storage. Disables the control and explains itself
    * rather than vanishing, so the option doesn't look like it never existed. */
   unavailable,
+  /** Why the note names can't be shown yet - still being added, or that
+   * failed. Disables that half the same way. */
+  annotatedUnavailable,
   dark = false,
 }: {
   value: SheetVariant;
   onChange: (next: SheetVariant) => void;
   unavailable?: string | null;
+  annotatedUnavailable?: string | null;
   dark?: boolean;
 }) {
-  const options: { id: SheetVariant; label: string; title: string }[] = [
-    { id: "annotated", label: "Annotated", title: "Show the sheet with note names" },
-    { id: "original", label: "Original", title: unavailable ?? "Show the sheet as you uploaded it" },
+  const options: { id: SheetVariant; label: string; title: string; blocked: boolean }[] = [
+    { id: "annotated", label: "Annotated", title: annotatedUnavailable ?? "Show the sheet with note names",
+      blocked: !!annotatedUnavailable },
+    { id: "original", label: "Original", title: unavailable ?? "Show the sheet as you uploaded it", blocked: !!unavailable },
   ];
 
   return (
     <div className={`sheet-toggle${dark ? " dark" : ""}`} role="group" aria-label="Sheet version">
       {options.map((option) => {
-        const blocked = option.id === "original" && !!unavailable;
+        const blocked = option.blocked;
         return (
           <button
             key={option.id}

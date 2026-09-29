@@ -31,6 +31,7 @@ import { AnnotationLayer } from "../sheet-viewer/annotation-layer";
 import { tempoClock, tempoControl } from "./tempo";
 import { GRACE_SECONDS, SynthEngine, INSTRUMENTS, isInstrumentId, type InstrumentId } from "./synth";
 import { Playback } from "./playback";
+import { PracticeGate } from "./practice-gate";
 
 // ssr:false is required, not just an optimization: both touch WebGL/Worker
 // APIs that don't exist during the static export's prerender pass.
@@ -235,8 +236,10 @@ export function PlayView() {
   const { subscription, loading } = useSubscription();
   if (loading) return <div className="wrap"><div className="page-title-row"><BackButton /><p style={{ color: "var(--ink-soft)", margin: 0 }}>Loading subscription…</p></div></div>;
   const isPremium = subscription?.tier === "premium";
+  // The gate shows the upload while its note names are still being added,
+  // and swaps the player in once they're ready.
   return jobId
-    ? <Player jobId={jobId} isPremium={isPremium} />
+    ? <PracticeGate jobId={jobId}><Player jobId={jobId} isPremium={isPremium} /></PracticeGate>
     : <SheetPicker onPick={(id) => router.push(`/play?job=${id}`)} />;
 }
 

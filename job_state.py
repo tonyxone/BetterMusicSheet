@@ -20,6 +20,16 @@ class LeaseLost(Exception):
     pass
 
 
+# What a reader sees when recognition fails for a reason they can't fix
+# themselves. Honest about it: every failure emails the operator (alerts.py),
+# and a failed sheet keeps its upload, so it can be read again (retry below)
+# once the cause is fixed.
+UNREADABLE = ("We couldn't read the music on this sheet. We've been notified and will "
+              "look into it - you can try again later.")
+TOO_LONG = "This sheet took too long to read. Uploading fewer pages at a time usually helps."
+NOT_STARTED = "We couldn't start reading this sheet. Please try again in a few minutes."
+
+
 def _table():
     return db._dynamodb.Table(os.environ["JOB_CONTROL_TABLE"])
 
@@ -142,6 +152,56 @@ def ready(job_id, version):
     return db.get_annotation_job(job_id)
 
 
+def can_retry(job):
+    """Whether a failed sheet can be read again: its upload finished, so the
+    file is still there. One that failed while uploading has nothing to read."""
+    return job["status"] == "failed" and job.get("storage_version") == 2 and bool(job.get("input_version"))
+
+
+def retry(job):
+    """Queue a failed sheet to be read again, from the upload it kept.
+
+    Takes the user's upload slot, exactly as a new upload does: Busy if
+    another of their sheets is uploading or processing. False if the job
+    stopped being failed meanwhile (a second click, or a delete). The
+    controller sends it to the workers within a minute (next_check_at), and
+    the caller may send it sooner.
+    """
+    now = int(time.time())
+    fields = {"status": "queued", "attempt_count": 0, "error": None, "stage": "Waiting for a recognition worker",
+              "queued_at": now, "next_check_at": now, "updated_at": now}
+    if not IS_PRODUCTION:
+        with db._lock:
+            if any(j["user_id"] == job["user_id"] and j["status"] in ACTIVE for j in db._annotation_jobs.values()):
+                raise Busy("You already have a sheet uploading or processing.")
+            row = db._annotation_jobs.get(job["job_id"])
+            if row is None or row["status"] != "failed":
+                return False
+            row.update(fields)
+            return True
+    import boto3
+    names = {f"#f{i}": key for i, key in enumerate(fields)}
+    values = {f":f{i}": value for i, value in enumerate(fields.values())}
+    names["#s"], values[":failed"] = "status", "failed"
+    try:
+        boto3.client("dynamodb").transact_write_items(TransactItems=[
+            {"Put": {"TableName": _table().name, "Item": _serialized({"user_id": job["user_id"], "job_id": job["job_id"]}),
+                     "ConditionExpression": "attribute_not_exists(user_id)"}},
+            {"Update": {"TableName": db._annotation_job_table.name, "Key": _serialized({"job_id": job["job_id"]}),
+                        "UpdateExpression": "SET " + ", ".join(f"#f{i} = :f{i}" for i in range(len(fields))),
+                        "ConditionExpression": "#s = :failed",
+                        "ExpressionAttributeNames": names, "ExpressionAttributeValues": _serialized(values)}},
+        ])
+    except db._annotation_job_table.meta.client.exceptions.TransactionCanceledException as exc:
+        reasons = [r.get("Code") for r in exc.response.get("CancellationReasons", [])]
+        if reasons and reasons[0] == "ConditionalCheckFailed":
+            raise Busy("You already have a sheet uploading or processing.") from exc
+        if len(reasons) > 1 and reasons[1] == "ConditionalCheckFailed":
+            return False
+        raise
+    return True
+
+
 def claim(job_id, token, now=None):
     now = int(time.time()) if now is None else now
     job = db.get_annotation_job(job_id)
@@ -154,7 +214,7 @@ def claim(job_id, token, now=None):
         expected["lease_owner"] = job["lease_owner"]
         expected["lease_until"] = job["lease_until"]
     if job["attempt_count"] >= MAX_ATTEMPTS:
-        fail(job, expected, "Processing failed after three attempts.")
+        fail(job, expected, UNREADABLE)
         return None
     if change(job_id, expected, status="processing", lease_owner=token,
               lease_until=now + LEASE_SECONDS, heartbeat_at=now,

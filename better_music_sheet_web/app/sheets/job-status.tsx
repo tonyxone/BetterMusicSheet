@@ -9,7 +9,7 @@ import { fetchSheetAssets, fetchSheetFile } from "@/lib/sheet-files";
 import { SheetToggle, type SheetVariant } from "../sheet-toggle";
 import { KeyboardIcon } from "../keyboard-icon";
 import { BackButton } from "../back-button";
-import { DEMO_JOB_ID, type AnnotationJob } from "@/lib/api";
+import { DEMO_JOB_ID, isActive, type AnnotationJob } from "@/lib/api";
 import { useSubscription } from "@/lib/subscription";
 import type { CustomizedExport } from "../sheet-viewer/sheet-editor";
 
@@ -37,9 +37,17 @@ export function JobStatus() {
   const [originalMissing, setOriginalMissing] = useState<string | null>(null);
   // Set by the editor once the sheet has loaded: builds the Customized PDF.
   const customizedRef = useRef<CustomizedExport | null>(null);
+  // Bumped to start checking again once a retry puts a failed sheet back in
+  // the queue - the check stops by itself when a sheet finishes or fails.
+  const [pollRound, setPollRound] = useState(0);
+
+  const done = job?.status === "done";
+  // The upload can be read long before the names are ready, and still can
+  // after adding them failed.
+  const viewable = done || !!job?.original_ready;
 
   useEffect(() => {
-    if (!jobId) return;
+    if (!jobId || !viewable) return;
     let cancelled = false;
     void fetchSheetAssets(jobId)
       .then((assets) => {
@@ -52,7 +60,7 @@ export function JobStatus() {
       })
       .catch(() => { /* Leave it enabled - the frame reports its own failures. */ });
     return () => { cancelled = true; };
-  }, [jobId]);
+  }, [jobId, viewable]);
 
   useEffect(() => {
     if (!jobId) return;
@@ -70,9 +78,7 @@ export function JobStatus() {
         const data: AnnotationJob = await res.json();
         if (cancelled) return;
         setJob(data);
-        if (data.status === "uploading" || data.status === "queued" || data.status === "processing") {
-          timer.current = setTimeout(poll, POLL_INTERVAL_MS);
-        }
+        if (isActive(data)) timer.current = setTimeout(poll, POLL_INTERVAL_MS);
       } catch (err) {
         console.error("Checking the sheet's status failed:", err);
         if (!cancelled) setError("Couldn't check this sheet's status. Reloading the page usually fixes it.");
@@ -84,13 +90,14 @@ export function JobStatus() {
       cancelled = true;
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [jobId]);
+  }, [jobId, pollRound]);
 
   if (!jobId) return <div className="wrap"><div className="page-title-row"><BackButton /><p style={{ color: "var(--danger)", margin: 0 }}>No sheet specified.</p></div></div>;
   if (error) return <div className="wrap"><div className="page-title-row"><BackButton /><p style={{ color: "var(--danger)", margin: 0 }}>{error}</p></div></div>;
   if (!job) return <div className="wrap"><div className="page-title-row"><BackButton /><p style={{ color: "var(--ink-soft)", margin: 0 }}>Loading…</p></div></div>;
 
-  if (job.status === "failed") {
+  // Failed before the upload even finished: there is nothing to show.
+  if (job.status === "failed" && !viewable) {
     return (
       <div className="wrap" style={{ textAlign: "center" }}>
         <div className="page-title-row" style={{ justifyContent: "center" }}>
@@ -108,7 +115,9 @@ export function JobStatus() {
     );
   }
 
-  if (job.status === "uploading" || job.status === "queued" || job.status === "processing") {
+  // Still uploading - or an older backend, which can't show a sheet before
+  // its names are ready.
+  if (!viewable) {
     return (
       <div className="wrap" style={{ maxWidth: 480, padding: "100px 32px", textAlign: "center" }}>
         <div className="note-bounce">
@@ -131,11 +140,15 @@ export function JobStatus() {
     );
   }
 
-  // done
+  // Readable: done, or the names still coming (or failed) over the upload.
   // The bundled demo plays in full for everyone (see server.py's read
   // carve-out and play-view.tsx's exemption for this same job id), so its
   // practice link skips the subscription gate real sheets go through.
   const practiceUnlocked = jobId === DEMO_JOB_ID || subscription?.tier === "premium";
+  // Until the names exist there is only the upload to show.
+  const shown: SheetVariant = done ? variant : "original";
+  const namesUnavailable = done ? null
+    : job.status === "failed" ? "Note names couldn't be added to this sheet" : "Note names are still being added";
   return (
     <div className="wrap wide">
       <div className="result-head">
@@ -144,7 +157,8 @@ export function JobStatus() {
           <h2 className="serif">{job.sheet_name}</h2>
         </div>
         <div className="result-actions">
-          <SheetToggle value={variant} onChange={setVariant} unavailable={originalMissing} />
+          <SheetToggle value={shown} onChange={setVariant} unavailable={originalMissing}
+            annotatedUnavailable={namesUnavailable} />
           <Link
             href={practiceUnlocked ? `/play?job=${jobId}` : "/subscription/upgrade"}
             className="icon-link"
@@ -154,22 +168,84 @@ export function JobStatus() {
             <KeyboardIcon size={44} />
           </Link>
           <DownloadMenu jobId={jobId} sheetName={job.sheet_name} originalMissing={!!originalMissing}
-            customizedRef={customizedRef} variant={variant} />
+            customizedRef={customizedRef} variant={shown} annotatedReady={done} />
         </div>
       </div>
+      {!done && (
+        <NamesBanner job={job} jobId={jobId} cancellingRef={cancellingRef}
+          onRetried={(next) => { setJob(next); setPollRound((round) => round + 1); }} />
+      )}
       <div className="preview-card">
-        <PreviewPanel jobId={jobId} variant={variant} customizedRef={customizedRef} />
+        {/* Keyed on readiness: when the names arrive the editor loads again
+            and shows them, without a page reload. */}
+        <PreviewPanel key={done ? "names" : "upload"} jobId={jobId} variant={shown} customizedRef={customizedRef} />
       </div>
+    </div>
+  );
+}
+
+/** Where the note names are while the sheet itself can already be read:
+ * still being added, or failed - with a way to try again. */
+function NamesBanner({ job, jobId, cancellingRef, onRetried }: {
+  job: AnnotationJob;
+  jobId: string;
+  cancellingRef: MutableRefObject<boolean>;
+  onRetried: (job: AnnotationJob) => void;
+}) {
+  const [retrying, setRetrying] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function retry() {
+    setRetrying(true);
+    setError(null);
+    try {
+      const res = await clientApiFetch(`/api/sheets/${jobId}/retry`, { method: "POST" });
+      const body = await res.json().catch(() => null) as (AnnotationJob & { detail?: string }) | null;
+      if (!res.ok || !body) throw new Error(body?.detail || `Couldn't start again (${res.status}).`);
+      onRetried(body);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't start again.");
+    } finally {
+      setRetrying(false);
+    }
+  }
+
+  if (job.status === "failed") {
+    return (
+      <div className="names-banner failed" role="status">
+        <div className="names-banner-text">
+          <strong>Note names couldn&apos;t be added.</strong> {job.error}
+          <div className="names-banner-sub">You can still read, mark up and download the sheet below.</div>
+          {error && <div className="names-banner-error">{error}</div>}
+        </div>
+        {job.can_retry && (
+          <button type="button" className="btn-pill" onClick={() => void retry()} disabled={retrying}>
+            {retrying ? "Starting…" : "Try again"}
+          </button>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="names-banner" role="status">
+      <div className="stage-spinner" />
+      <div className="names-banner-text">
+        <strong>Adding note names…</strong> {job.stage}
+        <div className="names-banner-sub">Read and mark up the sheet meanwhile - the names appear here when they&apos;re ready.</div>
+      </div>
+      <CancelAnnotation jobId={jobId} sheetName={job.sheet_name} cancellingRef={cancellingRef} inline />
     </div>
   );
 }
 
 // Cancelling deletes the job outright - the worker notices at its next
 // heartbeat and stops - so nothing is left behind in the library.
-function CancelAnnotation({ jobId, sheetName, cancellingRef }: {
+function CancelAnnotation({ jobId, sheetName, cancellingRef, inline = false }: {
   jobId: string;
   sheetName?: string | null;
   cancellingRef: MutableRefObject<boolean>;
+  /** In the names banner, beside its text, rather than under a spinner. */
+  inline?: boolean;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -203,7 +279,7 @@ function CancelAnnotation({ jobId, sheetName, cancellingRef }: {
 
   return (
     <>
-      <button type="button" className="btn-pill ghost" style={{ marginTop: 24 }} onClick={() => setOpen(true)}>
+      <button type="button" className="btn-pill ghost" style={inline ? undefined : { marginTop: 24 }} onClick={() => setOpen(true)}>
         Cancel
       </button>
       {open && (
@@ -253,13 +329,15 @@ function saveBlob(blob: Blob, filename: string) {
 // A plain <a href> can't be pointed at a fetch() call, and we want the
 // browser's "save as" filename to be the real sheet name, not the job id -
 // so fetch the bytes ourselves and hand the browser a blob URL to save.
-function DownloadMenu({ jobId, sheetName, originalMissing, customizedRef, variant }: {
+function DownloadMenu({ jobId, sheetName, originalMissing, customizedRef, variant, annotatedReady }: {
   jobId: string;
   sheetName?: string;
   originalMissing: boolean;
   customizedRef: MutableRefObject<CustomizedExport | null>;
   /** Customized follows the preview: with the note names or without. */
   variant: SheetVariant;
+  /** Whether the note names exist yet. */
+  annotatedReady: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<DownloadKind | null>(null);
@@ -316,7 +394,10 @@ function DownloadMenu({ jobId, sheetName, originalMissing, customizedRef, varian
         ? "The original with your drawings and notes, as the preview shows it"
         : "With your moved and retyped names, drawings and notes",
     },
-    { kind: "annotated", label: "Annotated", detail: "Note names as generated" },
+    {
+      kind: "annotated", label: "Annotated", disabled: !annotatedReady,
+      detail: annotatedReady ? "Note names as generated" : "Available once the note names are added",
+    },
     {
       kind: "original", label: "Original", disabled: originalMissing,
       detail: originalMissing ? "The uploaded file isn't stored for this sheet" : "The file as you uploaded it",
