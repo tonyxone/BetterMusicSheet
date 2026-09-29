@@ -16,7 +16,7 @@ export default function SupportPage() {
         <BackButton />
         <h1 className="serif">Support</h1>
       </div>
-      <div className="sub">Last updated 27 September 2026</div>
+      <div className="sub">Last updated 28 September 2026</div>
 
       <h2>Contact us</h2>
       <p>
@@ -49,15 +49,6 @@ export default function SupportPage() {
         checks your Apple Account for purchases and adds them to the account
         you are signed in to. A subscription belongs to the account that bought
         it, so sign in to that account first.
-      </p>
-
-      <h2>Refunds</h2>
-      <p>
-        Apple handles refunds for purchases made in the iOS app: request one at{" "}
-        <a href="https://reportaproblem.apple.com" target="_blank" rel="noreferrer noopener">
-          reportaproblem.apple.com
-        </a>
-        . For a website subscription, email us.
       </p>
 
       <h2>Getting the best results</h2>

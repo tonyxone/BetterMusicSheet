@@ -13,7 +13,7 @@ export default function TermsPage() {
         <BackButton />
         <h1 className="serif">Terms of use</h1>
       </div>
-      <div className="sub">Last updated 12 September 2026</div>
+      <div className="sub">Last updated 28 September 2026</div>
 
       <p>
         By using BetterMusicSheet you accept these terms. They are short on
@@ -41,7 +41,7 @@ export default function TermsPage() {
         Please do not upload material you have no right to, and do not use this
         site to redistribute copyrighted music. If you believe something here
         infringes your copyright, email{" "}
-        <a href="mailto:copyright@bettermusicsheet.com">copyright@bettermusicsheet.com</a>{" "}
+        <a href="mailto:bettermusicsheet@gmail.com">bettermusicsheet@gmail.com</a>{" "}
         with enough detail to identify the work and it will be removed.
       </p>
 
