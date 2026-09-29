@@ -6,16 +6,19 @@ import { clientApiFetch } from "@/lib/client-api";
 import { KeyboardIcon } from "./keyboard-icon";
 import { BackButton } from "./back-button";
 import { DemoSampleCard } from "./demo-sample-card";
-import type { AnnotationJob } from "@/lib/api";
+import { isActive, type AnnotationJob } from "@/lib/api";
 import { useSubscription } from "@/lib/subscription";
 import { paginateLibrary } from "@/lib/library-pagination";
 
+// A sheet can be opened as soon as its upload finishes; these describe its
+// note names, which may still be coming - or have failed, over a sheet that
+// is otherwise perfectly readable.
 const STATUS_LABEL: Record<AnnotationJob["status"], string> = {
   uploading: "Uploading",
   done: "Annotated",
-  failed: "Failed",
-  processing: "Processing",
-  queued: "Queued",
+  failed: "No names",
+  processing: "Adding names",
+  queued: "Adding names",
 };
 
 // Rendered at two URLs: as the landing page at "/" for a signed-in visitor
@@ -81,7 +84,7 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
         {showBack && <BackButton />}
         <h1 className="serif">Library</h1>
       </div>
-      <div className="sub" style={{ marginBottom: 30 }}>Sheets you&apos;ve annotated.</div>
+      <div className="sub" style={{ marginBottom: 30 }}>Sheets you&apos;ve uploaded.</div>
 
       {jobs === null ? (
         <p style={{ color: "var(--ink-soft)" }}>Loading…</p>
@@ -103,8 +106,9 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
                   <span className={`history-badge ${job.status}`}>{STATUS_LABEL[job.status]}</span>
                 </Link>
                 <div className="history-actions">
-                  {/* Only a finished sheet has a timeline to play back. */}
-                  {job.status === "done" && (
+                  {/* Practice plays a finished sheet; before that it shows the
+                      upload and picks the names up once they're ready. */}
+                  {(job.status === "done" || job.original_ready) && (
                     <Link
                       href={subscription?.tier === "premium" ? `/play?job=${job.job_id}` : "/subscription/upgrade"}
                       className="history-action history-play"
@@ -118,9 +122,9 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
                     type="button"
                     className="history-action history-delete"
                     onClick={() => openDelete(job)}
-                    disabled={job.status === "uploading" || job.status === "queued" || job.status === "processing"}
+                    disabled={isActive(job)}
                     title={
-                      job.status === "uploading" || job.status === "queued" || job.status === "processing"
+                      isActive(job)
                         ? "Wait for processing to finish before deleting"
                         : `Delete ${job.sheet_name || "sheet"}`
                     }

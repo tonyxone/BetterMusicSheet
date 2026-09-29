@@ -211,6 +211,20 @@ details.options[open] summary::before { content: "▾ "; }
 }
 .stage-text { font-size: 15px; color: var(--ink); }
 
+/* Above a sheet that can be read while its note names are still coming, or
+   after adding them failed (app/sheets/job-status.tsx, app/play/practice-gate.tsx). */
+.names-banner {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; padding: 14px 18px;
+  background: var(--card); border: 1px solid var(--paper-deep); border-radius: 14px;
+}
+.names-banner.failed { background: var(--danger-bg); border-color: transparent; }
+.names-banner-text { flex: 1 1 260px; font-size: 14.5px; line-height: 1.5; color: var(--ink); }
+.names-banner-sub { font-size: 13px; color: var(--ink-soft); margin-top: 2px; }
+.names-banner-error { font-size: 13px; color: var(--danger); margin-top: 6px; }
+.names-banner .btn-pill { flex: none; text-decoration: none; }
+.practice-wait-sheet { padding: 12px; }
+.history-badge.uploading { background: var(--paper-deep); color: var(--ink-soft); }
+
 /* ---- Result view ---- */
 .result-head { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 16px; margin-bottom: 20px; }
 .result-head h2 { font-size: 28px; font-weight: 600; margin: 0; word-break: break-word; }

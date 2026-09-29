@@ -25,7 +25,18 @@ export type AnnotationJob = {
   color?: string;
   created_at: number;
   updated_at: number;
+  /** The upload can be shown - true as soon as it finishes, while the note
+   * names are still being added and after that failed. Absent from older
+   * backends, which only ever show a finished sheet. */
+  original_ready?: boolean;
+  /** A failed sheet whose upload is kept, so it can be read again. */
+  can_retry?: boolean;
 };
+
+/** Still being uploaded or read - worth checking back on. */
+export function isActive(job: Pick<AnnotationJob, "status">) {
+  return job.status === "uploading" || job.status === "queued" || job.status === "processing";
+}
 
 export type MusicSheet = {
   music_sheet_id: string;

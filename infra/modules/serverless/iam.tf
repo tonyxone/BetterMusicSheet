@@ -78,7 +78,10 @@ resource "aws_iam_role_policy" "api" {
     local.list_files_statement, local.cognito_delete_statement, local.alerts_statement,
     { Effect = "Allow", Action = ["s3:GetObject", "s3:DeleteObject"], Resource = "arn:aws:s3:::${var.legacy_bucket}/*" },
     { Effect = "Allow", Action = ["s3:ListBucket"], Resource = "arn:aws:s3:::${var.legacy_bucket}" },
-    { Effect = "Allow", Action = ["ssm:GetParameter"], Resource = var.secret_parameter }
+    { Effect = "Allow", Action = ["ssm:GetParameter"], Resource = var.secret_parameter },
+    # Trying a failed sheet again sends it straight to the workers (server.py
+    # retry_sheet); the controller would within a minute anyway.
+    { Effect = "Allow", Action = ["sqs:SendMessage"], Resource = aws_sqs_queue.jobs.arn }
   ], local.admin_statements, local.other_files_statements) })
 }
 resource "aws_iam_role" "controller" {

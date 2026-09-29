@@ -125,6 +125,38 @@ class ServerlessTests(unittest.TestCase):
         db.remove_master_user(USER)
         self.assertFalse(db.is_master_user(USER))
 
+    def test_a_failed_sheet_is_retried_through_dynamodb_and_sqs(self):
+        self.upload()
+        job_state.fail(db.get_annotation_job("a"), {"status": "queued"}, job_state.UNREADABLE)
+        # The failure released the upload slot, so the reader could upload
+        # something else meanwhile - which then holds the slot a retry needs.
+        other = job_state.create("b", USER, "Other.pdf", OPTIONS, 1)
+        with self.assertRaises(job_state.Busy):
+            job_state.retry(db.get_annotation_job("a"))
+        job_state.fail(other, {"status": "uploading"}, "Upload expired.")
+
+        response = self.client.post("/api/sheets/a/retry", headers=self.signed_in())
+        self.assertEqual(response.status_code, 202)
+        job = db.get_annotation_job("a")
+        self.assertEqual((job["status"], job["attempt_count"], job["error"]), ("queued", 0, None))
+        lock = self.ddb.get_item(TableName="test-control", Key={"user_id": {"S": USER}})["Item"]
+        self.assertEqual(lock["job_id"], {"S": "a"})
+        message = self.sqs.receive_message(QueueUrl=self.queue, MaxNumberOfMessages=10)["Messages"]
+        self.assertIn({"job_id": "a"}, [json.loads(m["Body"]) for m in message])
+        # No longer failed: a second click is refused.
+        self.assertEqual(self.client.post("/api/sheets/a/retry", headers=self.signed_in()).status_code, 409)
+        # And it really runs again.
+        self.assertTrue(worker.process_job("a", runner=fake_runner))
+        self.assertEqual(db.get_annotation_job("a")["status"], "done")
+
+    def test_a_failed_sheet_serves_its_original_from_s3(self):
+        self.upload()
+        job_state.fail(db.get_annotation_job("a"), {"status": "queued"}, job_state.UNREADABLE)
+        assets = self.client.get("/api/sheets/a/assets", headers=self.headers).json()
+        self.assertTrue(assets["direct"])
+        self.assertIn("new-files", assets["original"])
+        self.assertIsNone(assets["pdf"])
+
     def test_subscription_store_round_trips_through_dynamodb(self):
         db.upsert_subscription(USER, "trialing", "monthly", "apple", 100, 200, True,
                                subscription_id="original_123")
@@ -342,7 +374,7 @@ class ServerlessTests(unittest.TestCase):
         controller.reconcile(self.sqs, self.queue, job["queued_at"] + config.QUEUE_SECONDS + 299)
         failed = db.get_annotation_job("a")
         self.assertEqual(failed["status"], "failed")
-        self.assertIn("try uploading it again", failed["error"])
+        self.assertEqual(failed["error"], job_state.NOT_STARTED)
         self.assertEqual(self.client.get("/api/sheets/a", headers=self.headers).json()["status"], "failed")
         job_state.create("b", USER, "Next.pdf", OPTIONS, 1)
 
