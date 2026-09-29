@@ -19,7 +19,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { url: `${SITE_URL}/`, lastModified: updated, priority: 1 },
     { url: `${SITE_URL}/upload/`, lastModified: updated, priority: 0.8 },
     { url: `${SITE_URL}/about/`, lastModified: updated, priority: 0.6 },
-    { url: `${SITE_URL}/privacy/`, lastModified: updated, priority: 0.3 },
+    { url: `${SITE_URL}/privacy/`, lastModified: new Date("2026-09-28"), priority: 0.3 },
     { url: `${SITE_URL}/terms/`, lastModified: new Date("2026-09-28"), priority: 0.3 },
     { url: `${SITE_URL}/support/`, lastModified: new Date("2026-09-28"), priority: 0.4 },
   ];
