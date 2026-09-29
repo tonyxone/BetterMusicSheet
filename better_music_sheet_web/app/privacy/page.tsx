@@ -7,9 +7,8 @@ export const metadata: Metadata = {
   description: "What BetterMusicSheet collects, why, and how to get rid of it.",
 };
 
-// Plain words for the people using the site, not a description of how it is
-// built. Still complete: the App Store listing links here, so it has to
-// cover what is collected, the ads and analytics, payments and deletion.
+// Plain words for the people using the website, not a description of how it
+// is built - and about the website only (owner decision).
 export default function PrivacyPage() {
   return (
     <div className="wrap medium legal">
@@ -38,34 +37,21 @@ export default function PrivacyPage() {
         </li>
         <li>
           <strong>Your sheets.</strong> The files you upload, the annotated
-          copies and playback made from them, and your edits. In the iOS app,
-          the camera and your photos are only used when you choose to add a
-          sheet, and only the photo you pick is uploaded.
+          copies and playback made from them, and your edits.
         </li>
         <li>
-          <strong>Your subscription.</strong> Apple handles payments in the iOS
-          app and Stripe on the website. We only keep your plan and its dates,
-          never your card details.
+          <strong>Your subscription.</strong> Stripe handles payments. We only
+          keep your plan and its dates, never your card details.
         </li>
       </ul>
       <p>
-        Your data is kept on servers in the United States. The iOS app also keeps
-        your sign-in and copies of your sheets on your device.
+        Your data is kept on servers in the United States.
       </p>
 
-      <h2>Analytics and ads</h2>
+      <h2>Analytics</h2>
       <p>
-        The website uses Google Analytics to see how pages are used. It never
-        receives your sheets.
-      </p>
-      <p>
-        The free plan in the iOS app shows ads from Google. They aren&apos;t
-        personalized and the app doesn&apos;t ask to track you, but Google may
-        still collect things like your IP address, device information and how
-        you interact with ads, to show and measure them. Your sheets are never
-        shared with Google. Premium has no ads, and neither does the website.
-        You can change your ad privacy choices from the Account screen in the
-        app. Google handles this data under{" "}
+        We use Google Analytics to see how pages are used. It never receives
+        your sheets, and there are no ads. Google handles this data under{" "}
         <a href="https://policies.google.com/privacy" target="_blank" rel="noreferrer noopener">
           Google&apos;s privacy policy
         </a>
@@ -81,10 +67,10 @@ export default function PrivacyPage() {
       <h2>Keeping and removing your data</h2>
       <p>
         Your sheets are kept until you delete them, which you can do from your{" "}
-        <Link href="/history">Library</Link>. You can delete your account from the
-        Account screen in the iOS app; delete your sheets first if you want them
-        gone too. Deleting your account doesn&apos;t cancel an Apple subscription;
-        cancel it in your iPhone or iPad Settings.
+        <Link href="/history">Library</Link>. To delete your account, choose Delete
+        account from the menu under your name at the top of the page. Delete your
+        sheets first if you want them gone too, and cancel any subscription
+        first: deleting your account doesn&apos;t cancel it.
       </p>
       <p>
         To ask what we hold about you, or to have anything removed, email{" "}

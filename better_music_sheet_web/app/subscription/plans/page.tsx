@@ -13,7 +13,7 @@ export default function PlansPage() {
       <div className="subscription-hero">
         <p className="subscription-kicker">Premium</p>
         <h1 className="serif">Go Premium</h1>
-        <p>Unlock full practice mode on web and iOS, with no ads, synced across your devices.</p>
+        <p>Unlock full practice mode and keep as many sheets as you like, on all your devices.</p>
       </div>
       <div className="subscription-plans">
         <article className="subscription-card">
@@ -34,8 +34,8 @@ export default function PlansPage() {
       <div className="text-left max-w-md mx-auto mt-10">
         <h2 className="serif" style={{ fontSize: "1.1rem", margin: "0 0 12px" }}>What you get</h2>
         <ul className="landing-list">
-          <li>Full practice mode on web and iOS — every note lit up as you play</li>
-          <li>An ad-free experience across the site</li>
+          <li>Full practice mode — every note lit up as you play</li>
+          <li>Keep as many sheets as you like</li>
           <li>Access on any device, synced to your account</li>
           <li>Cancel anytime, no long-term commitment</li>
         </ul>
