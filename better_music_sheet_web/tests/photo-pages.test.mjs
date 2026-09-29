@@ -54,12 +54,18 @@ test('unsupported files and too many pages are refused', () => {
   assert.match(api.addFiles(many, [photo('extra.jpg')]).error, /at most 50 pages/);
 });
 
-test('pages can be moved and removed', () => {
+test('a page dragged to a new place moves there, the rest keeping their order', () => {
+  const files = [photo('a.jpg'), photo('b.jpg'), photo('c.jpg'), photo('d.jpg')];
+  assert.deepEqual(names(api.moveFile(files, 3, 0)), ['d.jpg', 'a.jpg', 'b.jpg', 'c.jpg']);
+  assert.deepEqual(names(api.moveFile(files, 0, 2)), ['b.jpg', 'c.jpg', 'a.jpg', 'd.jpg']);
+  assert.deepEqual(names(api.moveFile(files, 1, 2)), ['a.jpg', 'c.jpg', 'b.jpg', 'd.jpg']);
+  // Nowhere to go: unchanged.
+  assert.deepEqual(names(api.moveFile(files, 0, -1)), ['a.jpg', 'b.jpg', 'c.jpg', 'd.jpg']);
+  assert.deepEqual(names(api.moveFile(files, 3, 4)), ['a.jpg', 'b.jpg', 'c.jpg', 'd.jpg']);
+  assert.deepEqual(names(api.moveFile(files, 2, 2)), ['a.jpg', 'b.jpg', 'c.jpg', 'd.jpg']);
+});
+
+test('pages can be removed', () => {
   const files = [photo('a.jpg'), photo('b.jpg'), photo('c.jpg')];
-  assert.deepEqual(names(api.moveFile(files, 2, -1)), ['a.jpg', 'c.jpg', 'b.jpg']);
-  assert.deepEqual(names(api.moveFile(files, 0, 1)), ['b.jpg', 'a.jpg', 'c.jpg']);
-  // Past either end: unchanged.
-  assert.deepEqual(names(api.moveFile(files, 0, -1)), ['a.jpg', 'b.jpg', 'c.jpg']);
-  assert.deepEqual(names(api.moveFile(files, 2, 1)), ['a.jpg', 'b.jpg', 'c.jpg']);
   assert.deepEqual(names(api.removeFile(files, 1)), ['a.jpg', 'c.jpg']);
 });

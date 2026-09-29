@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { MAX_UPLOAD_BYTES, uploadSheet } from "@/lib/sheet-files";
@@ -288,37 +288,137 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
   );
 }
 
-/** The chosen photos in page order, each one movable and removable. */
+// A stable identity and one preview per photo, however the list is reordered.
+// Keyed by position, a row would be rebuilt mid-drag - and lose the drag.
+const photoIds = new WeakMap<File, string>();
+const photoPreviews = new WeakMap<File, string>();
+let nextPhotoId = 0;
+
+function photoId(file: File) {
+  let id = photoIds.get(file);
+  if (!id) photoIds.set(file, id = `photo-${nextPhotoId++}`);
+  return id;
+}
+
+function photoPreview(file: File) {
+  let url = photoPreviews.get(file);
+  if (!url) photoPreviews.set(file, url = URL.createObjectURL(file));
+  return url;
+}
+
+function releasePreview(file: File) {
+  const url = photoPreviews.get(file);
+  if (url) URL.revokeObjectURL(url);
+  photoPreviews.delete(file);
+}
+
+/** The chosen photos in page order: drag a page to move it, ✕ to remove it.
+ * Pointer events rather than the browser's own drag and drop, which most
+ * phones don't support. With a mouse a page is picked up anywhere; by touch
+ * only by its grip, so the rest of the list still scrolls. The grip also
+ * takes the arrow keys. */
 function PhotoPages({ files, onChange, disabled }: {
   files: File[];
   onChange: (files: File[]) => void;
   disabled: boolean;
 }) {
-  // A preview per photo, released again when the list changes or goes.
-  const previews = useMemo(() => files.map((file) => URL.createObjectURL(file)), [files]);
-  useEffect(() => () => previews.forEach((url) => URL.revokeObjectURL(url)), [previews]);
+  const listRef = useRef<HTMLOListElement>(null);
+  // Where the page being dragged sits right now; null when none is.
+  const [dragging, setDragging] = useState<number | null>(null);
+  const dragged = useRef<number | null>(null);
+  // The drag is followed on the window, not the rows: a row moved in the list
+  // loses the pointer, and a release outside the list must still end it.
+  // These are what those window listeners read, kept current as rows move.
+  const latest = useRef({ files, onChange });
+  useEffect(() => { latest.current = { files, onChange }; });
+  const stopDragging = useRef<(() => void) | null>(null);
+  useEffect(() => () => stopDragging.current?.(), []);
+
+  // Previews of photos no longer listed are released, and the rest when the
+  // list goes.
+  const listed = useRef<File[]>([]);
+  useEffect(() => {
+    for (const file of listed.current) if (!files.includes(file)) releasePreview(file);
+    listed.current = files;
+  }, [files]);
+  useEffect(() => {
+    const current = listed;
+    return () => current.current.forEach(releasePreview);
+  }, []);
+
+  function pickUp(event: React.PointerEvent<HTMLLIElement>, index: number) {
+    const target = event.target as HTMLElement;
+    if (disabled || event.button !== 0 || dragged.current !== null || target.closest(".photo-remove")) return;
+    if (event.pointerType !== "mouse" && !target.closest(".photo-grip")) return;
+    event.preventDefault();
+    dragged.current = index;
+    setDragging(index);
+
+    const pointer = event.pointerId;
+    function drag(move: PointerEvent) {
+      const from = dragged.current;
+      if (move.pointerId !== pointer || from === null || !listRef.current) return;
+      const rows = Array.from(listRef.current.children) as HTMLElement[];
+      // It belongs after every other page whose middle the pointer is below.
+      const to = rows.filter((row, i) => {
+        const box = row.getBoundingClientRect();
+        return i !== from && move.clientY > box.top + box.height / 2;
+      }).length;
+      if (to === from) return;
+      const next = moveFile(latest.current.files, from, to);
+      // Kept current straight away: another move can arrive before React
+      // has rendered this one.
+      latest.current = { ...latest.current, files: next };
+      latest.current.onChange(next);
+      dragged.current = to;
+      setDragging(to);
+    }
+    function drop(end: PointerEvent) {
+      if (end.pointerId === pointer) stop();
+    }
+    function stop() {
+      window.removeEventListener("pointermove", drag);
+      window.removeEventListener("pointerup", drop);
+      window.removeEventListener("pointercancel", drop);
+      stopDragging.current = null;
+      dragged.current = null;
+      setDragging(null);
+    }
+    window.addEventListener("pointermove", drag);
+    window.addEventListener("pointerup", drop);
+    window.addEventListener("pointercancel", drop);
+    stopDragging.current = stop;
+  }
 
   return (
-    <ol className="photo-pages" aria-label="Pages, in order">
-      {files.map((file, index) => (
-        <li key={`${file.name}-${file.size}-${file.lastModified}-${index}`}>
-          {/* eslint-disable-next-line @next/next/no-img-element -- a local preview, nothing to optimize */}
-          <img src={previews[index]} alt="" />
-          <div className="photo-page-text">
-            <strong>Page {index + 1}</strong>
-            <span>{file.name}</span>
-          </div>
-          <div className="photo-page-actions">
-            <button type="button" onClick={() => onChange(moveFile(files, index, -1))}
-              disabled={disabled || index === 0} aria-label={`Move page ${index + 1} up`} title="Move up">↑</button>
-            <button type="button" onClick={() => onChange(moveFile(files, index, 1))}
-              disabled={disabled || index === files.length - 1} aria-label={`Move page ${index + 1} down`} title="Move down">↓</button>
-            <button type="button" onClick={() => onChange(removeFile(files, index))}
+    <>
+      <ol ref={listRef} className="photo-pages" aria-label="Pages, in order">
+        {files.map((file, index) => (
+          <li key={photoId(file)} className={dragging === index ? "dragging" : undefined}
+            onPointerDown={(event) => pickUp(event, index)}>
+            <button type="button" className="photo-grip" disabled={disabled} title="Drag to reorder"
+              aria-label={`Page ${index + 1}. Drag, or use the arrow keys, to move it`}
+              onKeyDown={(event) => {
+                const by = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
+                if (!by) return;
+                event.preventDefault();
+                onChange(moveFile(files, index, index + by));
+              }}>
+              ⠿
+            </button>
+            {/* eslint-disable-next-line @next/next/no-img-element -- a local preview, nothing to optimize */}
+            <img src={photoPreview(file)} alt="" draggable={false} />
+            <div className="photo-page-text">
+              <strong>Page {index + 1}</strong>
+              <span>{file.name}</span>
+            </div>
+            <button type="button" className="photo-remove" onClick={() => onChange(removeFile(files, index))}
               disabled={disabled} aria-label={`Remove page ${index + 1}`} title="Remove">✕</button>
-          </div>
-        </li>
-      ))}
-    </ol>
+          </li>
+        ))}
+      </ol>
+      {files.length > 1 && <p className="photo-pages-hint">Drag the pages into order.</p>}
+    </>
   );
 }
 

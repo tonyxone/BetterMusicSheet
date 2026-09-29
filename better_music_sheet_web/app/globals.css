@@ -1050,18 +1050,30 @@ textarea.sheet-inline-input { font-family: system-ui, -apple-system, "Segoe UI",
 .dropzone.dragging { border-color: var(--accent); background: rgba(217, 164, 65, 0.1); }
 .photo-pages { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .photo-pages li {
-  display: flex; align-items: center; gap: 12px; padding: 8px 10px;
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 4px;
   background: var(--card); border: 1px solid var(--paper-deep); border-radius: 12px;
+  cursor: grab; user-select: none; -webkit-user-select: none;
+  transition: box-shadow .15s, border-color .15s;
 }
-.photo-pages img { width: 44px; height: 56px; object-fit: cover; border-radius: 6px; background: var(--paper-deep); flex: none; }
+.photo-pages li.dragging {
+  cursor: grabbing; border-color: var(--accent); box-shadow: 0 8px 20px rgba(46, 33, 23, 0.16);
+  position: relative; z-index: 1;
+}
+.photo-pages img { width: 44px; height: 56px; object-fit: cover; border-radius: 6px; background: var(--paper-deep); flex: none; pointer-events: none; }
 .photo-page-text { flex: 1; min-width: 0; display: flex; flex-direction: column; font-size: 14px; }
 .photo-page-text span { color: var(--ink-soft); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.photo-page-actions { display: flex; gap: 4px; flex: none; }
-.photo-page-actions button {
-  width: 34px; height: 34px; border-radius: 8px; border: 1px solid var(--paper-deep); background: var(--paper);
+/* The grip is where touch picks a page up: no scrolling from it. */
+.photo-grip {
+  flex: none; width: 30px; height: 44px; border: none; background: none; border-radius: 8px;
+  color: var(--ink-soft); font-size: 20px; line-height: 1; cursor: grab; touch-action: none;
+}
+.photo-grip:hover:not(:disabled), .photo-grip:focus-visible { color: var(--ink); background: var(--paper); }
+.photo-remove {
+  flex: none; width: 34px; height: 34px; border-radius: 8px; border: 1px solid var(--paper-deep); background: var(--paper);
   color: var(--ink); font-size: 15px; cursor: pointer;
 }
-.photo-page-actions button:hover:not(:disabled) { background: var(--paper-deep); }
-.photo-page-actions button:disabled { opacity: 0.35; cursor: default; }
+.photo-remove:hover:not(:disabled) { background: var(--paper-deep); }
+.photo-remove:disabled, .photo-grip:disabled { opacity: 0.35; cursor: default; }
+.photo-pages-hint { margin: 8px 0 0; font-size: 12.5px; color: var(--ink-soft); text-align: center; }
 .picked-file { margin-top: 10px; text-align: center; }
 .link-button { border: none; background: none; padding: 0; font: inherit; font-size: 13.5px; color: var(--accent); text-decoration: underline; cursor: pointer; }

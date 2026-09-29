@@ -50,12 +50,14 @@ export function addFiles<T extends { name: string; type: string }>(current: T[],
   return { files, error: null };
 }
 
-/** The list with one item moved `by` places (-1 up, +1 down), if it can go. */
-export function moveFile<T>(files: T[], index: number, by: number): T[] {
-  const target = index + by;
-  if (index < 0 || index >= files.length || target < 0 || target >= files.length) return files;
+/** The list with the item at `from` moved to position `to`, the rest keeping
+ * their order - what dragging a page to a new place does. Unchanged if
+ * either position is off the list. */
+export function moveFile<T>(files: T[], from: number, to: number): T[] {
+  if (from === to || from < 0 || from >= files.length || to < 0 || to >= files.length) return files;
   const next = [...files];
-  [next[index], next[target]] = [next[target], next[index]];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
   return next;
 }
 
