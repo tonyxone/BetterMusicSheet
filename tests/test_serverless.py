@@ -209,8 +209,10 @@ class ServerlessTests(unittest.TestCase):
         db.save_user_identity(USER, "me@example.com", "Me")
         done = self.upload()
         self.assertTrue(worker.process_job(done["job_id"], runner=fake_runner))
-        users = self.client.get("/api/admin/users", headers=self.signed_in()).json()
-        self.assertEqual([(u["email"], u["uploads"]) for u in users], [("me@example.com", 1)])
+        users = self.client.get("/api/admin/users", headers=self.signed_in()).json()["items"]
+        self.assertEqual([(u["user_id"], u["uploads"]) for u in users], [(USER, 1)])
+        # Read with a projection: the name and email never leave DynamoDB.
+        self.assertEqual(set(db.all_accounts()[0]), {"user_id", "created_at"})
         files = self.client.get("/api/admin/uploads/a/files", headers=self.signed_in()).json()
         self.assertTrue(files["direct"])
         self.assertIn("new-files", files["original"])

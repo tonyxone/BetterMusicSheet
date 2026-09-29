@@ -15,6 +15,8 @@ blocks).
 
 The all_* functions read a whole table, for the admin dashboard only (see
 admin.py). Fine at this project's size; nothing a visitor calls uses them.
+all_accounts reads only ACCOUNT_FIELDS: the dashboard identifies people by id
+alone, so their names and emails are never even fetched for it.
 
 Wherever DynamoDB is used, its Decimal numbers are converted to int/float so
 callers (server.py) never touch boto3 types directly.
@@ -28,6 +30,7 @@ from config import ADMIN_TABLE, IS_PRODUCTION, MASTER_USERS_TABLE, SUBSCRIPTIONS
 
 
 _SUBSCRIPTION_STATUSES = {"trialing", "active", "canceled", "expired", "past_due"}
+ACCOUNT_FIELDS = ("user_id", "created_at")
 # Statuses of a subscription that has stopped for good, as opposed to one that
 # is merely set to stop at its period end (cancel_at_period_end).
 _SUBSCRIPTION_ENDED = {"canceled", "expired"}
@@ -69,9 +72,13 @@ def _cancellation(status, cancel_at_period_end, canceled_at, ended_at):
     }
 
 
-def _scan(table):
-    """Every row of a DynamoDB table, across as many pages as it takes."""
+def _scan(table, fields=None):
+    """Every row of a DynamoDB table, across as many pages as it takes.
+    `fields` limits what is read to those attributes, server side."""
     items, kwargs = [], {}
+    if fields:
+        kwargs["ProjectionExpression"] = ", ".join(f"#p{i}" for i in range(len(fields)))
+        kwargs["ExpressionAttributeNames"] = {f"#p{i}": name for i, name in enumerate(fields)}
     while True:
         response = table.scan(**kwargs)
         items += response["Items"]
@@ -234,8 +241,8 @@ if IS_PRODUCTION:
 
     # ---- whole tables, for the admin dashboard ----
 
-    def all_users():
-        return _scan(_users_table)
+    def all_accounts():
+        return _scan(_users_table, ACCOUNT_FIELDS)
 
     def all_music_sheets():
         return _scan(_music_sheet_table)
@@ -425,9 +432,9 @@ else:
 
     # ---- whole tables, for the admin dashboard ----
 
-    def all_users():
+    def all_accounts():
         with _lock:
-            return [dict(u) for u in _users.values()]
+            return [{k: u[k] for k in ACCOUNT_FIELDS if k in u} for u in _users.values()]
 
     def all_music_sheets():
         with _lock:

@@ -113,8 +113,8 @@ export function UploadsTable({ uploads, showOwner = false }: { uploads: AdminUpl
               </td>
               {showOwner && (
                 <td>
-                  {upload.guest ? <Badge tone="muted">Guest</Badge> : upload.owner_email || "—"}
-                  <div className="admin-sub admin-id">{upload.user_id}</div>
+                  <span className="admin-id">{upload.user_id}</span>
+                  {upload.guest && <div><Badge tone="muted">Guest</Badge></div>}
                 </td>
               )}
               <td><UploadStatus upload={upload} /></td>
@@ -132,6 +132,22 @@ export function UploadsTable({ uploads, showOwner = false }: { uploads: AdminUpl
         </tbody>
       </table>
     </div>
+  );
+}
+
+/** Previous / next through a paged list, with where you are in it. */
+export function Pager({ page, pages, total, noun, onPage }: {
+  page: number; pages: number; total: number; noun: string; onPage: (page: number) => void;
+}) {
+  if (!total) return null;
+  return (
+    <nav className="admin-pager" aria-label={`${noun} pages`}>
+      <button type="button" className="pagination-btn" onClick={() => onPage(page - 1)} disabled={page <= 1}
+        aria-label="Previous page">‹</button>
+      <span className="admin-sub">Page {page} of {pages} · {total.toLocaleString()} {noun}</span>
+      <button type="button" className="pagination-btn" onClick={() => onPage(page + 1)} disabled={page >= pages}
+        aria-label="Next page">›</button>
+    </nav>
   );
 }
 

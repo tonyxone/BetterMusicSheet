@@ -7,6 +7,8 @@ or forged token and an ordinary account all get the same answer, so nothing
 here even confirms the dashboard exists.
 
 Read-only on purpose: nothing here changes a user, a job or a subscription.
+People appear by user id only (owner decision): no name or email is shown,
+returned or even read for it - see db.all_accounts.
 And isolated: an error in any route here is that one request's 500, and
 server.py still serves everything else if this module can't even be loaded.
 """
@@ -27,6 +29,8 @@ from auth import get_signed_in_user_id
 DAY = 86400
 ACTIVE = ("uploading", "queued", "processing")
 REMOVED = ("deleting", "deleted")
+PAGE_SIZE = 25
+MAX_PAGE_SIZE = 200
 
 
 def require_admin(authorization: str = Header(None)):
@@ -72,7 +76,7 @@ def _subscription_view(subscription, now):
     }
 
 
-def _job_view(job, sheet_names, users=None):
+def _job_view(job, sheet_names, accounts=None):
     queued, updated = job.get("queued_at"), job.get("updated_at")
     view = {
         "job_id": job["job_id"],
@@ -90,11 +94,9 @@ def _job_view(job, sheet_names, users=None):
         "attempts": job.get("attempt_count"),
         "region": storage.job_region(job) if config.IS_PRODUCTION else None,
     }
-    if users is not None:
-        owner = users.get(job["user_id"])
-        view["owner_email"] = owner.get("email") if owner else None
+    if accounts is not None:
         # Only signed-in accounts have a users row (see db.py).
-        view["guest"] = owner is None
+        view["guest"] = job["user_id"] not in accounts
     return view
 
 
@@ -103,20 +105,32 @@ def _jobs():
     return [job for job in db.all_annotation_jobs() if job["user_id"] != config.DEMO_OWNER_ID]
 
 
+def _page(rows, page, page_size):
+    """One page of a list, newest first already, with what the pager needs."""
+    page_size = max(1, min(page_size, MAX_PAGE_SIZE))
+    pages = max(1, -(-len(rows) // page_size))
+    page = max(1, min(page, pages))
+    return {"items": rows[(page - 1) * page_size:page * page_size], "total": len(rows),
+            "page": page, "pages": pages, "page_size": page_size}
+
+
+def _matching(user_id, q):
+    return not q or q.strip().lower() in user_id.lower()
+
+
 def _sheet_names():
     return {sheet["music_sheet_id"]: sheet.get("sheet_name") for sheet in db.all_music_sheets()}
 
 
 @router.get("/me")
 def me(user_id: str = Depends(require_admin)):
-    user = db.get_user(user_id) or {}
-    return {"user_id": user_id, "email": user.get("email"), "display_name": user.get("display_name")}
+    return {"user_id": user_id}
 
 
 @router.get("/overview")
 def overview():
     now = int(time.time())
-    users = db.all_users()
+    users = db.all_accounts()
     subscriptions = [_subscription_view(s, now) for s in db.all_subscriptions()]
     jobs = _jobs()
     recent = [j for j in jobs if (j.get("created_at") or 0) >= now - 30 * DAY]
@@ -152,7 +166,9 @@ def overview():
 
 
 @router.get("/users")
-def users():
+def users(q: str = "", page: int = 1, page_size: int = PAGE_SIZE):
+    """Accounts, newest first, one page at a time; `q` narrows them to user
+    ids containing it."""
     now = int(time.time())
     subscriptions = {s["user_id"]: s for s in db.all_subscriptions()}
     masters = db.all_master_users()
@@ -161,12 +177,12 @@ def users():
         if job.get("status") not in REMOVED:
             uploads.setdefault(job["user_id"], []).append(job)
     rows = []
-    for user in db.all_users():
+    for user in db.all_accounts():
+        if not _matching(user["user_id"], q):
+            continue
         mine = uploads.get(user["user_id"], [])
         rows.append({
             "user_id": user["user_id"],
-            "email": user.get("email"),
-            "display_name": user.get("display_name"),
             "created_at": user.get("created_at"),
             "master": user["user_id"] in masters,
             "subscription": _subscription_view(subscriptions.get(user["user_id"]), now),
@@ -174,7 +190,8 @@ def users():
             "failed": sum(j.get("status") == "failed" for j in mine),
             "last_upload_at": max((j.get("created_at") or 0 for j in mine), default=None),
         })
-    return sorted(rows, key=lambda row: row["created_at"] or 0, reverse=True)
+    rows.sort(key=lambda row: row["created_at"] or 0, reverse=True)
+    return _page(rows, page, page_size)
 
 
 @router.get("/users/{user_id}/uploads")
@@ -186,12 +203,12 @@ def user_uploads(user_id: str):
 
 
 @router.get("/uploads")
-def uploads(status: str = None, limit: int = 500):
-    """Every upload, newest first. `status` narrows it: a job status, or
-    "active" (not finished yet) or "review" (finished, but emailed as needing
-    review)."""
-    users = {u["user_id"]: u for u in db.all_users()}
-    jobs = _jobs()
+def uploads(status: str = None, q: str = "", page: int = 1, page_size: int = PAGE_SIZE):
+    """Every upload, newest first, one page at a time. `status` narrows it: a
+    job status, or "active" (not finished yet) or "review" (finished, but
+    emailed as needing review); `q` to owners whose user id contains it."""
+    accounts = {u["user_id"] for u in db.all_accounts()}
+    jobs = [j for j in _jobs() if _matching(j["user_id"], q)]
     if status == "active":
         jobs = [j for j in jobs if j.get("status") in ACTIVE]
     elif status == "review":
@@ -200,7 +217,8 @@ def uploads(status: str = None, limit: int = 500):
         jobs = [j for j in jobs if j.get("status") == status]
     jobs.sort(key=lambda j: j.get("created_at") or 0, reverse=True)
     names = _sheet_names()
-    return [_job_view(job, names, users) for job in jobs[:max(1, min(limit, 2000))]]
+    listed = _page(jobs, page, page_size)
+    return {**listed, "items": [_job_view(job, names, accounts) for job in listed["items"]]}
 
 
 def _job_or_404(job_id):
