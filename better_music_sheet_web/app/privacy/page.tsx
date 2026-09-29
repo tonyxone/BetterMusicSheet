@@ -7,6 +7,9 @@ export const metadata: Metadata = {
   description: "What BetterMusicSheet collects, why, and how to get rid of it.",
 };
 
+// Plain words for the people using the site, not a description of how it is
+// built. Still complete: the App Store listing links here, so it has to
+// cover what is collected, the ads and analytics, payments and deletion.
 export default function PrivacyPage() {
   return (
     <div className="wrap medium legal">
@@ -14,139 +17,82 @@ export default function PrivacyPage() {
         <BackButton />
         <h1 className="serif">Privacy</h1>
       </div>
-      <div className="sub">Last updated 27 September 2026</div>
+      <div className="sub">Last updated 28 September 2026</div>
 
       <p>
-        BetterMusicSheet annotates sheet music you upload. This page describes
-        what the website and iOS app store about you and how to remove it. It is written
-        to be read, not to be impressive.
+        This page explains what BetterMusicSheet keeps about you, why, and how
+        to remove it.
       </p>
 
-      <h2>What is stored</h2>
-
-      <h3>An anonymous id, if you are signed out</h3>
+      <h2>What we keep</h2>
+      <ul>
+        <li>
+          <strong>Your account.</strong> Your email address and name, so you can
+          sign in and your sheets stay with your account. You need an account to
+          upload sheets.
+        </li>
+        <li>
+          <strong>If you aren&apos;t signed in,</strong> a random ID saved in your
+          browser, so you can see your own sheets. It isn&apos;t linked to who
+          you are.
+        </li>
+        <li>
+          <strong>Your sheets.</strong> The files you upload, the annotated
+          copies and playback made from them, and your edits. In the iOS app,
+          the camera and your photos are only used when you choose to add a
+          sheet, and only the photo you pick is uploaded.
+        </li>
+        <li>
+          <strong>Your subscription.</strong> Apple handles payments in the iOS
+          app and Stripe on the website. We only keep your plan and its dates,
+          never your card details.
+        </li>
+      </ul>
       <p>
-        The first time you visit, your browser generates a random identifier and
-        keeps it in a cookie named <code>guest_id</code> for one year. It exists
-        so the site can show you your own uploads and nobody else&apos;s. It is
-        not linked to your name, email, or any profile, and it is not shared with
-        anyone. Clearing your cookies discards it — along with your ability to
-        reach sheets uploaded under it.
+        Your data is kept on servers in the United States. The iOS app also keeps
+        your sign-in and copies of your sheets on your device.
       </p>
 
-      <h3>An account, only if you create one</h3>
+      <h2>Analytics and ads</h2>
       <p>
-        Signing in is optional for browsing the demo. Uploading your own sheets
-        requires a signed-in account. Free accounts can keep one sheet at a time;
-        Premium accounts can keep more. If you sign in,
-        sign-in is handled by Amazon Cognito, and the site stores the account
-        identifier it issues, your email address, and a display name. It is used
-        to attach sheets to your account so they survive a change of browser.
-      </p>
-
-      <h3>The files you upload, and what is made from them</h3>
-      <p>
-        Uploaded PDFs and images are stored in Amazon S3, along with the
-        annotated PDF and the playback data generated from them. In the iOS
-        app, an image can be a photo you take with the camera or pick from your
-        photo library; the app only opens the camera or your photos when you
-        choose to add a sheet, and only the photo you choose is uploaded. A record of the
-        job — the filename, the options you chose, timestamps, and whether it
-        succeeded — is stored in Amazon DynamoDB. Everything is held in AWS&apos;s
-        <code>us-west-1</code> region in the United States.
-      </p>
-
-      <h3>Analytics</h3>
-      <p>
-        The site loads Google Analytics, which records page views and general
-        usage patterns. Google may set its own cookies through it, and its
-        handling is governed by{" "}
-        <a href="https://policies.google.com/privacy" target="_blank" rel="noreferrer noopener">
-          Google&apos;s privacy policy
-        </a>
-        . It does not receive your uploaded files. There are no adverts on this
-        site and no advertising scripts are loaded.
-      </p>
-
-      <h3>Subscriptions on the web and iOS</h3>
-      <p>
-        Apple processes purchases made in the iOS app; Stripe processes purchases
-        on the website. We store the provider, plan, subscription identifier,
-        subscription status, and subscription dates against your account so
-        Premium access works on both platforms. We do not receive your full
-        payment card details from Apple. An Apple purchase includes an account
-        identifier so it can be linked to the account that bought it.
-      </p>
-
-      <h3>On your iPhone or iPad</h3>
-      <p>
-        The app stores sign-in credentials in the device Keychain and caches
-        subscription status and app preferences on the device. It also caches
-        sheet music, playback data, instrument sounds, and your sheet edits.
-        Website analytics described above are separate from the iOS app.
-      </p>
-
-      <h3>Advertisements in the iOS app</h3>
-      <p>
-        The Free plan shows banner ads provided by Google AdMob. Premium does
-        not show ads. The app requests non-personalized ads and does not request
-        access to Apple&apos;s advertising identifier through App Tracking
-        Transparency. Non-personalized ads still involve data collection:
-        Google&apos;s advertising SDK may collect an IP address (used to estimate
-        approximate location), device identifiers, ads viewed and interactions,
-        app interactions, crash logs, performance data, and other diagnostics
-        to serve and measure ads, prevent fraud, and improve its services. Your
-        uploaded sheet music is not provided to AdMob.
+        The website uses Google Analytics to see how pages are used. It never
+        receives your sheets.
       </p>
       <p>
-        Google&apos;s User Messaging Platform presents privacy choices where
-        required. You can revisit available choices using Ad Privacy Choices
-        in the app&apos;s Account screen. Google handles advertising data under{" "}
+        The free plan in the iOS app shows ads from Google. They aren&apos;t
+        personalized and the app doesn&apos;t ask to track you, but Google may
+        still collect things like your IP address, device information and how
+        you interact with ads, to show and measure them. Your sheets are never
+        shared with Google. Premium has no ads, and neither does the website.
+        You can change your ad privacy choices from the Account screen in the
+        app. Google handles this data under{" "}
         <a href="https://policies.google.com/privacy" target="_blank" rel="noreferrer noopener">
           Google&apos;s privacy policy
         </a>
         .
       </p>
 
-      <h2>What is not done</h2>
+      <h2>What we don&apos;t do</h2>
       <p>
-        Your sheet music is not sold, shared, published, or used to train
-        anything. Recognition runs on this site&apos;s own servers using
-        Audiveris, an open-source engine; files are not sent to a third-party
-        service for processing.
+        We don&apos;t sell, share or publish your sheet music, or use it to train
+        AI. We read it ourselves; it isn&apos;t sent to anyone else to process.
       </p>
 
-      <h2>How long it is kept</h2>
+      <h2>Keeping and removing your data</h2>
       <p>
-        Uploads and their results are kept until you delete them. Deleting a
-        sheet from your history removes the original upload, the annotated PDF,
-        and the playback data. There is currently no automatic expiry, so
-        anything you leave stays until you remove it.
+        Your sheets are kept until you delete them, which you can do from your{" "}
+        <Link href="/history">Library</Link>. You can delete your account from the
+        Account screen in the iOS app; delete your sheets first if you want them
+        gone too. Deleting your account doesn&apos;t cancel an Apple subscription;
+        cancel it in your iPhone or iPad Settings.
       </p>
-
-      <h2>Removing your data</h2>
       <p>
-        Delete individual sheets from the <Link href="/history">Library</Link> page.
-        You can delete your account from the Account screen in the iOS app.
-        Delete individual sheets first if you want to remove their uploaded files;
-        account deletion removes the sign-in account and database records, but
-        does not automatically erase every retained file. Account deletion does
-        not cancel a subscription billed by Apple: manage that subscription in
-        Apple Account Settings. To request removal of retained files or ask what
-        is held about you, email{" "}
-        <a href="mailto:privacy@bettermusicsheet.com">privacy@bettermusicsheet.com</a>.
-      </p>
-
-      <h2>Children</h2>
-      <p>
-        This site is not directed at children under 13 and accounts are not
-        knowingly created for them.
+        To ask what we hold about you, or to have anything removed, email{" "}
+        <a href="mailto:bettermusicsheet@gmail.com">bettermusicsheet@gmail.com</a>.
       </p>
 
       <h2>Changes</h2>
-      <p>
-        If this policy changes, the date at the top changes with it.
-      </p>
+      <p>If this policy changes, the date at the top changes with it.</p>
     </div>
   );
 }
