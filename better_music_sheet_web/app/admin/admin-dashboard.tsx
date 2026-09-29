@@ -3,8 +3,8 @@
 import { Fragment, useEffect, useState } from "react";
 import { useAuth } from "../auth-context";
 import { clientApiFetch } from "@/lib/client-api";
-import type { AdminOverview, AdminSystem, AdminUpload, AdminUser } from "@/lib/admin";
-import { LoadState, SubscriptionBadge, UploadsTable, date, duration, useAdminData } from "./admin-parts";
+import type { AdminOverview, AdminPage, AdminSystem, AdminUpload, AdminUser } from "@/lib/admin";
+import { LoadState, Pager, SubscriptionBadge, UploadsTable, date, duration, useAdminData } from "./admin-parts";
 
 const TABS = [
   { id: "overview", label: "Overview" },
@@ -125,17 +125,16 @@ function UserUploads({ userId }: { userId: string }) {
 }
 
 function UsersTab() {
-  const { data, error, loading, reload } = useAdminData<AdminUser[]>("/users");
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
   const [open, setOpen] = useState<string | null>(null);
-  const needle = search.trim().toLowerCase();
-  const users = (data ?? []).filter((u) => !needle
-    || [u.email, u.display_name, u.user_id].some((field) => field?.toLowerCase().includes(needle)));
+  const { data, error, loading, reload } = useAdminData<AdminPage<AdminUser>>(`/users${query({ q: search.trim(), page })}`);
+  const users = data?.items ?? [];
   return (
     <section>
       <div className="admin-toolbar">
-        <input type="search" className="admin-input" placeholder="Search email, name or user ID"
-          value={search} onChange={(event) => setSearch(event.target.value)} />
+        <input type="search" className="admin-input" placeholder="Search user ID"
+          value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} />
         <LoadState loading={loading} error={error} onReload={reload} />
       </div>
       {data && (
@@ -157,9 +156,7 @@ function UsersTab() {
                       onClick={() => setOpen(expanded ? null : u.user_id)}>
                       <td>
                         <span className="admin-caret">{expanded ? "▾" : "▸"}</span>
-                        {u.display_name || u.email || "—"}
-                        {u.display_name && u.email && <div className="admin-sub">{u.email}</div>}
-                        <div className="admin-sub admin-id">{u.user_id}</div>
+                        <span className="admin-id">{u.user_id}</span>
                       </td>
                       <td className="nowrap">{date(u.created_at)}</td>
                       <td><SubscriptionBadge subscription={s} master={u.master} /></td>
@@ -185,9 +182,11 @@ function UsersTab() {
               })}
             </tbody>
           </table>
-          {!users.length && <p className="admin-sub">No users match.</p>}
+          {!users.length && <p className="admin-sub admin-empty">No users match.</p>}
         </div>
       )}
+      {data && <Pager page={data.page} pages={data.pages} total={data.total} noun="users"
+        onPage={(next) => { setPage(next); setOpen(null); }} />}
     </section>
   );
 }
@@ -203,23 +202,38 @@ const FILTERS = [
 
 function UploadsTab() {
   const [filter, setFilter] = useState("");
-  const { data, error, loading, reload } = useAdminData<AdminUpload[]>(
-    `/uploads${filter ? `?status=${filter}` : ""}`);
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const { data, error, loading, reload } = useAdminData<AdminPage<AdminUpload>>(
+    `/uploads${query({ status: filter, q: search.trim(), page })}`);
   return (
     <section>
       <div className="admin-toolbar">
         <div className="admin-filters">
           {FILTERS.map(({ id, label }) => (
-            <button key={id} type="button" className={filter === id ? "active" : ""} onClick={() => setFilter(id)}>
+            <button key={id} type="button" className={filter === id ? "active" : ""}
+              onClick={() => { setFilter(id); setPage(1); }}>
               {label}
             </button>
           ))}
         </div>
         <LoadState loading={loading} error={error} onReload={reload} />
       </div>
-      {data && <UploadsTable uploads={data} showOwner />}
+      <div className="admin-toolbar">
+        <input type="search" className="admin-input" placeholder="Search owner's user ID"
+          value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} />
+      </div>
+      {data && <UploadsTable uploads={data.items} showOwner />}
+      {data && <Pager page={data.page} pages={data.pages} total={data.total} noun="uploads" onPage={setPage} />}
     </section>
   );
+}
+
+/** A route's query string, leaving out what isn't set. */
+function query(params: Record<string, string | number>) {
+  const search = new URLSearchParams(
+    Object.entries(params).filter(([, value]) => value !== "").map(([key, value]) => [key, String(value)]));
+  return search.size ? `?${search}` : "";
 }
 
 function failed(panel: object | null): panel is { error: string } {

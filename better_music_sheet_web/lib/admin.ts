@@ -3,7 +3,8 @@
 import { clientApiFetch } from "./client-api";
 
 // Shapes of the admin dashboard's API (see ../../admin.py). Times are Unix
-// seconds throughout, and null wherever something hasn't happened.
+// seconds throughout, and null wherever something hasn't happened. People are
+// identified by user id alone - no name or email ever reaches the dashboard.
 
 export type AdminSubscription = {
   status: "trialing" | "active" | "canceled" | "expired" | "past_due";
@@ -21,8 +22,6 @@ export type AdminSubscription = {
 
 export type AdminUser = {
   user_id: string;
-  email: string | null;
-  display_name: string | null;
   created_at: number | null;
   master: boolean;
   subscription: AdminSubscription | null;
@@ -47,8 +46,7 @@ export type AdminUpload = {
   size: number | null;
   attempts: number | null;
   region: string | null;
-  /** Only on the all-uploads list. */
-  owner_email?: string | null;
+  /** Only on the all-uploads list: no signed-in account owns it. */
   guest?: boolean;
 };
 
@@ -60,6 +58,9 @@ export type AdminOverview = {
     failure_rate_30d: number | null; median_seconds_30d: number | null; in_progress: number;
   };
 };
+
+/** One page of a list, and where it sits in the whole. */
+export type AdminPage<T> = { items: T[]; total: number; page: number; pages: number; page_size: number };
 
 type Failure = { error: string };
 

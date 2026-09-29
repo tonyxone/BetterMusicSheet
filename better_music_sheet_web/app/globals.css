@@ -1029,3 +1029,5 @@ textarea.sheet-inline-input { font-family: system-ui, -apple-system, "Segoe UI",
 .admin-not-found h1 { margin: 0; padding-right: 20px; border-right: 1px solid var(--ink-soft); font-size: 24px; font-weight: 500; }
 .admin-not-found p { margin: 0; font-size: 14px; }
 @media (max-width: 560px) { .wrap.wide.admin-page { padding: 24px 16px 80px; } }
+.admin-pager { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 16px; }
+.admin-empty { padding: 12px; }

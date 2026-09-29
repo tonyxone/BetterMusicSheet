@@ -85,7 +85,7 @@ class HiddenFromEveryoneElseTests(AdminTestCase):
         # Not the local file route: this test has no file for it to serve.
         for route in ROUTES[:-1]:
             self.assertEqual((route, self.client.get(route, headers=token(ADMIN)).status_code), (route, 200))
-        self.assertEqual(self.client.get("/api/admin/me", headers=token(ADMIN)).json()["email"], "me@example.com")
+        self.assertEqual(self.client.get("/api/admin/me", headers=token(ADMIN)).json(), {"user_id": ADMIN})
 
 
 class DashboardDataTests(AdminTestCase):
@@ -97,8 +97,10 @@ class DashboardDataTests(AdminTestCase):
     def test_users_list_subscriptions_and_upload_counts(self):
         db.upsert_subscription(SUBSCRIBER, "active", "yearly", "stripe", self.now - 100, self.now + 1000, True,
                                subscription_id="sub_admin", started_at=self.now - 500, canceled_at=self.now - 50)
-        rows = {row["user_id"]: row for row in self.get("/api/admin/users")}
-        self.assertEqual([row["user_id"] for row in self.get("/api/admin/users")], [MEMBER, SUBSCRIBER, ADMIN])
+        listed = self.get("/api/admin/users")
+        rows = {row["user_id"]: row for row in listed["items"]}
+        self.assertEqual([row["user_id"] for row in listed["items"]], [MEMBER, SUBSCRIBER, ADMIN])
+        self.assertEqual((listed["total"], listed["page"], listed["pages"]), (3, 1, 1))
         member = rows[MEMBER]
         # The deleted upload doesn't count; the failed one does, and is counted.
         self.assertEqual((member["uploads"], member["failed"], member["subscription"]), (3, 1, None))
@@ -114,12 +116,36 @@ class DashboardDataTests(AdminTestCase):
         self.assertEqual(uploads[2]["seconds"], 60)
 
     def test_uploads_filter_and_mark_guests_but_never_list_the_demo(self):
-        everything = self.get("/api/admin/uploads")
+        everything = self.get("/api/admin/uploads")["items"]
         self.assertNotIn("demo", [u["job_id"] for u in everything])
         guest = next(u for u in everything if u["job_id"] == "guest-done")
-        self.assertEqual((guest["guest"], guest["owner_email"]), (True, None))
-        self.assertEqual([u["job_id"] for u in self.get("/api/admin/uploads?status=failed")], ["member-failed"])
-        self.assertEqual([u["job_id"] for u in self.get("/api/admin/uploads?status=review")], ["member-rough"])
+        member = next(u for u in everything if u["job_id"] == "member-done")
+        self.assertEqual((guest["guest"], member["guest"]), (True, False))
+        self.assertEqual([u["job_id"] for u in self.get("/api/admin/uploads?status=failed")["items"]], ["member-failed"])
+        self.assertEqual([u["job_id"] for u in self.get("/api/admin/uploads?status=review")["items"]], ["member-rough"])
+
+    def test_users_and_uploads_come_a_page_at_a_time(self):
+        first = self.get("/api/admin/users?page_size=2")
+        second = self.get("/api/admin/users?page_size=2&page=2")
+        self.assertEqual((first["total"], first["pages"], len(first["items"]), len(second["items"])), (3, 2, 2, 1))
+        self.assertEqual([u["user_id"] for u in first["items"] + second["items"]], [MEMBER, SUBSCRIBER, ADMIN])
+        # A page past the end shows the last one, not an empty list.
+        self.assertEqual(self.get("/api/admin/users?page_size=2&page=9")["page"], 2)
+        uploads = self.get("/api/admin/uploads?page_size=2&page=3")
+        self.assertEqual((uploads["total"], uploads["pages"], [u["job_id"] for u in uploads["items"]]),
+                         (5, 3, ["member-deleted"]))
+
+    def test_user_id_search(self):
+        self.assertEqual([u["user_id"] for u in self.get(f"/api/admin/users?q={MEMBER[:8].upper()}")["items"]], [MEMBER])
+        self.assertEqual({u["user_id"] for u in self.get(f"/api/admin/uploads?q={GUEST[:8]}")["items"]}, {GUEST})
+
+    def test_no_name_or_email_leaves_the_api(self):
+        db._users[MEMBER]["display_name"] = "Member Name"
+        db.upsert_subscription(MEMBER, "active", "monthly", "apple", 1, 2, False, subscription_id="s1")
+        for route in ROUTES[:-1] + ["/api/admin/users?q=b", "/api/admin/uploads?status=done"]:
+            body = self.client.get(route, headers=token(ADMIN)).text
+            for secret in ("member@example.com", "me@example.com", "Member Name", '"email"', '"display_name"'):
+                self.assertNotIn(secret, body, route)
 
     def test_overview_counts(self):
         overview = self.get("/api/admin/overview")
