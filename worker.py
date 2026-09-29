@@ -129,7 +129,7 @@ def run_processor(job, directory, tick):
         if process.returncode or not result.exists():
             # Shown to the reader only once every attempt has failed.
             raise RuntimeError(job_state.UNREADABLE)
-        return data["count"]
+        return data
     finally:
         stop_process(process)
 
@@ -205,7 +205,14 @@ def process_job(job_id, extend=lambda: None, runner=run_processor):
             workdir.append(directory)
             storage.download_input(job, directory / "source")
             check()
-            count = runner(job, directory, check)
+            result = runner(job, directory, check)
+            # A plain count, or processor.py's result with the note counts
+            # the library shows ("606/634").
+            if isinstance(result, dict):
+                count = result["count"]
+                notes = {key: result.get(key) for key in ("notes_named", "notes_printed")}
+            else:
+                count, notes = result, {}
             check()
             output_key = storage.publish(job, "output", directory / "annotated.pdf")
             timeline = directory / "timeline.json"
@@ -214,7 +221,7 @@ def process_job(job_id, extend=lambda: None, runner=run_processor):
             labels_key = storage.publish(job, "labels", labels) if labels.exists() else None
             check()
             quality = alerts.assess(timeline)
-            job_state.finish(job, status="done", labeled_groups=count, output_key=output_key,
+            job_state.finish(job, status="done", labeled_groups=count, output_key=output_key, **notes,
                              timeline_key=timeline_key, labels_key=labels_key, stage="Complete", error=None)
         record_review(job, quality)
         alerts.job_done(job, quality, output_key)

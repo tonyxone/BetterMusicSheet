@@ -843,7 +843,7 @@ def recognition_quality(omr_path, mxl_path, page, single_page=False):
 
 def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font_size=6.5,
                   dpi=None, auto_retry=True, log=print, timeline_path=None, color="#000000",
-                  labels_path=None):
+                  labels_path=None, stats=None):
     """Run the full PDF -> Audiveris OMR -> annotated PDF pipeline. Shared by the
     CLI (main(), below) and the web API (server.py) so the two stay in sync.
 
@@ -854,6 +854,10 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
     ``labels_path``: optional path to also write the placed labels as JSON
     (see label_export.py), for the web viewer's editable label layer. Also
     best-effort, for the same reason.
+
+    ``stats``: optional dict, filled in with ``notes_named`` - how many
+    noteheads the reader identified, each given a name. (A chord repeated
+    within a bar is named once, by its first label, but its notes count.)
 
     Returns the number of labeled beat-groups written to ``output``.
     """
@@ -914,6 +918,8 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
         log(f"Rhythm alignment unavailable; using resolved OMR labels: {e}")
     records = build_records(str(pdf_path), str(omr), num_pages, style=style, octave=octave,
                              page_omr_overrides=page_overrides, resolved_notes=resolved)
+    if stats is not None:
+        stats["notes_named"] = len(resolved["notes"])
 
     tl = None
     if timeline_path is not None:
