@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import { DragDropProvider } from "@dnd-kit/react";
+import { isSortable, useSortable } from "@dnd-kit/react/sortable";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { MAX_UPLOAD_BYTES, uploadSheet } from "@/lib/sheet-files";
@@ -288,10 +290,9 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
   );
 }
 
-// A stable identity and one preview per photo, however the list is reordered.
-// Keyed by position, a row would be rebuilt mid-drag - and lose the drag.
+// A stable identity per photo, however the list is reordered: keyed by
+// position, a row would be rebuilt mid-drag.
 const photoIds = new WeakMap<File, string>();
-const photoPreviews = new WeakMap<File, string>();
 let nextPhotoId = 0;
 
 function photoId(file: File) {
@@ -300,125 +301,98 @@ function photoId(file: File) {
   return id;
 }
 
-function photoPreview(file: File) {
-  let url = photoPreviews.get(file);
-  if (!url) photoPreviews.set(file, url = URL.createObjectURL(file));
-  return url;
+// A small thumbnail per photo, made once. Showing the photo itself would have
+// the browser redraw a 12-megapixel image at 44px in every row as they move.
+// A data URL, so there is nothing to release afterwards.
+const THUMB_WIDTH = 88, THUMB_HEIGHT = 112;
+const thumbnails = new WeakMap<File, Promise<string>>();
+
+function thumbnail(file: File) {
+  let made = thumbnails.get(file);
+  if (!made) {
+    made = createImageBitmap(file, { imageOrientation: "from-image" }).then((bitmap) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = THUMB_WIDTH;
+      canvas.height = THUMB_HEIGHT;
+      const context = canvas.getContext("2d")!;
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, THUMB_WIDTH, THUMB_HEIGHT);
+      // Cover the box, cropping the overflow, like object-fit: cover.
+      const scale = Math.max(THUMB_WIDTH / bitmap.width, THUMB_HEIGHT / bitmap.height);
+      const width = bitmap.width * scale, height = bitmap.height * scale;
+      context.drawImage(bitmap, (THUMB_WIDTH - width) / 2, (THUMB_HEIGHT - height) / 2, width, height);
+      bitmap.close();
+      return canvas.toDataURL("image/jpeg", 0.8);
+    });
+    thumbnails.set(file, made);
+  }
+  return made;
 }
 
-function releasePreview(file: File) {
-  const url = photoPreviews.get(file);
-  if (url) URL.revokeObjectURL(url);
-  photoPreviews.delete(file);
-}
-
-/** The chosen photos in page order: drag a page to move it, ✕ to remove it.
- * Pointer events rather than the browser's own drag and drop, which most
- * phones don't support. With a mouse a page is picked up anywhere; by touch
- * only by its grip, so the rest of the list still scrolls. The grip also
- * takes the arrow keys. */
+/** The chosen photos in page order: drag a page to a new place, ✕ to remove it.
+ *
+ * dnd-kit (@dnd-kit/react) does the dragging: the page follows the pointer
+ * and the others glide out of its way, then it settles where it's dropped.
+ * With a mouse it moves after a few pixels; by touch after a short press and
+ * hold, so a quick swipe still scrolls the page. By keyboard: Tab to a page,
+ * Space to pick it up, the arrow keys to move it, Space to drop, Escape to
+ * cancel - announced to screen readers. The list itself only changes on the
+ * drop. */
 function PhotoPages({ files, onChange, disabled }: {
   files: File[];
   onChange: (files: File[]) => void;
   disabled: boolean;
 }) {
-  const listRef = useRef<HTMLOListElement>(null);
-  // Where the page being dragged sits right now; null when none is.
-  const [dragging, setDragging] = useState<number | null>(null);
-  const dragged = useRef<number | null>(null);
-  // The drag is followed on the window, not the rows: a row moved in the list
-  // loses the pointer, and a release outside the list must still end it.
-  // These are what those window listeners read, kept current as rows move.
-  const latest = useRef({ files, onChange });
-  useEffect(() => { latest.current = { files, onChange }; });
-  const stopDragging = useRef<(() => void) | null>(null);
-  useEffect(() => () => stopDragging.current?.(), []);
-
-  // Previews of photos no longer listed are released, and the rest when the
-  // list goes.
-  const listed = useRef<File[]>([]);
-  useEffect(() => {
-    for (const file of listed.current) if (!files.includes(file)) releasePreview(file);
-    listed.current = files;
-  }, [files]);
-  useEffect(() => {
-    const current = listed;
-    return () => current.current.forEach(releasePreview);
-  }, []);
-
-  function pickUp(event: React.PointerEvent<HTMLLIElement>, index: number) {
-    const target = event.target as HTMLElement;
-    if (disabled || event.button !== 0 || dragged.current !== null || target.closest(".photo-remove")) return;
-    if (event.pointerType !== "mouse" && !target.closest(".photo-grip")) return;
-    event.preventDefault();
-    dragged.current = index;
-    setDragging(index);
-
-    const pointer = event.pointerId;
-    function drag(move: PointerEvent) {
-      const from = dragged.current;
-      if (move.pointerId !== pointer || from === null || !listRef.current) return;
-      const rows = Array.from(listRef.current.children) as HTMLElement[];
-      // It belongs after every other page whose middle the pointer is below.
-      const to = rows.filter((row, i) => {
-        const box = row.getBoundingClientRect();
-        return i !== from && move.clientY > box.top + box.height / 2;
-      }).length;
-      if (to === from) return;
-      const next = moveFile(latest.current.files, from, to);
-      // Kept current straight away: another move can arrive before React
-      // has rendered this one.
-      latest.current = { ...latest.current, files: next };
-      latest.current.onChange(next);
-      dragged.current = to;
-      setDragging(to);
-    }
-    function drop(end: PointerEvent) {
-      if (end.pointerId === pointer) stop();
-    }
-    function stop() {
-      window.removeEventListener("pointermove", drag);
-      window.removeEventListener("pointerup", drop);
-      window.removeEventListener("pointercancel", drop);
-      stopDragging.current = null;
-      dragged.current = null;
-      setDragging(null);
-    }
-    window.addEventListener("pointermove", drag);
-    window.addEventListener("pointerup", drop);
-    window.addEventListener("pointercancel", drop);
-    stopDragging.current = stop;
-  }
-
   return (
     <>
-      <ol ref={listRef} className="photo-pages" aria-label="Pages, in order">
-        {files.map((file, index) => (
-          <li key={photoId(file)} className={dragging === index ? "dragging" : undefined}
-            onPointerDown={(event) => pickUp(event, index)}>
-            <button type="button" className="photo-grip" disabled={disabled} title="Drag to reorder"
-              aria-label={`Page ${index + 1}. Drag, or use the arrow keys, to move it`}
-              onKeyDown={(event) => {
-                const by = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
-                if (!by) return;
-                event.preventDefault();
-                onChange(moveFile(files, index, index + by));
-              }}>
-              ⠿
-            </button>
-            {/* eslint-disable-next-line @next/next/no-img-element -- a local preview, nothing to optimize */}
-            <img src={photoPreview(file)} alt="" draggable={false} />
-            <div className="photo-page-text">
-              <strong>Page {index + 1}</strong>
-              <span>{file.name}</span>
-            </div>
-            <button type="button" className="photo-remove" onClick={() => onChange(removeFile(files, index))}
-              disabled={disabled} aria-label={`Remove page ${index + 1}`} title="Remove">✕</button>
-          </li>
-        ))}
-      </ol>
+      <DragDropProvider
+        onDragEnd={(event) => {
+          const { source } = event.operation;
+          if (event.canceled || !isSortable(source)) return;
+          onChange(moveFile(files, source.initialIndex, source.index));
+        }}
+      >
+        <ol className="photo-pages" aria-label="Pages, in order">
+          {files.map((file, index) => (
+            <PhotoPage key={photoId(file)} file={file} index={index} disabled={disabled}
+              onRemove={() => onChange(removeFile(files, index))} />
+          ))}
+        </ol>
+      </DragDropProvider>
       {files.length > 1 && <p className="photo-pages-hint">Drag the pages into order.</p>}
     </>
+  );
+}
+
+function PhotoPage({ file, index, disabled, onRemove }: {
+  file: File;
+  index: number;
+  disabled: boolean;
+  onRemove: () => void;
+}) {
+  const { ref, isDragging, isDropping } = useSortable({ id: photoId(file), index, disabled });
+  const [preview, setPreview] = useState<string | null>(null);
+  useEffect(() => {
+    let current = true;
+    thumbnail(file).then((url) => { if (current) setPreview(url); }, () => { /* The row still works without one. */ });
+    return () => { current = false; };
+  }, [file]);
+  return (
+    <li ref={ref} className={isDragging || isDropping ? "dragging" : undefined}>
+      <span className="photo-grip" aria-hidden="true">⠿</span>
+      {preview
+        // eslint-disable-next-line @next/next/no-img-element -- a local thumbnail, nothing to optimize
+        ? <img src={preview} alt="" draggable={false} />
+        : <span className="photo-thumb-placeholder" />}
+      <div className="photo-page-text">
+        {/* Numbered by CSS, not by index: it renumbers live as pages move
+            during a drag, where the list itself only changes on the drop. */}
+        <strong className="photo-page-number" />
+        <span>{file.name}</span>
+      </div>
+      <button type="button" className="photo-remove" onClick={onRemove}
+        disabled={disabled} aria-label={`Remove page ${index + 1}`} title="Remove">✕</button>
+    </li>
   );
 }
 
