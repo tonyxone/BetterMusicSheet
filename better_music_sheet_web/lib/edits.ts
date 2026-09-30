@@ -74,7 +74,7 @@ export function isEmptyEdits(doc: SheetEdits) {
 export function resolveLabel(item: LabelItem, edits: SheetEdits, notation: Notation = "letters") {
   const e = edits.labels[item.id];
   if (e?.hidden) return null;
-  const text = displayText(e?.text ?? item.text, item.key, notation);
+  const text = displayText(e?.text ?? item.text, notation);
   return { ...item, x: item.x + (e?.dx ?? 0), y: item.y + (e?.dy ?? 0), text, edited: !!e, color: e?.color };
 }
 

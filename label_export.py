@@ -39,8 +39,8 @@ def labels_document(placed, timeline=None, font_size=6.5, color="#000000", notat
     """``placed``: [(page_number, block), ...] as returned by annotate.render().
 
     Item text is always the letter name, whatever notation was printed: the
-    viewer shows numbers itself (from each item's 'key'), and retyping and
-    playback corrections read letters."""
+    viewer shows numbers itself, and retyping and playback corrections read
+    letters."""
     notes = _notes_by_page(timeline)
     items = []
     block_numbers = {}
@@ -48,7 +48,6 @@ def labels_document(placed, timeline=None, font_size=6.5, color="#000000", notat
         number = block_numbers[page] = block_numbers.get(page, -1) + 1
         group = f"{page}-{number}"
         boxes = block.get('note_boxes') or []
-        keys = block.get('keys') or []
         texts = block.get('letters') or block['labels']
         for line, (text, y, offset) in enumerate(zip(texts, block['ys'], block['label_x_offsets'])):
             note_ids = []
@@ -65,7 +64,5 @@ def labels_document(placed, timeline=None, font_size=6.5, color="#000000", notat
                 'x': round(block['x'] + offset, 2), 'y': round(y, 2),
                 'size': round(block['fs'], 2), 'text': text, 'notes': note_ids,
             }
-            if line < len(keys) and keys[line] is not None:
-                item['key'] = keys[line]
             items.append(item)
     return {'version': 1, 'font_size': font_size, 'color': color, 'notation': notation, 'items': items}

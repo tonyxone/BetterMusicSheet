@@ -938,14 +938,7 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
             log(f"[2b/3] Timeline build failed, Play mode unavailable for this sheet: {e}")
 
     log(f"[3/3] Rendering {output} ...")
-    marks = []
-    if notation == "numbers":
-        from labels import key_marks
-        # The timeline says where each measure is and which key it is in;
-        # without one the numbers are printed with no "1=" marks.
-        marks = key_marks(tl, size=font_size, style=style)
-    placed = render(str(pdf_path), str(output), records, font_size=font_size, color=color,
-                    key_marks=marks)
+    placed = render(str(pdf_path), str(output), records, font_size=font_size, color=color)
     if scales:
         page_size.restore_pdf(output, upload, scales)
     if labels_path is not None:
@@ -972,7 +965,7 @@ def main():
     ap.add_argument("--style", choices=["unicode", "ascii"], default="unicode")
     ap.add_argument("--octave", action="store_true")
     ap.add_argument("--notation", choices=["letters", "numbers"], default="letters",
-                    help="letter names (C D E) or scale degrees of the key (1 2 3)")
+                    help="letter names (C D E) or jianpu numbers, 1 = C (1 2 3)")
     ap.add_argument("--font-size", type=float, default=6.5)
     ap.add_argument("--color", default="#000000",
                      help="Note-label colour as #rrggbb (default: black).")

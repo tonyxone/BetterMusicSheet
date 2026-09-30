@@ -163,9 +163,9 @@ def records_from_resolved(resolved, style='unicode', octave=False, suppress_repe
     """Render every recognized written note, including tied continuations.
 
     Optional compact labeling compares full pitches, never display strings.
-    ``notation='numbers'`` prints scale degrees of the key (labels.numbered_label)
-    instead of letters; each record's 'letters' and 'keys' keep the letter
-    names and key signatures either way, for the viewer's own labels.
+    ``notation='numbers'`` prints jianpu numbers, 1 = C (labels.numbered_label),
+    instead of letters; each record's 'letters' keeps the letter names either
+    way, for the viewer's own labels.
     """
     from collections import defaultdict
     from labels import diatonic_label, numbered_label
@@ -190,10 +190,9 @@ def records_from_resolved(resolved, style='unicode', octave=False, suppress_repe
         marks = ['?' if n.get('pitch_uncertain') else '' for n in group]
         letters = [diatonic_label(n.get('label_diatonic', n['diatonic']), symbols.get(n['alter'], ''), style=style, octave=octave)
                    + mark for n, mark in zip(group, marks)]
-        keys = [n.get('key_fifths', 0) for n in group]
         labels = letters if notation != 'numbers' else [
-            numbered_label(n.get('label_diatonic', n['diatonic']), n['alter'], key, style=style) + mark
-            for n, key, mark in zip(group, keys, marks)]
+            numbered_label(n.get('label_diatonic', n['diatonic']), n['alter'], style=style) + mark
+            for n, mark in zip(group, marks)]
         boxes = [n['bbox_pt'] for n in group]
         width = sum(n['w'] for n in group) / len(group)
         staff_lines = resolved.get('pages', {}).get(first['page'], {}).get('staff_lines_pt', {})
@@ -205,7 +204,7 @@ def records_from_resolved(resolved, style='unicode', octave=False, suppress_repe
             'anchor_x_pt': sum((b[0] + b[2]) / 2 for b in boxes) / len(boxes),
             'top_y_pt': min((b[1] + b[3]) / 2 for b in boxes),
             'bottom_y_pt': max((b[1] + b[3]) / 2 for b in boxes),
-            'labels': labels, 'letters': letters, 'keys': keys, 'measure': (first['system_measure'] or 0) + 1,
+            'labels': labels, 'letters': letters, 'measure': (first['system_measure'] or 0) + 1,
             'scale': max(.65, min(1, width / medians[first['page']])) if medians[first['page']] else 1,
             'notehead_w_pt': sum(b[2] - b[0] for b in boxes) / len(boxes),
             'note_boxes_pt': boxes, 'staff_lines_pt': staff_ys,
@@ -238,12 +237,9 @@ def label_rgb(color):
         return (0.0, 0.0, 0.0)
 
 
-def render(input_pdf, output_pdf, records, font_size=6.5, margin_pt=3.2, color="#000000", key_marks=()):
+def render(input_pdf, output_pdf, records, font_size=6.5, margin_pt=3.2, color="#000000"):
     """Draw the labels onto the PDF and return the placed blocks as
-    [(page_number, block), ...] - the same positions, for label_export.py.
-
-    ``key_marks``: [(page, x, y, text)] - the '1=G' marks numbered labels
-    need (labels.key_marks), drawn like the labels."""
+    [(page_number, block), ...] - the same positions, for label_export.py."""
     # margin_pt must clear the notehead's own radius (~2.2pt at 300dpi) plus a
     # visible gap - anything smaller guarantees the label overlaps the notehead
     doc = fitz.open(input_pdf)
@@ -278,15 +274,6 @@ def render(input_pdf, output_pdf, records, font_size=6.5, margin_pt=3.2, color="
                                    render_mode=1, color=(1, 1, 1), border_width=0.25)
                 shape.insert_text((tx, y), label, fontname=fontname, fontsize=fs,
                                    render_mode=0, fill=fill)
-
-    for page_num, x, y, text in key_marks:
-        if not 1 <= page_num <= len(doc):
-            continue
-        shape = shapes[page_num - 1]
-        shape.insert_text((x, y), text, fontname=fontname, fontsize=font_size * 1.08,
-                           render_mode=1, color=(1, 1, 1), border_width=0.25)
-        shape.insert_text((x, y), text, fontname=fontname, fontsize=font_size * 1.08,
-                           render_mode=0, fill=fill)
 
     for shape in shapes.values():
         shape.commit()
