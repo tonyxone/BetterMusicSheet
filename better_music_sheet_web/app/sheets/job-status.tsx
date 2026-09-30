@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type MutableRefObject } from "react";
+import { useEffect, useRef, useState, type MutableRefObject, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -32,7 +32,7 @@ export function JobStatus() {
   // must not surface as a status-check error.
   const cancellingRef = useRef(false);
   // Which copy the preview shows. Owned here rather than by the preview
-  // itself: the control sits with the page's other actions, a level above it.
+  // itself: the Download menu up in the page's actions follows it too.
   const [variant, setVariant] = useState<SheetVariant>("annotated");
   const [originalMissing, setOriginalMissing] = useState<string | null>(null);
   // Set by the editor once the sheet has loaded: builds the Customized PDF.
@@ -157,8 +157,6 @@ export function JobStatus() {
           <h2 className="serif">{job.sheet_name}</h2>
         </div>
         <div className="result-actions">
-          <SheetToggle value={shown} onChange={setVariant} unavailable={originalMissing}
-            annotatedUnavailable={namesUnavailable} />
           <Link
             href={practiceUnlocked ? `/play?job=${jobId}` : "/subscription/upgrade"}
             className="icon-link"
@@ -178,7 +176,9 @@ export function JobStatus() {
       <div className="preview-card">
         {/* Keyed on readiness: when the names arrive the editor loads again
             and shows them, without a page reload. */}
-        <PreviewPanel key={done ? "names" : "upload"} jobId={jobId} variant={shown} customizedRef={customizedRef} />
+        <PreviewPanel key={done ? "names" : "upload"} jobId={jobId} variant={shown} customizedRef={customizedRef}
+          variantToggle={<SheetToggle value={shown} onChange={setVariant} unavailable={originalMissing}
+            annotatedUnavailable={namesUnavailable} />} />
       </div>
     </div>
   );
@@ -433,10 +433,11 @@ function DownloadMenu({ jobId, sheetName, originalMissing, customizedRef, varian
 
 const PREVIEW_H_KEY = "bms_preview_h";
 
-function PreviewPanel({ jobId, variant, customizedRef }: {
+function PreviewPanel({ jobId, variant, customizedRef, variantToggle }: {
   jobId: string;
   variant: SheetVariant;
   customizedRef: MutableRefObject<CustomizedExport | null>;
+  variantToggle: ReactNode;
 }) {
   const resizeRef = useRef<HTMLDivElement>(null);
   const dragState = useRef({ startY: 0, startH: 0 });
@@ -474,7 +475,7 @@ function PreviewPanel({ jobId, variant, customizedRef }: {
   return (
     <div className="preview-resize-wrap">
       <div className="preview-resize scrolling" ref={resizeRef}>
-        <SheetEditor jobId={jobId} variant={variant} exportRef={customizedRef} />
+        <SheetEditor jobId={jobId} variant={variant} exportRef={customizedRef} variantToggle={variantToggle} />
       </div>
       <div className="resize-handle" title="Drag to resize" onPointerDown={onPointerDown}>
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">

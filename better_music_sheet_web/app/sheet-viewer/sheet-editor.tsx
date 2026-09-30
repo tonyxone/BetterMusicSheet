@@ -15,7 +15,7 @@
 // The Original view shows the same upload without the names; the reader's
 // own marks and notes stay, and can be edited there too.
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MutableRefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MutableRefObject, type ReactNode } from "react";
 import { fetchSheetAssets, fetchSheetFile } from "@/lib/sheet-files";
 import { loadLabels, type LabelItem, type LabelSet } from "@/lib/labels";
 import { correctionsForRetype, EMPTY_EDITS, isEmptyEdits, resolveLabel, useSheetEdits, type LabelEdit, type SaveState, type SheetEdits } from "@/lib/edits";
@@ -81,11 +81,14 @@ const SAVE_TEXT: Record<SaveState, string> = {
   error: "Couldn't save yet — retrying",
 };
 
-export function SheetEditor({ jobId, variant, exportRef }: {
+export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
   jobId: string;
   variant: SheetVariant;
   /** Filled in once the sheet has loaded, for the page's Download menu. */
   exportRef?: MutableRefObject<CustomizedExport | null>;
+  /** The page's Annotated/Original switch, shown beside the Letter/簡 one:
+   * both choose how this sheet is drawn. */
+  variantToggle?: ReactNode;
 }) {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -510,7 +513,13 @@ export function SheetEditor({ jobId, variant, exportRef }: {
     return <p className="play-hint" style={{ padding: 24 }}>Loading the sheet…</p>;
   }
   if (!base) {
-    return <p style={{ color: "var(--danger)", textAlign: "center", padding: 24 }}>Couldn&apos;t show the uploaded file here.</p>;
+    // The switch stays, so the reader can go back to the copy that works.
+    return (
+      <div style={{ textAlign: "center", padding: 24 }}>
+        {variantToggle}
+        <p style={{ color: "var(--danger)", marginTop: 12 }}>Couldn&apos;t show the uploaded file here.</p>
+      </div>
+    );
   }
 
   const hooks: EditorHooks | undefined = editing ? {
@@ -650,57 +659,64 @@ export function SheetEditor({ jobId, variant, exportRef }: {
               {variant === "annotated" && !labelsLive && <span className="editor-status">Names on this sheet can&apos;t be moved; you can still draw and add notes.</span>}
               <div className="bar-end">
                 {showNames && <NotationToggle value={notation} onChange={setNotation} />}
-                {resetControl}
+                {variantToggle}
                 {zoomControls}
               </div>
             </>
           ) : (
-            <>
-              <div className="editor-tools" role="toolbar" aria-label="Editing tools">
-                {tools.map((t) => (
-                  <button key={t.id} type="button" title={t.title} aria-pressed={tool === t.id}
-                    className={`editor-btn${tool === t.id ? " active" : ""}`} onClick={() => setTool(t.id)}>
-                    <svg viewBox="0 0 24 24" aria-hidden="true">{t.icon}</svg>
-                    <span>{t.label}</span>
-                  </button>
-                ))}
-              </div>
-              {(tool === "pen" || tool === "text") && (
-                <div className="editor-swatches" role="group" aria-label="Colour">
-                  {PEN_COLORS.map((c) => (
-                    <button key={c} type="button" className={`swatch${penColor === c ? " active" : ""}`} style={{ background: c }}
-                      aria-label={`Colour ${c}`} aria-pressed={penColor === c} onClick={() => setPenColor(c)} />
-                  ))}
-                </div>
-              )}
-              {tool === "highlighter" && (
-                <div className="editor-swatches" role="group" aria-label="Highlighter colour">
-                  {HIGHLIGHT_COLORS.map((c) => (
-                    <button key={c} type="button" className={`swatch${highlightColor === c ? " active" : ""}`} style={{ background: c }}
-                      aria-label={`Highlighter ${c}`} aria-pressed={highlightColor === c} onClick={() => setHighlightColor(c)} />
-                  ))}
-                </div>
-              )}
-              <div className="editor-tools">
-                <button type="button" className="editor-btn" onClick={undo} disabled={!edits.canUndo} title="Undo (Ctrl+Z)">
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7L4 12l5 5M4 12h11a5 5 0 010 10h-2" /></svg>
-                  <span>Undo</span>
-                </button>
-                <button type="button" className="editor-btn" onClick={redo} disabled={!edits.canRedo} title="Redo (Ctrl+Shift+Z)">
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 7l5 5-5 5M20 12H9a5 5 0 000 10h2" /></svg>
-                  <span>Redo</span>
-                </button>
-                {resetControl}
-              </div>
-              <span className="editor-status" aria-live="polite">{SAVE_TEXT[edits.saveState]}</span>
-              <div className="bar-end">
-                {showNames && <NotationToggle value={notation} onChange={setNotation} />}
-                {zoomControls}
-                <button type="button" className="editor-btn primary" onClick={stopEditing}>Done</button>
-              </div>
-            </>
+            // How the sheet is shown, on a row of its own above the tools
+            // that change it.
+            <div className="bar-end">
+              {showNames && <NotationToggle value={notation} onChange={setNotation} />}
+              {variantToggle}
+              {zoomControls}
+            </div>
           )}
         </div>
+        {editing && (
+          <div className="sheet-editor-bar">
+            <div className="editor-tools" role="toolbar" aria-label="Editing tools">
+              {tools.map((t) => (
+                <button key={t.id} type="button" title={t.title} aria-pressed={tool === t.id}
+                  className={`editor-btn${tool === t.id ? " active" : ""}`} onClick={() => setTool(t.id)}>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">{t.icon}</svg>
+                  <span>{t.label}</span>
+                </button>
+              ))}
+            </div>
+            {(tool === "pen" || tool === "text") && (
+              <div className="editor-swatches" role="group" aria-label="Colour">
+                {PEN_COLORS.map((c) => (
+                  <button key={c} type="button" className={`swatch${penColor === c ? " active" : ""}`} style={{ background: c }}
+                    aria-label={`Colour ${c}`} aria-pressed={penColor === c} onClick={() => setPenColor(c)} />
+                ))}
+              </div>
+            )}
+            {tool === "highlighter" && (
+              <div className="editor-swatches" role="group" aria-label="Highlighter colour">
+                {HIGHLIGHT_COLORS.map((c) => (
+                  <button key={c} type="button" className={`swatch${highlightColor === c ? " active" : ""}`} style={{ background: c }}
+                    aria-label={`Highlighter ${c}`} aria-pressed={highlightColor === c} onClick={() => setHighlightColor(c)} />
+                ))}
+              </div>
+            )}
+            <div className="editor-tools">
+              <button type="button" className="editor-btn" onClick={undo} disabled={!edits.canUndo} title="Undo (Ctrl+Z)">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7L4 12l5 5M4 12h11a5 5 0 010 10h-2" /></svg>
+                <span>Undo</span>
+              </button>
+              <button type="button" className="editor-btn" onClick={redo} disabled={!edits.canRedo} title="Redo (Ctrl+Shift+Z)">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 7l5 5-5 5M20 12H9a5 5 0 000 10h2" /></svg>
+                <span>Redo</span>
+              </button>
+              {resetControl}
+            </div>
+            <span className="editor-status" aria-live="polite">{SAVE_TEXT[edits.saveState]}</span>
+            <div className="bar-end">
+              <button type="button" className="editor-btn primary" onClick={stopEditing}>Done</button>
+            </div>
+          </div>
+        )}
 
         {showSub && (
           <div className="sheet-editor-sub">

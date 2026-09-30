@@ -251,7 +251,7 @@ details.options[open] summary::before { content: "▾ "; }
   cursor: pointer; white-space: nowrap;
 }
 .sheet-toggle-option:hover:not(:disabled) { color: var(--ink); }
-.sheet-toggle-option.active { background: var(--card); color: var(--ink); box-shadow: 0 1px 3px rgba(46, 33, 23, 0.14); }
+.sheet-toggle-option.active { background: var(--accent); color: #fff; box-shadow: 0 1px 3px rgba(46, 33, 23, 0.14); }
 .sheet-toggle-option:disabled { opacity: 0.45; cursor: default; }
 /* On the Play page's dark note-roll surface the light chip would glare. */
 .sheet-toggle.dark { background: rgba(255, 255, 255, 0.08); }
@@ -908,7 +908,8 @@ textarea.sheet-inline-input { font-family: system-ui, -apple-system, "Segoe UI",
    its left edge instead of centring it off-screen. */
 .sheet-editor .sheet-page { flex: none; width: calc(100% * var(--zoom)); max-width: calc(900px * var(--zoom)); }
 .sheet-editor-head { flex: none; position: relative; z-index: 5; background: var(--card); }
-.bar-end { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; }
+/* Wraps on a phone rather than pushing the zoom controls off the card. */
+.bar-end { margin-left: auto; display: inline-flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
 .zoom-controls { display: inline-flex; align-items: center; gap: 2px; }
 .editor-btn.icon { padding: 7px 8px; }
 .editor-btn.zoom-level { min-width: 58px; justify-content: center; font-variant-numeric: tabular-nums; }
@@ -936,7 +937,8 @@ textarea.sheet-inline-input { font-family: system-ui, -apple-system, "Segoe UI",
 }
 .editor-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .editor-btn:hover:not(:disabled) { background: var(--paper); }
-.editor-btn.active { background: var(--ink); border-color: var(--ink); color: #fff; }
+.editor-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.editor-btn.active:hover:not(:disabled) { background: var(--accent-deep); border-color: var(--accent-deep); }
 .editor-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .editor-btn.primary:hover { background: var(--accent-deep); }
 .editor-btn:disabled { opacity: 0.45; cursor: default; }
