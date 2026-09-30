@@ -92,7 +92,8 @@ def generate(raw, directory, options):
                          labels_path=directory / "labels.json",
                          # .get, not [...]: jobs queued before this option existed
                          # have no colour in their options.json and must still run.
-                         color=options.get("color", "#000000"), log=log, stats=stats)
+                         color=options.get("color", "#000000"),
+                         notation=options.get("notation", "letters"), log=log, stats=stats)
     # For the library's "606/634": notes named, out of the notes the sheet
     # prints - the latter only known for a vector PDF (None for a scan).
     return {"count": count, "notes_named": stats.get("notes_named"), "notes_printed": expected}

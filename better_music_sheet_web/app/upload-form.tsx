@@ -11,9 +11,10 @@ import { refreshSubscription } from "@/lib/subscription";
 import { resolveUploadAttempt } from "@/lib/upload-gate";
 import { addFiles, combinePhotos, isPhoto, moveFile, removeFile } from "@/lib/photo-pages";
 
-type UploadOption = "style" | "fontSize" | "color" | "dpi" | "octave" | "autoRetry";
+type UploadOption = "notation" | "style" | "fontSize" | "color" | "dpi" | "octave" | "autoRetry";
 
 const OPTION_HELP: Record<UploadOption, string> = {
+  notation: "Letter names each note C, D, E... Jianpu (numbered notation, 簡譜) shows its scale degree in the key instead: 1 is the major key's home note, so with no sharps or flats G A B C D E F♯ reads 5 6 7 1 2 3 ♯4, and each page is marked 1=C, 1=G and so on. You can switch between the two while viewing the sheet at any time; this sets the printed download.",
   style: "Unicode uses musical accidental symbols such as B♭ and C♯. ASCII uses plain-text Bb and C#, which can be easier to copy into older software.",
   fontSize: "Controls the printed note-label size. Larger labels are easier to read but have less room around dense chords.",
   color: "Sets the printed colour of every note label. A colour makes the labels easy to tell apart from the printed music, while black keeps the page looking like the original. Pale colours can be hard to read on white paper.",
@@ -45,6 +46,7 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
   const [preparing, setPreparing] = useState(false);
   const [style, setStyle] = useState<"unicode" | "ascii">("unicode");
   const [octave, setOctave] = useState(false);
+  const [notation, setNotation] = useState<"letters" | "numbers">("letters");
   const [fontSize, setFontSize] = useState(6.5);
   const [color, setColor] = useState("#000000");
   const [dpi, setDpi] = useState("");
@@ -88,7 +90,7 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
         }
       }
       const job_id = await uploadSheet(upload, {
-        style, octave, font_size: fontSize, auto_retry: autoRetry, dpi: dpi ? Number(dpi) : null,
+        style, octave, notation, font_size: fontSize, auto_retry: autoRetry, dpi: dpi ? Number(dpi) : null,
         color,
       });
       router.push(`/sheets?job=${job_id}`);
@@ -183,6 +185,15 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
         <details className="options">
           <summary>Options</summary>
           <div>
+            <div className="opt-row">
+              <label htmlFor="notation" className="main">Note names</label>
+              <OptionHelp option="notation" label="Note names" open={openHelp} onToggle={setOpenHelp} />
+              <select id="notation" value={notation} onChange={(e) => setNotation(e.target.value as "letters" | "numbers")}>
+                <option value="letters">Letter (C D E)</option>
+                <option value="numbers">簡 Jianpu (1 2 3)</option>
+              </select>
+            </div>
+            {openHelp === "notation" && <OptionExplanation option="notation" />}
             <div className="opt-row">
               <label htmlFor="style" className="main">Label style</label>
               <OptionHelp option="style" label="Label style" open={openHelp} onToggle={setOpenHelp} />

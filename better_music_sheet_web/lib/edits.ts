@@ -12,6 +12,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { clientApiFetch } from "./client-api";
 import { validCorrection, type Corrections, type NoteCorrection } from "./corrections";
 import { retypedMidi, type LabelItem } from "./labels";
+import { displayText, type Notation } from "./notation";
 import type { Timeline } from "./timeline";
 
 /** ``color`` is a reader-chosen colour for this one name ("#rrggbb"),
@@ -68,11 +69,13 @@ export function isEmptyEdits(doc: SheetEdits) {
   return !Object.keys(doc.labels).length && !doc.texts.length && !doc.strokes.length && !Object.keys(doc.corrections).length;
 }
 
-/** A label as it should be drawn now: moved, retyped, or null if hidden. */
-export function resolveLabel(item: LabelItem, edits: SheetEdits) {
+/** A label as it should be drawn now: moved, retyped, or null if hidden -
+ * its text in ``notation`` (edits themselves are always stored as letters). */
+export function resolveLabel(item: LabelItem, edits: SheetEdits, notation: Notation = "letters") {
   const e = edits.labels[item.id];
   if (e?.hidden) return null;
-  return { ...item, x: item.x + (e?.dx ?? 0), y: item.y + (e?.dy ?? 0), text: e?.text ?? item.text, edited: !!e, color: e?.color };
+  const text = displayText(e?.text ?? item.text, item.key, notation);
+  return { ...item, x: item.x + (e?.dx ?? 0), y: item.y + (e?.dy ?? 0), text, edited: !!e, color: e?.color };
 }
 
 export type ResolvedLabel = NonNullable<ReturnType<typeof resolveLabel>>;

@@ -16,6 +16,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { clientApiFetch } from "@/lib/client-api";
 import { fetchSheetAssets, fetchSheetFile } from "@/lib/sheet-files";
 import { SheetToggle, type SheetVariant } from "../sheet-toggle";
+import { NotationToggle } from "../notation-toggle";
 import { SubscribePrompt } from "../subscription/subscribe-prompt";
 import { DemoSampleCard } from "../demo-sample-card";
 import { useSubscription } from "@/lib/subscription";
@@ -27,6 +28,7 @@ import { applyCorrections, validCorrection } from "@/lib/corrections";
 import type { Corrections } from "@/lib/corrections";
 import { EMPTY_EDITS, fetchEdits, type SheetEdits } from "@/lib/edits";
 import { loadLabels, type LabelSet } from "@/lib/labels";
+import { keyMarks, measureKeys, useNotation, withKeys } from "@/lib/notation";
 import { AnnotationLayer } from "../sheet-viewer/annotation-layer";
 import { tempoClock, tempoControl } from "./tempo";
 import { GRACE_SECONDS, SynthEngine, INSTRUMENTS, isInstrumentId, type InstrumentId } from "./synth";
@@ -158,6 +160,25 @@ function Panel({
 }
 
 /** A keyboard key with a letter on it - the thing the toggle turns on. */
+/** A falling bar with a name on it. */
+function NoteNamesIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
+      <rect
+        x="7" y="2.5" width="10" height="19" rx="3"
+        fill="none" stroke="currentColor" strokeWidth="1.6"
+      />
+      <text
+        x="12" y="15.3" textAnchor="middle"
+        fontSize="8.5" fontWeight="700" fill="currentColor"
+        fontFamily="inherit"
+      >
+        A
+      </text>
+    </svg>
+  );
+}
+
 function KeyNamesIcon() {
   return (
     <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
@@ -357,6 +378,7 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
     [timeline, speed, baseBpm],
   );
   const [showKeyNames, setShowKeyNames] = useState(false);
+  const [showNoteNames, setShowNoteNames] = useState(true);
   const [soundOn, setSoundOn] = useState(true);
   const [instrument, setInstrument] = useState<InstrumentId>("grand");
   const [audioLoading, setAudioLoading] = useState(false);
@@ -421,6 +443,12 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
     () => (timeline ? timeline.measures.filter((m) => m.length_beats > 0).length : 0),
     [timeline],
   );
+
+  // Names as letters or as scale degrees of the key (lib/notation.ts).
+  const keyedLabels = useMemo(() => withKeys(labelSet, timeline), [labelSet, timeline]);
+  const [notation, setNotation] = useNotation(labelSet?.notation);
+  const marks = useMemo(() => keyMarks(timeline), [timeline]);
+  const keysByMeasure = useMemo(() => (timeline ? measureKeys(timeline) : []), [timeline]);
 
   const isLocked = useCallback(
     (index: number) => lockedFrom !== null && index >= lockedFrom,
@@ -949,7 +977,10 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
         onToggle={() => setSheetOpen((v) => !v)}
         grow={rollOpen ? split : 1}
         actions={
-          <SheetToggle value={variant} onChange={setVariant} unavailable={originalBlocked} />
+          <div className="play-panel-toggles">
+            {((labelsLive && variant === "annotated") || showKeyNames || showNoteNames) && <NotationToggle value={notation} onChange={setNotation} />}
+            <SheetToggle value={variant} onChange={setVariant} unavailable={originalBlocked} />
+          </div>
         }
       >
         {shownPdf ? (
@@ -965,9 +996,11 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
               // On the Original view: the reader's own marks, without names.
               <AnnotationLayer
                 page={page}
-                labels={labelsLive && variant === "annotated" ? labelSet!.items.filter((l) => l.page === page.pageNumber) : []}
+                labels={labelsLive && variant === "annotated" ? keyedLabels!.items.filter((l) => l.page === page.pageNumber) : []}
                 labelColor={labelSet?.color ?? "#000000"}
                 showLabels={labelsLive && variant === "annotated"}
+                notation={notation}
+                keyMarks={marks.filter((m) => m.page === page.pageNumber)}
                 edits={sheetEdits}
               />
             )}
@@ -1100,6 +1133,16 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
           >
             <KeyNamesIcon />
           </button>
+          <button
+            type="button"
+            className={`icon-toggle${showNoteNames ? " on" : ""}`}
+            aria-pressed={showNoteNames}
+            title={showNoteNames ? "Hide names on falling notes" : "Show names on falling notes"}
+            aria-label={showNoteNames ? "Hide names on falling notes" : "Show names on falling notes"}
+            onClick={() => setShowNoteNames((v) => !v)}
+          >
+            <NoteNamesIcon />
+          </button>
 
           <button
             type="button"
@@ -1168,6 +1211,8 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
           timeline={timeline}
           getBeat={getBeat}
           lockedFromBeat={lockedFrom === null ? null : freeEndBeat}
+          showNames={showNoteNames}
+          notation={notation}
         />
       </Panel>
 
@@ -1175,6 +1220,10 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
         <Keyboard3D
           activeKeys={activeNotes.map((n) => ({ midi: n.midi, role: n.role }))}
           showKeyNames={showKeyNames}
+          notation={notation}
+          // Jianpu follows the key playback is in, so the numbers move with
+          // each key change.
+          keyFifths={keysByMeasure[measureIndexAt(timeline, beat) ?? 0] ?? keysByMeasure[0] ?? 0}
         />
         {audioLoading && (
           <div className="play-keyboard-loading" role="status" aria-label="Loading instrument">

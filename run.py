@@ -843,7 +843,7 @@ def recognition_quality(omr_path, mxl_path, page, single_page=False):
 
 def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font_size=6.5,
                   dpi=None, auto_retry=True, log=print, timeline_path=None, color="#000000",
-                  labels_path=None, stats=None):
+                  labels_path=None, notation="letters", stats=None):
     """Run the full PDF -> Audiveris OMR -> annotated PDF pipeline. Shared by the
     CLI (main(), below) and the web API (server.py) so the two stay in sync.
 
@@ -917,7 +917,8 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
     except Exception as e:
         log(f"Rhythm alignment unavailable; using resolved OMR labels: {e}")
     records = build_records(str(pdf_path), str(omr), num_pages, style=style, octave=octave,
-                             page_omr_overrides=page_overrides, resolved_notes=resolved)
+                             page_omr_overrides=page_overrides, resolved_notes=resolved,
+                             notation=notation)
     if stats is not None:
         stats["notes_named"] = len(resolved["notes"])
 
@@ -937,7 +938,14 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
             log(f"[2b/3] Timeline build failed, Play mode unavailable for this sheet: {e}")
 
     log(f"[3/3] Rendering {output} ...")
-    placed = render(str(pdf_path), str(output), records, font_size=font_size, color=color)
+    marks = []
+    if notation == "numbers":
+        from labels import key_marks
+        # The timeline says where each measure is and which key it is in;
+        # without one the numbers are printed with no "1=" marks.
+        marks = key_marks(tl, size=font_size, style=style)
+    placed = render(str(pdf_path), str(output), records, font_size=font_size, color=color,
+                    key_marks=marks)
     if scales:
         page_size.restore_pdf(output, upload, scales)
     if labels_path is not None:
@@ -947,7 +955,7 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
             from label_export import labels_document
             # Matched to the timeline's notes while both are still in the
             # shrunk copy's points.
-            document = labels_document(placed, tl, font_size=font_size, color=color)
+            document = labels_document(placed, tl, font_size=font_size, color=color, notation=notation)
             if scales:
                 document = page_size.restore_labels(document, scales)
             Path(labels_path).write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
@@ -963,6 +971,8 @@ def main():
     ap.add_argument("-o", "--output", default=None)
     ap.add_argument("--style", choices=["unicode", "ascii"], default="unicode")
     ap.add_argument("--octave", action="store_true")
+    ap.add_argument("--notation", choices=["letters", "numbers"], default="letters",
+                    help="letter names (C D E) or scale degrees of the key (1 2 3)")
     ap.add_argument("--font-size", type=float, default=6.5)
     ap.add_argument("--color", default="#000000",
                      help="Note-label colour as #rrggbb (default: black).")
@@ -985,7 +995,7 @@ def main():
     pdf_path = Path(args.input_pdf)
     output = args.output or str(pdf_path.with_name(pdf_path.stem + " (annotated).pdf"))
 
-    annotate_pdf(pdf_path, output, args.work_dir, style=args.style, octave=args.octave,
+    annotate_pdf(pdf_path, output, args.work_dir, style=args.style, octave=args.octave, notation=args.notation,
                  font_size=args.font_size, dpi=args.dpi, auto_retry=not args.no_auto_retry,
                  timeline_path=args.timeline, color=args.color, labels_path=args.labels)
 

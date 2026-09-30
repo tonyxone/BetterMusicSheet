@@ -19,6 +19,8 @@ export type AnnotationJob = {
   labeled_groups: number | null;
   style: string;
   octave: boolean;
+  /** Absent on jobs created before the option existed (letters). */
+  notation?: "letters" | "numbers";
   font_size: number;
   dpi: number | null;
   /** "#rrggbb". Absent on jobs created before the option existed. */

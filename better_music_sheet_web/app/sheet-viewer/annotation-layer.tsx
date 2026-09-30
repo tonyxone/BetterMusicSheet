@@ -11,6 +11,7 @@
 
 import { useRef, useState } from "react";
 import type { LabelItem } from "@/lib/labels";
+import type { KeyMark, Notation } from "@/lib/notation";
 import { itemKey, moveItems, newId, resolveLabel, type ItemKind, type SelectedItem, type SheetEdits } from "@/lib/edits";
 import { simplify, strokePath } from "@/lib/ink";
 import type { PageInfo } from "./pdf-pages";
@@ -53,6 +54,8 @@ export function AnnotationLayer({
   labels,
   labelColor,
   showLabels,
+  notation = "letters",
+  keyMarks = [],
   edits,
   editor,
 }: {
@@ -61,6 +64,9 @@ export function AnnotationLayer({
   labels: LabelItem[];
   labelColor: string;
   showLabels: boolean;
+  notation?: Notation;
+  /** This page's "1=G" marks, shown with the names when they read as numbers. */
+  keyMarks?: KeyMark[];
   edits: SheetEdits;
   editor?: EditorHooks;
 }) {
@@ -77,7 +83,7 @@ export function AnnotationLayer({
   const strokes = edits.strokes.filter((s) => s.page === page.pageNumber);
   const texts = edits.texts.filter((t) => t.page === page.pageNumber);
   const resolved = showLabels
-    ? labels.map((item) => resolveLabel(item, edits)).filter((l) => l !== null)
+    ? labels.map((item) => resolveLabel(item, edits, notation)).filter((l) => l !== null)
     : [];
   const interactive = !!editor;
   const selectedKeys = new Set((editor?.selection ?? []).map(itemKey));
@@ -341,6 +347,13 @@ export function AnnotationLayer({
       onDoubleClick={interactive ? onDoubleClick : undefined}
     >
       {highlight.map(strokeEl)}
+
+      {showLabels && notation === "numbers" && keyMarks.map((m) => (
+        <text key={`key-${m.x}-${m.y}`} x={m.x} y={m.y} fontSize={m.size} className="sheet-label"
+          fill={labelColor} stroke="#fff" strokeWidth={m.size * 0.16} paintOrder="stroke" pointerEvents="none">
+          {m.text}
+        </text>
+      ))}
 
       {resolved.map((l) => {
         if (l.id === inlineId) return null;

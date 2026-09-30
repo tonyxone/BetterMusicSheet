@@ -19,8 +19,9 @@ import {
   keyLayout,
   normalizedKeyWidth,
   normalizedKeyX,
-  noteName,
+  keyLabel,
 } from "./keyboard-layout";
+import type { Notation } from "@/lib/notation";
 
 const WHITE = "#fbf9f4";
 const BLACK = "#1c1613";
@@ -28,9 +29,14 @@ const BLACK = "#1c1613";
 export function FlatKeyboard({
   activeKeys,
   showKeyNames = false,
+  notation = "letters",
+  keyFifths = 0,
 }: {
   activeKeys: ActiveKey[];
   showKeyNames?: boolean;
+  notation?: Notation;
+  /** The key signature playback is in, for jianpu names. */
+  keyFifths?: number;
 }) {
   const layout = useMemo(() => keyLayout(), []);
 
@@ -66,7 +72,7 @@ export function FlatKeyboard({
             className={`flat-key${k.black ? " black" : ""}${role !== undefined ? " lit" : ""}`}
             style={{ left: `${k.left * 100}%`, width: `${k.width * 100}%`, background }}
           >
-            {showKeyNames && !k.black && <span>{noteName(k.midi, k.midi % 12 === 0)}</span>}
+            {showKeyNames && <span>{keyLabel(k.midi, notation, keyFifths)}</span>}
           </div>
         );
       })}
