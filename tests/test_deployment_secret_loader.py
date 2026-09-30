@@ -10,7 +10,24 @@ import unittest
 SCRIPT = Path(__file__).resolve().parents[1] / 'infra' / 'social-signin-env.sh'
 
 
-@unittest.skipUnless(shutil.which('bash') and shutil.which('jq'), 'requires bash and jq')
+def find_bash():
+    """The bash to source the loader with. On Windows the bash.exe on PATH
+    (System32, WindowsApps) is WSL's launcher, which runs the script inside
+    Linux, where this checkout's Windows paths don't exist - so use Git for
+    Windows' own bash, found next to git."""
+    if os.name != 'nt':
+        return shutil.which('bash')
+    git = shutil.which('git')
+    for folder in Path(git).resolve().parents if git else ():
+        if (folder / 'bin' / 'bash.exe').is_file():
+            return str(folder / 'bin' / 'bash.exe')
+    return None
+
+
+BASH = find_bash()
+
+
+@unittest.skipUnless(BASH and shutil.which('jq'), 'requires bash and jq')
 class DeploymentSecretLoaderTests(unittest.TestCase):
     def load(self, secret):
         with tempfile.TemporaryDirectory() as directory:
@@ -22,7 +39,7 @@ class DeploymentSecretLoaderTests(unittest.TestCase):
                                BMS_TEST_SECRET=json.dumps(secret))
             # -e is how the Actions runner invokes its shell steps. No values
             # should reach Terraform when the source command fails.
-            return subprocess.run(['bash', '-e', '-c',
+            return subprocess.run([BASH, '-e', '-c',
                                    'source "$1"\nprintf "SIGNIN=%s\\nBILLING=%s\\n" "$TF_VAR_apple_cognito_key_id" "$TF_VAR_APPLE_KEY_ID"',
                                    'loader-test', str(SCRIPT)], env=environment,
                                   capture_output=True, text=True)
