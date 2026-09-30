@@ -16,7 +16,7 @@ variable "serverless_worker_image" {
 
 variable "serverless_max_workers" {
   type    = number
-  default = 4
+  default = 16
   validation {
     condition     = var.serverless_max_workers >= 1 && var.serverless_max_workers <= 16 && floor(var.serverless_max_workers) == var.serverless_max_workers
     error_message = "Use an integer worker cap from 1 to 16; higher capacity needs a quota/cost review."

@@ -256,12 +256,13 @@ run clean.
 
 **Knobs** (`infra/serverless.tfvars`): `enable_serverless`,
 `serverless_api_image`, `serverless_worker_image`, `serverless_api_cutover`,
-`serverless_max_workers` (1–16, default 4), `serverless_spot_burst`,
+`serverless_max_workers` (1–16, default 16), `serverless_spot_burst`,
 `alert_email`, `budget_email`.
 
-**Why 4 workers.** The account's regional Fargate quota allows far more, but
-each worker is 4 vCPU / 8 GB, and an unexpected upload burst at a higher cap
-turns directly into an unexpected bill.
+**Why 16 workers.** Each worker is 4 vCPU / 8 GB, so 16 fills the account's
+64-vCPU regional Fargate On-Demand quota exactly; going higher needs a quota
+increase. The cap is also the spend limit: guests can queue jobs freely, so a
+sustained upload burst at 16 workers costs roughly $90 a day.
 
 **Why a queue rather than Lambda for recognition.** Audiveris runs long, and a
 difficult or retried sheet can exceed Lambda's 15-minute ceiling. The API is
