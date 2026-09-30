@@ -1,9 +1,9 @@
 name: Check migration
 on:
-  pull_request:
-  # Also the first stage of every release (release.yml), so nothing is built
-  # or deployed from code that fails these. Not on push: each merge to master
-  # only re-ran what its pull request had just passed.
+  # Only as the first stage of every release (release.yml), so nothing is
+  # built or deployed from code that fails these. Not on pull requests or on
+  # merges to master: the checks gate what ships, and a release is where
+  # that happens.
   workflow_call:
 permissions:
   contents: read
