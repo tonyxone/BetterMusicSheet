@@ -183,6 +183,27 @@ class ServerlessTests(unittest.TestCase):
             db.upsert_subscription(USER, "active", "monthly", "stripe", 100, 200, True, subscription_id="sub_1")
         self.assertEqual(db.get_subscription(USER)["status"], "active")
 
+    def test_a_finished_sheet_keeps_its_note_counts(self):
+        # processor.py's result: labeled groups, notes named, notes printed.
+        def runner(job, directory, tick):
+            fake_runner(job, directory, tick)
+            return {"count": 7, "notes_named": 606, "notes_printed": 634}
+        self.upload()
+        self.assertTrue(worker.process_job("a", runner=runner))
+        job = db.get_annotation_job("a")
+        self.assertEqual((job["labeled_groups"], job["notes_named"], job["notes_printed"]), (7, 606, 634))
+        listed = self.client.get("/api/sheets", headers=self.headers).json()[0]
+        self.assertEqual((listed["notes_named"], listed["notes_printed"]), (606, 634))
+
+    def test_a_scan_has_no_printed_total(self):
+        def runner(job, directory, tick):
+            fake_runner(job, directory, tick)
+            return {"count": 3, "notes_named": 40, "notes_printed": None}
+        self.upload()
+        self.assertTrue(worker.process_job("a", runner=runner))
+        job = db.get_annotation_job("a")
+        self.assertEqual((job["notes_named"], job["notes_printed"]), (40, None))
+
     def test_review_reasons_are_kept_on_the_finished_job(self):
         self.upload()
         with patch.object(worker.alerts, "assess", return_value={"reasons": ["rough"]}):

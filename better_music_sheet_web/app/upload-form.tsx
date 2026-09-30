@@ -1,12 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { DragDropProvider } from "@dnd-kit/react";
+import { isSortable, useSortable } from "@dnd-kit/react/sortable";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { MAX_UPLOAD_BYTES, uploadSheet } from "@/lib/sheet-files";
 import { useAuth } from "./auth-context";
 import { refreshSubscription } from "@/lib/subscription";
 import { resolveUploadAttempt } from "@/lib/upload-gate";
+import { addFiles, combinePhotos, isPhoto, moveFile, removeFile } from "@/lib/photo-pages";
 
 type UploadOption = "notation" | "style" | "fontSize" | "color" | "dpi" | "octave" | "autoRetry";
 
@@ -36,7 +39,11 @@ const LABEL_COLORS = [
 export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
   const router = useRouter();
   const { user, openSignIn } = useAuth();
-  const [file, setFile] = useState<File | null>(null);
+  // One PDF, or one or more photos of the same score in page order - see
+  // lib/photo-pages.ts. Several photos are put together into one sheet.
+  const [files, setFiles] = useState<File[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const [preparing, setPreparing] = useState(false);
   const [style, setStyle] = useState<"unicode" | "ascii">("unicode");
   const [octave, setOctave] = useState(false);
   const [notation, setNotation] = useState<"letters" | "numbers">("letters");
@@ -51,8 +58,17 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
   // Uploading is a members feature (see server.py's upload routes) - a
   // signed-in account with an active subscription, checked fresh here
   // rather than trusted from whatever was cached before sign-in.
+  const photos = files.length > 0 && files.every(isPhoto);
+  const file = files.length === 1 ? files[0] : null;
+
+  function choose(incoming: FileList | null) {
+    const result = addFiles(files, Array.from(incoming ?? []));
+    setFiles(result.files);
+    setError(result.error);
+  }
+
   async function checkAccountAndUpload() {
-    if (!file) return;
+    if (!files.length) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -62,7 +78,18 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
         router.push(attempt.redirectTo);
         return;
       }
-      const job_id = await uploadSheet(file, {
+      // Several photos - or one too large to send as it is - go up as one
+      // PDF, a page per photo in the order shown.
+      let upload = files[0];
+      if (photos && (files.length > 1 || upload.size > MAX_UPLOAD_BYTES)) {
+        setPreparing(true);
+        try {
+          upload = await combinePhotos(files, MAX_UPLOAD_BYTES);
+        } finally {
+          setPreparing(false);
+        }
+      }
+      const job_id = await uploadSheet(upload, {
         style, octave, notation, font_size: fontSize, auto_retry: autoRetry, dpi: dpi ? Number(dpi) : null,
         color,
       });
@@ -76,7 +103,7 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!file) return;
+    if (!files.length) return;
     if (!user) {
       openSignIn(() => void checkAccountAndUpload());
       return;
@@ -84,7 +111,7 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
     void checkAccountAndUpload();
   }
 
-  const ready = !!file && !submitting;
+  const ready = files.length > 0 && !submitting;
 
   return (
     <div className={heading ? "wrap" : "wrap embedded"}>
@@ -104,23 +131,38 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
       </p>
 
       <form onSubmit={handleSubmit} style={{ marginTop: 40 }}>
-        <label className={`dropzone${file ? " has-file" : ""}`}>
+        {/* A label, so a click opens the picker. Drops are handled here too:
+            a hidden file input never receives a drop made on its label. */}
+        <label
+          className={`dropzone${files.length ? " has-file" : ""}${dragging ? " dragging" : ""}`}
+          onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(e) => { e.preventDefault(); setDragging(false); choose(e.dataTransfer.files); }}
+        >
           <input
             type="file"
+            multiple
             accept="application/pdf,.pdf,image/jpeg,image/png,.jpg,.jpeg,.png"
             style={{ display: "none" }}
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            // Cleared, so choosing the same file again still counts as a change.
+            onChange={(e) => { choose(e.target.files); e.target.value = ""; }}
           />
           <div className="icon">📄</div>
-          <div className="title">{file ? file.name : "Drop a PDF or photo here, or click to browse"}</div>
-          {!file ? (
+          <div className="title">
+            {!files.length ? "Drop a PDF or photos here, or click to browse"
+              : photos && files.length > 1 ? `${files.length} photos · one sheet`
+              : files[0].name}
+          </div>
+          {!files.length ? (
             <>
-              <div className="detail">PDF, JPG, or PNG · up to {MAX_UPLOAD_BYTES / 1024 / 1024} MB · one file at a time</div>
+              <div className="detail">PDF, JPG, or PNG · up to {MAX_UPLOAD_BYTES / 1024 / 1024} MB</div>
               <div className="detail">
-                PDF recommended: a digital PDF of the score gives the most accurate labels.
+                Several photos of one score become one sheet, a page each. A digital PDF gives the most accurate labels.
               </div>
             </>
-          ) : (
+          ) : photos ? (
+            <div className="detail">Click or drop to add more pages, then put them in order below.</div>
+          ) : file && (
             <div className="detail">
               {file.size > MAX_UPLOAD_BYTES
                 ? `${(file.size / 1024 / 1024).toFixed(1)} MB · over the ${MAX_UPLOAD_BYTES / 1024 / 1024} MB limit`
@@ -128,6 +170,17 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
             </div>
           )}
         </label>
+
+        {photos ? (
+          <PhotoPages files={files} onChange={setFiles} disabled={submitting} />
+        ) : files.length > 0 && (
+          <div className="picked-file">
+            <button type="button" className="link-button" disabled={submitting}
+              onClick={() => { setFiles([]); setError(null); }}>
+              Remove this file
+            </button>
+          </div>
+        )}
 
         <details className="options">
           <summary>Options</summary>
@@ -233,18 +286,124 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
         <button
           type="submit"
           className={`btn-block${ready ? " ready" : ""}`}
-          disabled={!file || submitting}
+          disabled={!files.length || submitting}
           title={
-            !file ? "Choose a PDF or photo first"
+            !files.length ? "Choose a PDF or photos first"
             : submitting ? "Your sheet is being uploaded"
             : !user ? "Sign in to upload and annotate this sheet"
             : "Upload and annotate this sheet"
           }
         >
-          {submitting ? "Uploading…" : !user && file ? "Sign in to upload" : "Upload"}
+          {preparing ? "Preparing pages…" : submitting ? "Uploading…" : !user && files.length ? "Sign in to upload" : "Upload"}
         </button>
       </form>
     </div>
+  );
+}
+
+// A stable identity per photo, however the list is reordered: keyed by
+// position, a row would be rebuilt mid-drag.
+const photoIds = new WeakMap<File, string>();
+let nextPhotoId = 0;
+
+function photoId(file: File) {
+  let id = photoIds.get(file);
+  if (!id) photoIds.set(file, id = `photo-${nextPhotoId++}`);
+  return id;
+}
+
+// A small thumbnail per photo, made once. Showing the photo itself would have
+// the browser redraw a 12-megapixel image at 44px in every row as they move.
+// A data URL, so there is nothing to release afterwards.
+const THUMB_WIDTH = 88, THUMB_HEIGHT = 112;
+const thumbnails = new WeakMap<File, Promise<string>>();
+
+function thumbnail(file: File) {
+  let made = thumbnails.get(file);
+  if (!made) {
+    made = createImageBitmap(file, { imageOrientation: "from-image" }).then((bitmap) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = THUMB_WIDTH;
+      canvas.height = THUMB_HEIGHT;
+      const context = canvas.getContext("2d")!;
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, THUMB_WIDTH, THUMB_HEIGHT);
+      // Cover the box, cropping the overflow, like object-fit: cover.
+      const scale = Math.max(THUMB_WIDTH / bitmap.width, THUMB_HEIGHT / bitmap.height);
+      const width = bitmap.width * scale, height = bitmap.height * scale;
+      context.drawImage(bitmap, (THUMB_WIDTH - width) / 2, (THUMB_HEIGHT - height) / 2, width, height);
+      bitmap.close();
+      return canvas.toDataURL("image/jpeg", 0.8);
+    });
+    thumbnails.set(file, made);
+  }
+  return made;
+}
+
+/** The chosen photos in page order: drag a page to a new place, ✕ to remove it.
+ *
+ * dnd-kit (@dnd-kit/react) does the dragging: the page follows the pointer
+ * and the others glide out of its way, then it settles where it's dropped.
+ * With a mouse it moves after a few pixels; by touch after a short press and
+ * hold, so a quick swipe still scrolls the page. By keyboard: Tab to a page,
+ * Space to pick it up, the arrow keys to move it, Space to drop, Escape to
+ * cancel - announced to screen readers. The list itself only changes on the
+ * drop. */
+function PhotoPages({ files, onChange, disabled }: {
+  files: File[];
+  onChange: (files: File[]) => void;
+  disabled: boolean;
+}) {
+  return (
+    <>
+      <DragDropProvider
+        onDragEnd={(event) => {
+          const { source } = event.operation;
+          if (event.canceled || !isSortable(source)) return;
+          onChange(moveFile(files, source.initialIndex, source.index));
+        }}
+      >
+        <ol className="photo-pages" aria-label="Pages, in order">
+          {files.map((file, index) => (
+            <PhotoPage key={photoId(file)} file={file} index={index} disabled={disabled}
+              onRemove={() => onChange(removeFile(files, index))} />
+          ))}
+        </ol>
+      </DragDropProvider>
+      {files.length > 1 && <p className="photo-pages-hint">Drag the pages into order.</p>}
+    </>
+  );
+}
+
+function PhotoPage({ file, index, disabled, onRemove }: {
+  file: File;
+  index: number;
+  disabled: boolean;
+  onRemove: () => void;
+}) {
+  const { ref, isDragging, isDropping } = useSortable({ id: photoId(file), index, disabled });
+  const [preview, setPreview] = useState<string | null>(null);
+  useEffect(() => {
+    let current = true;
+    thumbnail(file).then((url) => { if (current) setPreview(url); }, () => { /* The row still works without one. */ });
+    return () => { current = false; };
+  }, [file]);
+  return (
+    <li ref={ref} className={isDragging || isDropping ? "dragging" : undefined}>
+      <span className="photo-grip" aria-hidden="true">⠿</span>
+      {preview
+        // eslint-disable-next-line @next/next/no-img-element -- a local thumbnail, nothing to optimize
+        ? <img src={preview} alt="" draggable={false} />
+        : <span className="photo-thumb-placeholder" />}
+      <div className="photo-page-text">
+        {/* Numbered by CSS, not by index: it renumbers live as pages move
+            during a drag, where the list itself only changes on the drop. */}
+        <strong className="photo-page-number" />
+        <span>{file.name}</span>
+      </div>
+      <button type="button" className="photo-remove" onClick={onRemove}
+        disabled={disabled} aria-label={`Remove page ${index + 1}`} title="Remove">✕</button>
+    </li>
   );
 }
 

@@ -122,6 +122,15 @@ class NotMusicTests(unittest.TestCase):
             result = json.loads((directory / "result.json").read_text())
         self.assertEqual(result, {"error": NOT_MUSIC_MESSAGE, "permanent": True})
 
+    def test_a_finished_run_reports_its_counts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory / "options.json").write_text("{}")
+            counts = {"count": 7, "notes_named": 606, "notes_printed": 634}
+            with patch.object(processor, "generate", return_value=counts):
+                self.assertEqual(processor.main(directory), 0)
+            self.assertEqual(json.loads((directory / "result.json").read_text()), counts)
+
     def test_a_real_crash_still_propagates_to_be_retried(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
