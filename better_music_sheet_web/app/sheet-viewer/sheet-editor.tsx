@@ -19,8 +19,10 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { fetchSheetAssets, fetchSheetFile } from "@/lib/sheet-files";
 import { loadLabels, type LabelItem, type LabelSet } from "@/lib/labels";
 import { correctionsForRetype, EMPTY_EDITS, isEmptyEdits, resolveLabel, useSheetEdits, type LabelEdit, type SaveState, type SheetEdits } from "@/lib/edits";
+import { fromNumbered, keyMarks, useNotation, withKeys, type KeyMark } from "@/lib/notation";
 import type { Timeline } from "@/lib/timeline";
 import type { SheetVariant } from "../sheet-toggle";
+import { NotationToggle } from "../notation-toggle";
 import { PdfPages, type PageInfo } from "./pdf-pages";
 import { AnnotationLayer, itemKey, moveItems, type EditorHooks, type InlineTarget, type SelectedItem, type Tool } from "./annotation-layer";
 
@@ -136,7 +138,7 @@ export function SheetEditor({ jobId, variant, exportRef }: {
         ]);
         if (!annotated && !original) throw new Error("no PDF to show");
         // Without the original there is nothing clean to draw the names over.
-        const labels = original ? await loadLabels(jobId, annotated, timeline) : null;
+        const labels = original ? withKeys(await loadLabels(jobId, annotated, timeline), timeline) : null;
         if (!cancelled) setLoaded({ original, annotated, timeline, labels });
       } catch (err) {
         console.error("Loading the sheet preview failed:", err);
@@ -162,6 +164,13 @@ export function SheetEditor({ jobId, variant, exportRef }: {
     return map;
   }, [loaded]);
   const labelsById = useMemo(() => new Map((loaded?.labels?.items ?? []).map((l) => [l.id, l])), [loaded]);
+  const [notation, setNotation] = useNotation(loaded?.labels?.notation);
+  const marks = useMemo(() => keyMarks(loaded?.timeline ?? null), [loaded]);
+  const marksByPage = useMemo(() => {
+    const map = new Map<number, KeyMark[]>();
+    for (const m of marks) map.set(m.page, [...(map.get(m.page) ?? []), m]);
+    return map;
+  }, [marks]);
 
   useEffect(() => {
     if (!exportRef) return;
@@ -170,10 +179,11 @@ export function SheetEditor({ jobId, variant, exportRef }: {
       // What the preview shows: the names over the original, the original
       // alone, or the annotated copy when the names can't be drawn.
       const exportBase = variant === "original" || labelsLive ? loaded.original! : loaded.annotated ?? loaded.original!;
-      return exportCustomizedPdf({ base: exportBase, labels: showNames ? loaded.labels : null, edits: current() ?? EMPTY_EDITS });
+      return exportCustomizedPdf({ base: exportBase, labels: showNames ? loaded.labels : null, edits: current() ?? EMPTY_EDITS,
+        notation, keyMarks: notation === "numbers" ? marks : [] });
     } : null;
     return () => { exportRef.current = null; };
-  }, [exportRef, loaded, labelsLive, showNames, variant, current]);
+  }, [exportRef, loaded, labelsLive, showNames, variant, current, notation, marks]);
 
   function stopEditing() {
     setEditing(false);
@@ -316,7 +326,10 @@ export function SheetEditor({ jobId, variant, exportRef }: {
     const item = labelsById.get(id);
     const now = current();
     if (!item || !now) return;
-    const text = raw.trim();
+    // A scale degree typed while names read as numbers is stored as the
+    // letter it means, like every other name.
+    const typed = raw.trim();
+    const text = (notation === "numbers" && item.key !== undefined ? fromNumbered(typed, item.key, item.text) : null) ?? typed;
     const edit: LabelEdit = { ...(now.labels[id] ?? {}) };
     if (!text) {
       update((d) => ({ ...d, labels: withLabelEdit(d.labels, id, { ...edit, hidden: true }) }));
@@ -338,12 +351,12 @@ export function SheetEditor({ jobId, variant, exportRef }: {
         corrections = result.corrections;
         message = text === item.text
           ? "Back to the printed name; playback restored."
-          : `Playback now plays ${text}${result.changed > 1 ? ` for ${result.changed} notes` : ""}.`;
+          : `Playback now plays ${typed}${result.changed > 1 ? ` for ${result.changed} notes` : ""}.`;
       }
     }
     update((d) => ({ ...d, labels: withLabelEdit(d.labels, id, edit), corrections }));
     edits.setNotice(message);
-  }, [labelsById, current, update, loaded, edits]);
+  }, [labelsById, current, update, loaded, edits, notation]);
 
   /** Names back where and as they were printed, with their playback. */
   const resetLabels = useCallback((ids: string[]) => {
@@ -507,7 +520,7 @@ export function SheetEditor({ jobId, variant, exportRef }: {
   const labelColor = loaded.labels?.color ?? "#000000";
   const single = visibleSelection.length === 1 ? visibleSelection[0] : null;
   const selectedLabel = single?.kind === "label" ? labelsById.get(single.id) : undefined;
-  const selectedResolved = selectedLabel ? resolveLabel(selectedLabel, doc) : null;
+  const selectedResolved = selectedLabel ? resolveLabel(selectedLabel, doc, notation) : null;
   const chord = selectedLabel ? labelsByPage.get(selectedLabel.page)?.filter((l) => l.group === selectedLabel.group) ?? [] : [];
   const selectedLabelIds = visibleSelection.filter((s) => s.kind === "label").map((s) => s.id);
   const hasNameChanges = Object.keys(doc.labels).length > 0 || Object.keys(doc.corrections).length > 0;
@@ -517,7 +530,7 @@ export function SheetEditor({ jobId, variant, exportRef }: {
     if (!inline || inline.page !== page.pageNumber || !doc) return null;
     if (inline.kind === "label") {
       const item = labelsById.get(inline.id);
-      const l = item && resolveLabel(item, doc);
+      const l = item && resolveLabel(item, doc, notation);
       if (!l) return null;
       const fontPx = Math.max(14, l.size * inline.pxPerPt);
       return (
@@ -636,6 +649,7 @@ export function SheetEditor({ jobId, variant, exportRef }: {
               {!isEmptyEdits(doc) && <span className="editor-status">Showing your changes</span>}
               {variant === "annotated" && !labelsLive && <span className="editor-status">Names on this sheet can&apos;t be moved; you can still draw and add notes.</span>}
               <div className="bar-end">
+                {showNames && <NotationToggle value={notation} onChange={setNotation} />}
                 {resetControl}
                 {zoomControls}
               </div>
@@ -680,6 +694,7 @@ export function SheetEditor({ jobId, variant, exportRef }: {
               </div>
               <span className="editor-status" aria-live="polite">{SAVE_TEXT[edits.saveState]}</span>
               <div className="bar-end">
+                {showNames && <NotationToggle value={notation} onChange={setNotation} />}
                 {zoomControls}
                 <button type="button" className="editor-btn primary" onClick={stopEditing}>Done</button>
               </div>
@@ -776,6 +791,8 @@ export function SheetEditor({ jobId, variant, exportRef }: {
               labels={showNames ? labelsByPage.get(page.pageNumber) ?? [] : []}
               labelColor={labelColor}
               showLabels={showNames}
+              notation={notation}
+              keyMarks={marksByPage.get(page.pageNumber)}
               edits={doc}
               editor={hooks}
             />

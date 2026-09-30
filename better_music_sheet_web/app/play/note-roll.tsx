@@ -14,7 +14,8 @@
 // second through state would re-render the whole page to move some pixels.
 
 import { useEffect, useRef } from "react";
-import type { Timeline } from "@/lib/timeline";
+import { timelineNoteName, type Notation } from "@/lib/notation";
+import { nameSpans, type Timeline } from "@/lib/timeline";
 import {
   CSS_LEFT_ON_DARK,
   CSS_RIGHT_ON_DARK,
@@ -48,6 +49,12 @@ const FLASH_BEATS = 0.35;
 /** White foreground mixed over a note while its piano key is held. */
 const ACTIVE_FOREGROUND_ALPHA = 0.42;
 
+/** Note names on the bars: sized to the lane, within these bounds, in px.
+ * Below the smallest a name couldn't be read, so a bar too short for it
+ * goes without. */
+const NAME_MIN_PX = 7;
+const NAME_MAX_PX = 12;
+
 function roundedBar(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -75,6 +82,8 @@ export function NoteRoll({
   timeline,
   getBeat,
   lockedFromBeat,
+  showNames = false,
+  notation = "letters",
 }: {
   timeline: Timeline;
   /** The live position, in beats. Called once per frame - it must be cheap
@@ -83,16 +92,21 @@ export function NoteRoll({
   /** Where a signed-out visitor's preview ends, or null when unrestricted.
    * Notes past it are drawn muted, matching the dimmed measures on the sheet. */
   lockedFromBeat: number | null;
+  /** Each note's name, letter or jianpu, in the middle of its bar. */
+  showNames?: boolean;
+  notation?: Notation;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Read inside the animation frame, so changing either doesn't restart it.
   const getBeatRef = useRef(getBeat);
   const lockedRef = useRef(lockedFromBeat);
+  const namesRef = useRef<Notation | null>(showNames ? notation : null);
   useEffect(() => {
     getBeatRef.current = getBeat;
     lockedRef.current = lockedFromBeat;
-  }, [getBeat, lockedFromBeat]);
+    namesRef.current = showNames ? notation : null;
+  }, [getBeat, lockedFromBeat, showNames, notation]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -106,7 +120,13 @@ export function NoteRoll({
     // Sorted once: the draw loop binary-searches this to find the first note
     // in view, so a 5,000-note piece costs the same as a 50-note one.
     const notes = [...timeline.notes].sort((a, b) => a.start_beat - b.start_beat);
-
+    // Both spellings of every name up front, so switching costs nothing and
+    // the frame loop never builds a string.
+    const names = {
+      letters: notes.map((n) => timelineNoteName(n, "letters")),
+      numbers: notes.map((n) => timelineNoteName(n, "numbers")),
+    };
+    const nameEnds = nameSpans(notes, MIN_BAR_BEATS);
     let width = 0;
     let height = 0;
     let raf = 0;
@@ -174,15 +194,20 @@ export function NoteRoll({
       // Black-key lanes overlap their white neighbours, exactly as the keys
       // themselves do, so they are drawn in a second pass and sit on top -
       // otherwise whichever note happened to start later would win. A third
-      // pass puts every flash above every bar. Three cheap loops rather than
-      // one loop plus a sort, so nothing is allocated per frame.
-      const pass = (phase: 0 | 1 | 2) => {
+      // pass puts every flash above every bar, and a fourth every name above
+      // everything. Cheap loops rather than one loop plus a sort, so nothing
+      // is allocated per frame.
+      const shownNames = namesRef.current ? names[namesRef.current] : null;
+      const pass = (phase: 0 | 1 | 2 | 3) => {
         for (let i = start; i < notes.length; i++) {
           const n = notes[i];
           if (n.start_beat > windowEnd) break;
           if (phase < 2 && isBlackKey(n.midi) !== (phase === 1)) continue;
 
-          const beats = Math.max(
+          // A name spans the whole held note, tied pieces and all; the
+          // pieces after the first, and duplicates, carry none.
+          if (phase === 3 && nameEnds[i] < 0) continue;
+          const beats = phase === 3 ? nameEnds[i] - n.start_beat : Math.max(
             MIN_BAR_BEATS,
             n.is_grace || n.duration_beats <= 0 ? 0 : n.duration_beats,
           );
@@ -197,6 +222,20 @@ export function NoteRoll({
           const cx = normalizedKeyX(layout, n.midi) * width;
           const w = normalizedKeyWidth(layout, n.midi) * width;
           const past = locked !== null && n.start_beat >= locked;
+
+          if (phase === 3) {
+            // Fixed in the middle of the held note, falling with it.
+            const text = shownNames![i];
+            const size = Math.min(NAME_MAX_PX, Math.max(NAME_MIN_PX, w * 0.72));
+            if (!text || bottom - top < size + 2) continue;
+            ctx.globalAlpha = past ? 0.3 : 1;
+            ctx.font = `700 ${size}px system-ui, sans-serif`;
+            // A dark edge keeps a name readable where it spills past a
+            // narrow black-key lane.
+            ctx.strokeText(text, cx, (top + bottom) / 2);
+            ctx.fillText(text, cx, (top + bottom) / 2);
+            continue;
+          }
 
           if (phase === 2) {
             // A translucent white foreground follows the note for its active
@@ -238,6 +277,15 @@ export function NoteRoll({
       pass(0);
       pass(1);
       pass(2);
+      if (shownNames) {
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.lineJoin = "round";
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = "rgba(16, 12, 10, 0.75)";
+        ctx.fillStyle = "#ffffff";
+        pass(3);
+      }
 
       ctx.globalAlpha = 1;
 

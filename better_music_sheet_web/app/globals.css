@@ -265,6 +265,7 @@ details.options[open] summary::before { content: "▾ "; }
 .play-panel-bar { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .play-panel-bar .play-panel-head { flex: 1 1 auto; }
 .play-panel-actions { flex: none; padding-right: 12px; }
+.play-panel-toggles { display: flex; align-items: center; gap: 6px; }
 
 .preview-card {
   background: var(--card); border: 1px solid var(--paper-deep); border-radius: 20px; padding: 16px;

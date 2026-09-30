@@ -12,6 +12,8 @@
 // close to centre, and A# right. Centring them (the naive layout) is the
 // single thing that makes a drawn keyboard look wrong.
 
+import { toNumbered, type Notation } from "@/lib/notation";
+
 export const FIRST_MIDI = 21; // A0
 export const LAST_MIDI = 108; // C8
 
@@ -49,6 +51,14 @@ export function isBlackKey(midi: number) {
 export function noteName(midi: number, withOctave = false) {
   const pc = ((midi % 12) + 12) % 12;
   return NOTE_NAMES[pc] + (withOctave ? String(Math.floor(midi / 12) - 1) : "");
+}
+
+/** What a key is labelled with: the white keys only, either by letter - with
+ * the octave on each C (C4) - or by that letter's jianpu number in the key
+ * playback is in, without a sharp or flat (in G major, G reads 1 and F 7). */
+export function keyLabel(midi: number, notation: Notation, keyFifths: number) {
+  if (isBlackKey(midi)) return "";
+  return notation === "numbers" ? toNumbered(noteName(midi), keyFifths).replace(/\D/g, "") : noteName(midi, midi % 12 === 0);
 }
 
 export type KeyLayout = {

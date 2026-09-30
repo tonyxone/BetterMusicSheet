@@ -91,7 +91,8 @@ def generate(raw, directory, options):
                          labels_path=directory / "labels.json",
                          # .get, not [...]: jobs queued before this option existed
                          # have no colour in their options.json and must still run.
-                         color=options.get("color", "#000000"), log=log)
+                         color=options.get("color", "#000000"),
+                         notation=options.get("notation", "letters"), log=log)
     return count
 
 

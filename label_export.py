@@ -35,8 +35,12 @@ def _notes_by_page(timeline):
     return pages
 
 
-def labels_document(placed, timeline=None, font_size=6.5, color="#000000"):
-    """``placed``: [(page_number, block), ...] as returned by annotate.render()."""
+def labels_document(placed, timeline=None, font_size=6.5, color="#000000", notation="letters"):
+    """``placed``: [(page_number, block), ...] as returned by annotate.render().
+
+    Item text is always the letter name, whatever notation was printed: the
+    viewer shows numbers itself (from each item's 'key'), and retyping and
+    playback corrections read letters."""
     notes = _notes_by_page(timeline)
     items = []
     block_numbers = {}
@@ -44,7 +48,9 @@ def labels_document(placed, timeline=None, font_size=6.5, color="#000000"):
         number = block_numbers[page] = block_numbers.get(page, -1) + 1
         group = f"{page}-{number}"
         boxes = block.get('note_boxes') or []
-        for line, (text, y, offset) in enumerate(zip(block['labels'], block['ys'], block['label_x_offsets'])):
+        keys = block.get('keys') or []
+        texts = block.get('letters') or block['labels']
+        for line, (text, y, offset) in enumerate(zip(texts, block['ys'], block['label_x_offsets'])):
             note_ids = []
             if line < len(boxes) and boxes[line]:
                 box = boxes[line]
@@ -52,11 +58,14 @@ def labels_document(placed, timeline=None, font_size=6.5, color="#000000"):
                 for nx, ny, note_id in notes.get(page, ()):
                     if hypot(nx - cx, ny - cy) <= MATCH_DISTANCE_PT and note_id not in note_ids:
                         note_ids.append(note_id)
-            items.append({
+            item = {
                 'id': f"{group}-{line}", 'group': group, 'page': page,
                 # x is the text's horizontal centre, y its baseline - the same
                 # anchor annotate.render() draws from.
                 'x': round(block['x'] + offset, 2), 'y': round(y, 2),
                 'size': round(block['fs'], 2), 'text': text, 'notes': note_ids,
-            })
-    return {'version': 1, 'font_size': font_size, 'color': color, 'items': items}
+            }
+            if line < len(keys) and keys[line] is not None:
+                item['key'] = keys[line]
+            items.append(item)
+    return {'version': 1, 'font_size': font_size, 'color': color, 'notation': notation, 'items': items}

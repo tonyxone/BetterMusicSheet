@@ -393,6 +393,7 @@ class UploadRequest(BaseModel):
     content_type: str = "application/octet-stream"
     style: str = "unicode"
     octave: bool = False
+    notation: Literal["letters", "numbers"] = "letters"
     font_size: float = Field(default=6.5, ge=3, le=20, allow_inf_nan=False)
     dpi: Optional[DpiOption] = None
     auto_retry: bool = True
@@ -426,7 +427,7 @@ def reserve_upload(body, user_id):
     _check_free_sheet_limit(user_id)
     try:
         return job_state.create(uuid.uuid4().hex, user_id, body.filename,
-                                body.model_dump(include={"style", "octave", "font_size", "dpi", "auto_retry", "color"}),
+                                body.model_dump(include={"style", "octave", "notation", "font_size", "dpi", "auto_retry", "color"}),
                                 body.size)
     except job_state.Busy as exc:
         raise HTTPException(409, str(exc)) from exc
@@ -472,7 +473,7 @@ def complete_upload(job_id: str, user_id: str = Depends(get_signed_in_user_id)):
 @app.post("/api/sheets", status_code=202)
 async def submit_sheet(
     file: UploadFile = File(...), style: str = Form("unicode"),
-    octave: bool = Form(False), font_size: float = Form(6.5),
+    octave: bool = Form(False), notation: str = Form("letters"), font_size: float = Form(6.5),
     dpi: Optional[int] = Form(None), auto_retry: bool = Form(True),
     color: str = Form("#000000"),
     user_id: str = Depends(get_signed_in_user_id),
@@ -493,7 +494,7 @@ async def submit_sheet(
                 target.write(chunk)
         try:
             body = UploadRequest(filename=file.filename or "", size=size, style=style,
-                                 octave=octave, font_size=font_size, dpi=dpi, auto_retry=auto_retry,
+                                 octave=octave, notation=notation, font_size=font_size, dpi=dpi, auto_retry=auto_retry,
                                  color=color)
         except ValueError:
             raise HTTPException(400, "Invalid file or annotation options.")

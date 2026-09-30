@@ -21,6 +21,7 @@
 import { Component, useEffect, useMemo, useRef, type ReactNode } from "react";
 import * as THREE from "three";
 import { FlatKeyboard } from "./keyboard-flat";
+import type { Notation } from "@/lib/notation";
 import {
   BLACK_W,
   COLOR_LEFT,
@@ -32,7 +33,7 @@ import {
   WHITE_W,
   isBlackKey,
   keyLayout,
-  noteName,
+  keyLabel,
 } from "./keyboard-layout";
 
 const WHITE_D = 5.6;
@@ -121,9 +122,14 @@ export type ActiveKey = { midi: number; role: number };
 export function Keyboard3D({
   activeKeys,
   showKeyNames = false,
+  notation = "letters",
+  keyFifths = 0,
 }: {
   activeKeys: ActiveKey[];
   showKeyNames?: boolean;
+  notation?: Notation;
+  /** The key signature playback is in, for jianpu names. */
+  keyFifths?: number;
 }) {
   const mountRef = useRef<HTMLDivElement>(null);
   const labelLayerRef = useRef<HTMLDivElement>(null);
@@ -331,10 +337,10 @@ export function Keyboard3D({
     const out: { midi: number; black: boolean; text: string }[] = [];
     for (let midi = FIRST_MIDI; midi <= LAST_MIDI; midi++) {
       const black = isBlackKey(midi);
-      out.push({ midi, black, text: black ? "" : noteName(midi, midi % 12 === 0) });
+      out.push({ midi, black, text: keyLabel(midi, notation, keyFifths) });
     }
     return out;
-  }, []);
+  }, [notation, keyFifths]);
 
   const on = useMemo(() => new Set(activeKeys.map((k) => k.midi)), [activeKeys]);
 
@@ -374,7 +380,7 @@ class KeyboardFallback extends Component<{ fallback: ReactNode; children: ReactN
   }
 }
 
-export function PianoKeyboard(props: { activeKeys: ActiveKey[]; showKeyNames?: boolean }) {
+export function PianoKeyboard(props: { activeKeys: ActiveKey[]; showKeyNames?: boolean; notation?: Notation; keyFifths?: number }) {
   return (
     <KeyboardFallback fallback={<FlatKeyboard {...props} />}>
       <Keyboard3D {...props} />

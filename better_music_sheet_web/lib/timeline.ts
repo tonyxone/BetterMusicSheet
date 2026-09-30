@@ -20,6 +20,12 @@ export type TimelineNote = {
   fingering?: string | null;
   tie_start?: boolean;
   tie_stop?: boolean;
+  /** The key signature in force, as fifths (-7..7). */
+  key_fifths?: number;
+  /** The note as written: letter, alteration in semitones, octave. */
+  step?: string;
+  alter?: number;
+  octave?: number;
   measure_index: number;
   /** 0 = top staff (right hand), 1 = bottom staff. */
   role: number;
@@ -83,4 +89,27 @@ export function notesAtBeat(timeline: Timeline, beat: number): TimelineNote[] {
 
 export function measureIndexAt(timeline: Timeline, beat: number): number | null {
   return timeline.measures.find((m) => beat >= m.start_beat && beat < m.start_beat + m.length_beats)?.index ?? null;
+}
+
+/** Where each note's name ends, in beats, for notes sorted by start: one name
+ * per struck note, spanning its tied continuations - which get -1, as does a
+ * second copy of a note two voices strike together. ``minBeats`` is the
+ * shortest a note is drawn, grace notes included. */
+export function nameSpans(notes: TimelineNote[], minBeats: number) {
+  const ends = new Float64Array(notes.length);
+  // Per key, the note whose name the next tied piece would extend.
+  const heads = new Map<number, { index: number; start: number; end: number }>();
+  notes.forEach((n, i) => {
+    const end = n.start_beat + Math.max(minBeats, n.is_grace || n.duration_beats <= 0 ? 0 : n.duration_beats);
+    const head = heads.get(n.midi);
+    if (head && (Math.abs(head.start - n.start_beat) < 1e-6
+        || (n.tie_stop && Math.abs(head.end - n.start_beat) < 1e-6))) {
+      ends[i] = -1;
+      if (end > head.end) ends[head.index] = head.end = end;
+      return;
+    }
+    ends[i] = end;
+    heads.set(n.midi, { index: i, start: n.start_beat, end });
+  });
+  return ends;
 }

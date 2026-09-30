@@ -26,9 +26,16 @@ export type LabelItem = {
   text: string;
   /** Timeline ids (printed_id, else source_id) of the notes this names. */
   notes: string[];
+  /** The key signature (in fifths) of the note this names, for showing it
+   * as a scale degree - see notation.ts. Absent until known. */
+  key?: number;
 };
 
-export type LabelSet = { color: string; items: LabelItem[]; source: "data" | "pdf" };
+export type LabelSet = {
+  color: string; items: LabelItem[]; source: "data" | "pdf";
+  /** How the sheet was made to show its names, from the upload's option. */
+  notation?: "letters" | "numbers";
+};
 
 // ---- note names ------------------------------------------------------------
 
@@ -111,11 +118,13 @@ export async function loadLabels(jobId: string, annotatedPdf: ArrayBuffer | null
     if (assets?.labels) {
       const res = await fetchSheetFile(jobId, "labels");
       if (res.ok) {
-        const data = await res.json() as { color?: string; items?: unknown[] };
+        const data = await res.json() as { color?: string; items?: unknown[]; notation?: string };
         const items = (data.items ?? []).filter(validItem).map((item) => ({
           ...item, group: item.group ?? item.id, notes: Array.isArray(item.notes) ? item.notes : [],
+          key: Number.isInteger(item.key) ? item.key : undefined,
         }));
-        if (items.length) return { color: data.color ?? "#000000", items, source: "data" };
+        const notation = data.notation === "numbers" ? "numbers" as const : "letters" as const;
+        if (items.length) return { color: data.color ?? "#000000", items, source: "data", notation };
       }
     }
   } catch (err) {

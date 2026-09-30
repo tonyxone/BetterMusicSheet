@@ -143,6 +143,10 @@ def layout_page_records(page_records, font_size, measure_font, margin_pt, page):
             # through so the placed labels can be exported and tied back to
             # the playback timeline's notes (see label_export.py).
             'note_boxes': rec.get('note_boxes_pt', []),
+            # Also aligned with 'labels': each line as a letter name and its
+            # key signature, whatever notation was printed.
+            'letters': rec.get('letters', rec['labels']),
+            'keys': rec.get('keys', []),
         }
 
     def neighbourhood(rec, fs, widths, line_h):
