@@ -30,13 +30,10 @@ export function FlatKeyboard({
   activeKeys,
   showKeyNames = false,
   notation = "letters",
-  keyFifths = 0,
 }: {
   activeKeys: ActiveKey[];
   showKeyNames?: boolean;
   notation?: Notation;
-  /** The key signature playback is in, for jianpu names. */
-  keyFifths?: number;
 }) {
   const layout = useMemo(() => keyLayout(), []);
 
@@ -72,7 +69,7 @@ export function FlatKeyboard({
             className={`flat-key${k.black ? " black" : ""}${role !== undefined ? " lit" : ""}`}
             style={{ left: `${k.left * 100}%`, width: `${k.width * 100}%`, background }}
           >
-            {showKeyNames && <span>{keyLabel(k.midi, notation, keyFifths)}</span>}
+            {showKeyNames && <span>{keyLabel(k.midi, notation)}</span>}
           </div>
         );
       })}

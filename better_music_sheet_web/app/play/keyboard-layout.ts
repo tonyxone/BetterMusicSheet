@@ -54,11 +54,10 @@ export function noteName(midi: number, withOctave = false) {
 }
 
 /** What a key is labelled with: the white keys only, either by letter - with
- * the octave on each C (C4) - or by that letter's jianpu number in the key
- * playback is in, without a sharp or flat (in G major, G reads 1 and F 7). */
-export function keyLabel(midi: number, notation: Notation, keyFifths: number) {
+ * the octave on each C (C4) - or by its jianpu number, C = 1 to B = 7. */
+export function keyLabel(midi: number, notation: Notation) {
   if (isBlackKey(midi)) return "";
-  return notation === "numbers" ? toNumbered(noteName(midi), keyFifths).replace(/\D/g, "") : noteName(midi, midi % 12 === 0);
+  return notation === "numbers" ? toNumbered(noteName(midi)) : noteName(midi, midi % 12 === 0);
 }
 
 export type KeyLayout = {

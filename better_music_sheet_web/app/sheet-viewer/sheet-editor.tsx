@@ -19,7 +19,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { fetchSheetAssets, fetchSheetFile } from "@/lib/sheet-files";
 import { loadLabels, type LabelItem, type LabelSet } from "@/lib/labels";
 import { correctionsForRetype, EMPTY_EDITS, isEmptyEdits, resolveLabel, useSheetEdits, type LabelEdit, type SaveState, type SheetEdits } from "@/lib/edits";
-import { fromNumbered, keyMarks, useNotation, withKeys, type KeyMark } from "@/lib/notation";
+import { fromNumbered, useNotation } from "@/lib/notation";
 import type { Timeline } from "@/lib/timeline";
 import type { SheetVariant } from "../sheet-toggle";
 import { NotationToggle } from "../notation-toggle";
@@ -141,7 +141,7 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
         ]);
         if (!annotated && !original) throw new Error("no PDF to show");
         // Without the original there is nothing clean to draw the names over.
-        const labels = original ? withKeys(await loadLabels(jobId, annotated, timeline), timeline) : null;
+        const labels = original ? await loadLabels(jobId, annotated, timeline) : null;
         if (!cancelled) setLoaded({ original, annotated, timeline, labels });
       } catch (err) {
         console.error("Loading the sheet preview failed:", err);
@@ -168,12 +168,6 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
   }, [loaded]);
   const labelsById = useMemo(() => new Map((loaded?.labels?.items ?? []).map((l) => [l.id, l])), [loaded]);
   const [notation, setNotation] = useNotation(loaded?.labels?.notation);
-  const marks = useMemo(() => keyMarks(loaded?.timeline ?? null), [loaded]);
-  const marksByPage = useMemo(() => {
-    const map = new Map<number, KeyMark[]>();
-    for (const m of marks) map.set(m.page, [...(map.get(m.page) ?? []), m]);
-    return map;
-  }, [marks]);
 
   useEffect(() => {
     if (!exportRef) return;
@@ -183,10 +177,10 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
       // alone, or the annotated copy when the names can't be drawn.
       const exportBase = variant === "original" || labelsLive ? loaded.original! : loaded.annotated ?? loaded.original!;
       return exportCustomizedPdf({ base: exportBase, labels: showNames ? loaded.labels : null, edits: current() ?? EMPTY_EDITS,
-        notation, keyMarks: notation === "numbers" ? marks : [] });
+        notation });
     } : null;
     return () => { exportRef.current = null; };
-  }, [exportRef, loaded, labelsLive, showNames, variant, current, notation, marks]);
+  }, [exportRef, loaded, labelsLive, showNames, variant, current, notation]);
 
   function stopEditing() {
     setEditing(false);
@@ -329,10 +323,10 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
     const item = labelsById.get(id);
     const now = current();
     if (!item || !now) return;
-    // A scale degree typed while names read as numbers is stored as the
-    // letter it means, like every other name.
+    // A number typed while names read as numbers is stored as the letter
+    // it means, like every other name.
     const typed = raw.trim();
-    const text = (notation === "numbers" && item.key !== undefined ? fromNumbered(typed, item.key, item.text) : null) ?? typed;
+    const text = (notation === "numbers" ? fromNumbered(typed, item.text) : null) ?? typed;
     const edit: LabelEdit = { ...(now.labels[id] ?? {}) };
     if (!text) {
       update((d) => ({ ...d, labels: withLabelEdit(d.labels, id, { ...edit, hidden: true }) }));
@@ -808,7 +802,6 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
               labelColor={labelColor}
               showLabels={showNames}
               notation={notation}
-              keyMarks={marksByPage.get(page.pageNumber)}
               edits={doc}
               editor={hooks}
             />

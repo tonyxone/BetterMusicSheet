@@ -28,7 +28,7 @@ import { applyCorrections, validCorrection } from "@/lib/corrections";
 import type { Corrections } from "@/lib/corrections";
 import { EMPTY_EDITS, fetchEdits, type SheetEdits } from "@/lib/edits";
 import { loadLabels, type LabelSet } from "@/lib/labels";
-import { keyMarks, measureKeys, useNotation, withKeys } from "@/lib/notation";
+import { useNotation } from "@/lib/notation";
 import { AnnotationLayer } from "../sheet-viewer/annotation-layer";
 import { tempoClock, tempoControl } from "./tempo";
 import { GRACE_SECONDS, SynthEngine, INSTRUMENTS, isInstrumentId, type InstrumentId } from "./synth";
@@ -444,11 +444,8 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
     [timeline],
   );
 
-  // Names as letters or as scale degrees of the key (lib/notation.ts).
-  const keyedLabels = useMemo(() => withKeys(labelSet, timeline), [labelSet, timeline]);
+  // Names as letters or as jianpu numbers, 1 = C (lib/notation.ts).
   const [notation, setNotation] = useNotation(labelSet?.notation);
-  const marks = useMemo(() => keyMarks(timeline), [timeline]);
-  const keysByMeasure = useMemo(() => (timeline ? measureKeys(timeline) : []), [timeline]);
 
   const isLocked = useCallback(
     (index: number) => lockedFrom !== null && index >= lockedFrom,
@@ -996,11 +993,10 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
               // On the Original view: the reader's own marks, without names.
               <AnnotationLayer
                 page={page}
-                labels={labelsLive && variant === "annotated" ? keyedLabels!.items.filter((l) => l.page === page.pageNumber) : []}
+                labels={labelsLive && variant === "annotated" ? labelSet!.items.filter((l) => l.page === page.pageNumber) : []}
                 labelColor={labelSet?.color ?? "#000000"}
                 showLabels={labelsLive && variant === "annotated"}
                 notation={notation}
-                keyMarks={marks.filter((m) => m.page === page.pageNumber)}
                 edits={sheetEdits}
               />
             )}
@@ -1221,9 +1217,6 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
           activeKeys={activeNotes.map((n) => ({ midi: n.midi, role: n.role }))}
           showKeyNames={showKeyNames}
           notation={notation}
-          // Jianpu follows the key playback is in, so the numbers move with
-          // each key change.
-          keyFifths={keysByMeasure[measureIndexAt(timeline, beat) ?? 0] ?? keysByMeasure[0] ?? 0}
         />
         {audioLoading && (
           <div className="play-keyboard-loading" role="status" aria-label="Loading instrument">

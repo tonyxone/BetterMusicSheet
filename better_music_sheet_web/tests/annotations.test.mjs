@@ -158,132 +158,71 @@ test('a selection of names, notes and drawings moves together', () => {
   assert.equal(before.texts[0].x, 10);
 });
 
-test('numbered notation counts from the major tonic of the key signature', () => {
-  // No sharps or flats: 1 = C, and F sharp is the raised fourth.
-  assert.deepEqual(['G', 'A', 'B', 'C', 'D', 'E', 'F♯'].map((t) => notation.toNumbered(t, 0)),
-    ['5', '6', '7', '1', '2', '3', '♯4']);
-  // In G major F sharp belongs to the key and F natural is lowered.
-  assert.equal(notation.toNumbered('F♯', 1), '7');
-  assert.equal(notation.toNumbered('F', 1), '♭7');
-  assert.equal(notation.toNumbered('G', 1), '1');
-  // Flat keys, and a minor piece read from its relative major (A minor: 6).
-  assert.equal(notation.toNumbered('E♭', -3), '1');
-  assert.equal(notation.toNumbered('B♭', -3), '5');
-  assert.equal(notation.toNumbered('B', -3), '♯5');
-  assert.equal(notation.toNumbered('A', 0), '6');
-  assert.equal(notation.toNumbered('G♯', 0), '♯5');
-  // Spelling decides the degree: E sharp in C sharp major is 3, not 4.
-  assert.equal(notation.toNumbered('E♯', 7), '3');
-  // A double sharp or flat relative to the key reads as the degree it sounds.
-  assert.equal(notation.toNumbered('C𝄪', 0), '2');
-  assert.equal(notation.toNumbered('D♯', -4), '5');
-  assert.equal(notation.toNumbered('A♯', -4), '2');
-  assert.equal(notation.toNumbered('A♭', 5), '6');
-  assert.equal(notation.toNumbered('F𝄫', 0), '♭3');
+test('numbered notation is fixed-do: 1 is always C', () => {
+  assert.deepEqual(['C', 'D', 'E', 'F', 'G', 'A', 'B'].map((t) => notation.toNumbered(t)),
+    ['1', '2', '3', '4', '5', '6', '7']);
+  // Clair de Lune, in D flat major, reads by the keys played - not 1 = D♭.
+  assert.deepEqual(['D♭', 'E♭', 'F', 'G♭', 'A♭', 'B♭', 'C'].map((t) => notation.toNumbered(t)),
+    ['♭2', '♭3', '4', '♭5', '♭6', '♭7', '1']);
+  // A black key keeps its printed sharp or flat.
+  assert.equal(notation.toNumbered('F♯'), '♯4');
+  assert.equal(notation.toNumbered('G♭'), '♭5');
+  // A white key reads as its own number however it is spelled.
+  assert.equal(notation.toNumbered('E♯'), '4');
+  assert.equal(notation.toNumbered('C♭'), '7');
+  assert.equal(notation.toNumbered('B♯'), '1');
+  assert.equal(notation.toNumbered('C𝄪'), '2');
+  // A double flat on a black key takes a single one.
+  assert.equal(notation.toNumbered('F𝄫'), '♭3');
+  assert.equal(notation.toNumbered('B𝄪'), '♯1');
   // ASCII labels stay ASCII; octaves drop; the uncertainty mark stays.
-  assert.equal(notation.toNumbered('Bb4', 0), 'b7');
-  assert.equal(notation.toNumbered('C#?', 0), '#1?');
+  assert.equal(notation.toNumbered('Bb4'), 'b7');
+  assert.equal(notation.toNumbered('C#?'), '#1?');
   // Anything that isn't a note name is left as it is.
-  assert.equal(notation.toNumbered('rit.', 0), 'rit.');
+  assert.equal(notation.toNumbered('rit.'), 'rit.');
 });
 
-test('key names cover every key signature', () => {
-  assert.deepEqual([-7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7].map((f) => notation.keyName(f)),
-    ['C♭', 'G♭', 'D♭', 'A♭', 'E♭', 'B♭', 'F', 'C', 'G', 'D', 'A', 'E', 'B', 'F♯', 'C♯']);
-  assert.equal(notation.keyName(-2, true), 'Bb');
-});
-
-test('every letter round-trips through its scale degree in every key', () => {
-  for (let fifths = -7; fifths <= 7; fifths++) {
-    for (const letter of 'CDEFGAB') {
-      for (const acc of ['♭', '', '♯']) {
-        const name = letter + acc;
-        const number = notation.toNumbered(name, fifths);
-        const back = notation.fromNumbered(number, fifths, 'X');
-        assert.notEqual(back, null, `${name} in ${fifths}`);
-        assert.doesNotMatch(number, /𝄪|𝄫/u, `${name} in ${fifths}`);
-        assert.equal(notation.toNumbered(back, fifths), number, `${name} in ${fifths}`);
-        // The same key on the piano, whether or not it was respelled.
-        const pc = (text) => { const p = labels.parseNoteName(text); return (([0, 2, 4, 5, 7, 9, 11][p.step] + p.alter) % 12 + 12) % 12; };
-        assert.equal(pc(back), pc(name), `${name} in ${fifths}`);
-      }
+test('every letter round-trips through its number to the same piano key', () => {
+  const pc = (text) => { const p = labels.parseNoteName(text); return (([0, 2, 4, 5, 7, 9, 11][p.step] + p.alter) % 12 + 12) % 12; };
+  for (const letter of 'CDEFGAB') {
+    for (const acc of ['𝄫', '♭', '', '♯', '𝄪']) {
+      const name = letter + acc;
+      const number = notation.toNumbered(name);
+      const back = notation.fromNumbered(number, 'X');
+      assert.notEqual(back, null, name);
+      assert.doesNotMatch(number, /𝄪|𝄫/u, name);
+      assert.equal(notation.toNumbered(back), number, name);
+      assert.equal(pc(back), pc(name), name);
     }
   }
 });
 
-test('a typed scale degree becomes the letter it means', () => {
-  assert.equal(notation.fromNumbered('#4', 0, 'G'), 'F♯');
-  assert.equal(notation.fromNumbered('b7', 1, 'G'), 'F');
-  assert.equal(notation.fromNumbered('7', 1, 'Bb'), 'F#');
-  // The printed note keeps its printed text, octave and all.
-  assert.equal(notation.fromNumbered('5', 0, 'G4'), 'G4');
-  assert.equal(notation.fromNumbered('F#', 0, 'G'), null);
+test('a typed number becomes the letter it means', () => {
+  assert.equal(notation.fromNumbered('#4', 'G'), 'F♯');
+  assert.equal(notation.fromNumbered('b7', 'G'), 'B♭');
+  assert.equal(notation.fromNumbered('4', 'Bb'), 'F');
+  // The printed note keeps its printed text, octave and all - also when it
+  // is spelled another way than the number (E♯ reads as 4).
+  assert.equal(notation.fromNumbered('5', 'G4'), 'G4');
+  assert.equal(notation.fromNumbered('4', 'E♯'), 'E♯');
+  assert.equal(notation.fromNumbered('F#', 'G'), null);
 });
 
-test('labels read as numbers only when their key is known, and edits stay letters', () => {
-  const item = { id: 'L1', group: 'g', page: 1, x: 0, y: 0, size: 6, text: 'F♯', notes: [], key: 1 };
+test('labels read as numbers, and edits stay letters', () => {
+  const item = { id: 'L1', group: 'g', page: 1, x: 0, y: 0, size: 6, text: 'F♯', notes: [] };
   const doc = { ...edits.EMPTY_EDITS, labels: { L1: { text: 'F' } } };
-  assert.equal(edits.resolveLabel(item, edits.EMPTY_EDITS, 'numbers').text, '7');
-  assert.equal(edits.resolveLabel(item, doc, 'numbers').text, '♭7');
+  assert.equal(edits.resolveLabel(item, edits.EMPTY_EDITS, 'numbers').text, '♯4');
+  assert.equal(edits.resolveLabel(item, doc, 'numbers').text, '4');
   assert.equal(edits.resolveLabel(item, doc, 'letters').text, 'F');
-  assert.equal(edits.resolveLabel({ ...item, key: undefined }, edits.EMPTY_EDITS, 'numbers').text, 'F♯');
-});
-
-test('labels take the key of their note, or of the nearest head on the page', () => {
-  const timeline = {
-    measures: [{ index: 0, page: 1, bbox_pt: [40, 100, 200, 190] }, { index: 1, page: 1, bbox_pt: [200, 100, 300, 190] }],
-    notes: [
-      { printed_id: 'a', measure_index: 0, midi: 67, key_fifths: 1, bbox_pt: [50, 110, 54, 114] },
-      { printed_id: 'b', measure_index: 1, midi: 67, key_fifths: -2, bbox_pt: [250, 110, 254, 114] },
-    ],
-  };
-  const set = { color: '#000', source: 'data', items: [
-    { id: '1', group: '1', page: 1, x: 52, y: 105, size: 6, text: 'G', notes: ['a'] },
-    { id: '2', group: '2', page: 1, x: 249, y: 105, size: 6, text: 'G', notes: [] },
-    { id: '3', group: '3', page: 1, x: 52, y: 105, size: 6, text: 'G', notes: [], key: 3 },
-  ] };
-  assert.deepEqual(Array.from(notation.withKeys(set, timeline).items, (i) => i.key), [1, -2, 3]);
-});
-
-test('key marks start each page and every key change, once per printed measure', () => {
-  const m = (index, page, printed, x) => ({ index, printed_index: printed, page, bbox_pt: [x, 100, x + 50, 190] });
-  const n = (measure, key) => ({ measure_index: measure, printed_measure_index: undefined, midi: 60, key_fifths: key });
-  const timeline = {
-    measures: [m(0, 1, 0, 40), m(1, 1, 1, 90), m(2, 1, 2, 140), m(3, 2, 3, 40), m(4, 1, 1, 90)],
-    notes: [n(0, 0), n(1, 0), n(2, -1), n(2, -1), n(2, 0), n(3, -1), n(4, 0)],
-  };
-  assert.deepEqual(Array.from(notation.keyMarks(timeline), (k) => `${k.page}@${k.x} ${k.text}`),
-    ['1@40 1=C', '1@140 1=F', '2@40 1=F']);
-});
-
-test('white-key letters read as jianpu in the current key', () => {
-  // C D E F G A B in A flat major. (The keyboard shows just the digits.)
-  assert.deepEqual(['C', 'D', 'E', 'F', 'G', 'A', 'B'].map((t) => notation.toNumbered(t, -4)),
-    ['3', '♯4', '♯5', '6', '7', '♯1', '♯2']);
-  assert.deepEqual(['C', 'D', 'E', 'F', 'G', 'A', 'B'].map((t) => notation.toNumbered(t, 1)),
-    ['4', '5', '6', '♭7', '1', '2', '3']);
-});
-
-test('each measure takes the key most of its notes are in, carried over empty ones', () => {
-  const timeline = {
-    measures: [{ index: 0 }, { index: 1 }, { index: 2 }, { index: 3 }],
-    notes: [
-      { measure_index: 1, key_fifths: 2 }, { measure_index: 1, key_fifths: 2 }, { measure_index: 1, key_fifths: 0 },
-      { measure_index: 3, key_fifths: -1 },
-    ],
-  };
-  // Measure 0 has no notes yet: it takes the first key there is.
-  assert.deepEqual(Array.from(notation.measureKeys(timeline)), [2, 2, 2, -1]);
-  assert.deepEqual(Array.from(notation.measureKeys({ measures: [{ index: 0 }], notes: [{ measure_index: 0 }] })), []);
 });
 
 test('falling notes are named as written, or from the pitch once corrected', () => {
   const note = { midi: 66, step: 'F', alter: 1, octave: 4, key_fifths: 1 };
   assert.equal(notation.timelineNoteName(note, 'letters'), 'F♯');
-  assert.equal(notation.timelineNoteName(note, 'numbers'), '7');
+  assert.equal(notation.timelineNoteName(note, 'numbers'), '♯4');
   // Spelled as written even where the pitch has another name.
   assert.equal(notation.timelineNoteName({ midi: 63, step: 'D', alter: 1, key_fifths: -4 }, 'letters'), 'D♯');
-  assert.equal(notation.timelineNoteName({ midi: 63, step: 'D', alter: 1, key_fifths: -4 }, 'numbers'), '5');
+  assert.equal(notation.timelineNoteName({ midi: 63, step: 'D', alter: 1, key_fifths: -4 }, 'numbers'), '♯2');
   // A reader's correction changes the pitch but not the old spelling: then
   // the pitch decides, with flats in a flat key.
   assert.equal(notation.timelineNoteName({ ...note, midi: 68, key_fifths: -4 }, 'letters'), 'A♭');

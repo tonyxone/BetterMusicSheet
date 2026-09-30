@@ -5,7 +5,7 @@
 // the page draws. pdf-lib is loaded only when someone asks for this.
 
 import type { LabelSet } from "./labels";
-import type { KeyMark, Notation } from "./notation";
+import type { Notation } from "./notation";
 import { resolveLabel, type SheetEdits } from "./edits";
 import { strokePath } from "./ink";
 
@@ -42,15 +42,13 @@ function rasterizeText(text: string, sizePt: number, color: string) {
   return { dataUrl: canvas.toDataURL("image/png"), width: canvas.width / scale, height: canvas.height / scale, margin: 2 / scale };
 }
 
-export async function exportCustomizedPdf({ base, labels, edits, notation = "letters", keyMarks = [] }: {
+export async function exportCustomizedPdf({ base, labels, edits, notation = "letters" }: {
   /** The original upload when the labels are drawn from data; otherwise the
    * annotated copy, whose printed names then stay as they are. */
   base: ArrayBuffer;
   labels: LabelSet | null;
   edits: SheetEdits;
   notation?: Notation;
-  /** "1=G" marks, drawn with the names when they read as numbers. */
-  keyMarks?: KeyMark[];
 }): Promise<Blob> {
   const [{ PDFDocument, rgb, pushGraphicsState, popGraphicsState, setTextRenderingMode, TextRenderingMode,
     setLineWidth, setStrokingRgbColor, LineCapStyle, BlendMode }, fontkit] = await Promise.all([
@@ -98,11 +96,6 @@ export async function exportCustomizedPdf({ base, labels, edits, notation = "let
         page.drawText(text, { ...at, color: rgb(1, 1, 1) });
         page.pushOperators(setTextRenderingMode(TextRenderingMode.Fill), popGraphicsState());
         page.drawText(text, { ...at, color: rgb(r, g, b) });
-      }
-      for (const mark of keyMarks) {
-        if (mark.page !== pageNumber || !fits(mark.text)) continue;
-        const [r, g, b] = rgbOf(labels.color);
-        page.drawText(mark.text, { x: X(mark.x), y: Y(mark.y), size: mark.size, font, color: rgb(r, g, b) });
       }
     }
 

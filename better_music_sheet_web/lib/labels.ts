@@ -26,9 +26,6 @@ export type LabelItem = {
   text: string;
   /** Timeline ids (printed_id, else source_id) of the notes this names. */
   notes: string[];
-  /** The key signature (in fifths) of the note this names, for showing it
-   * as a scale degree - see notation.ts. Absent until known. */
-  key?: number;
 };
 
 export type LabelSet = {
@@ -121,7 +118,6 @@ export async function loadLabels(jobId: string, annotatedPdf: ArrayBuffer | null
         const data = await res.json() as { color?: string; items?: unknown[]; notation?: string };
         const items = (data.items ?? []).filter(validItem).map((item) => ({
           ...item, group: item.group ?? item.id, notes: Array.isArray(item.notes) ? item.notes : [],
-          key: Number.isInteger(item.key) ? item.key : undefined,
         }));
         const notation = data.notation === "numbers" ? "numbers" as const : "letters" as const;
         if (items.length) return { color: data.color ?? "#000000", items, source: "data", notation };
