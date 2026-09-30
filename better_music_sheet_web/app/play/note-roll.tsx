@@ -49,10 +49,10 @@ const FLASH_BEATS = 0.35;
 /** White foreground mixed over a note while its piano key is held. */
 const ACTIVE_FOREGROUND_ALPHA = 0.42;
 
-/** Note names on the bars: sized to the lane, within these bounds, in px.
- * Below the smallest a name couldn't be read, so a bar too short for it
- * goes without. */
-const NAME_MIN_PX = 7;
+/** Note names on the bars: sized to the lane, and shrunk further to fit a
+ * short bar, within these bounds, in px. Below the smallest a name couldn't
+ * be read, so a bar too short even for that goes without. */
+const NAME_MIN_PX = 6;
 const NAME_MAX_PX = 12;
 
 function roundedBar(
@@ -226,10 +226,12 @@ export function NoteRoll({
           if (phase === 3) {
             // Fixed in the middle of the held note, falling with it.
             const text = shownNames![i];
-            const size = Math.min(NAME_MAX_PX, Math.max(NAME_MIN_PX, w * 0.72));
-            if (!text || bottom - top < size + 2) continue;
+            const size = Math.min(NAME_MAX_PX, Math.max(NAME_MIN_PX, w * 0.72), bottom - top - 1);
+            if (!text || size < NAME_MIN_PX) continue;
             ctx.globalAlpha = past ? 0.3 : 1;
             ctx.font = `700 ${size}px system-ui, sans-serif`;
+            // Thinner on a small name, or the edge fills in its counters.
+            ctx.lineWidth = Math.min(2.5, size / 4);
             // A dark edge keeps a name readable where it spills past a
             // narrow black-key lane.
             ctx.strokeText(text, cx, (top + bottom) / 2);
