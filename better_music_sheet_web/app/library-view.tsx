@@ -9,6 +9,7 @@ import { DemoSampleCard } from "./demo-sample-card";
 import { isActive, type AnnotationJob } from "@/lib/api";
 import { useSubscription } from "@/lib/subscription";
 import { paginateLibrary } from "@/lib/library-pagination";
+import { noteCountLabel } from "@/lib/note-count";
 
 // A sheet can be opened as soon as its upload finishes; these describe its
 // note names, which may still be coming - or have failed, over a sheet that
@@ -101,7 +102,7 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
                   <div className="history-icon">📄</div>
                   <div className="history-info">
                     <div className="history-title">{job.sheet_name}</div>
-                    <div className="history-meta">{new Date(job.created_at * 1000).toLocaleString()}</div>
+                    {noteCountLabel(job) && <div className="history-meta">{noteCountLabel(job)}</div>}
                   </div>
                   <span className={`history-badge ${job.status}`}>{STATUS_LABEL[job.status]}</span>
                 </Link>

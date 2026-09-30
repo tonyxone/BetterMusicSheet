@@ -85,14 +85,17 @@ def generate(raw, directory, options):
             publish(directory, stage=stage, pages=pages, detail=detail_for(prefix, rest))
 
     timeline = directory / "timeline.json"
+    stats = {}
     count = annotate_pdf(pdf, directory / "annotated.pdf", directory / "work",
                          style=options["style"], octave=options["octave"], font_size=options["font_size"],
                          dpi=options["dpi"], auto_retry=options["auto_retry"], timeline_path=timeline,
                          labels_path=directory / "labels.json",
                          # .get, not [...]: jobs queued before this option existed
                          # have no colour in their options.json and must still run.
-                         color=options.get("color", "#000000"), log=log)
-    return count
+                         color=options.get("color", "#000000"), log=log, stats=stats)
+    # For the library's "606/634": notes named, out of the notes the sheet
+    # prints - the latter only known for a vector PDF (None for a scan).
+    return {"count": count, "notes_named": stats.get("notes_named"), "notes_printed": expected}
 
 
 def main(directory):
@@ -100,8 +103,8 @@ def main(directory):
     other than a final answer below propagates, and is retried as a crash."""
     from run import NotMusic
     try:
-        count = generate(directory / "source", directory, json.loads((directory / "options.json").read_text()))
-        (directory / "result.json").write_text(json.dumps({"count": count}))
+        result = generate(directory / "source", directory, json.loads((directory / "options.json").read_text()))
+        (directory / "result.json").write_text(json.dumps(result))
         return 0
     except (InvalidSheet, NotMusic) as exc:
         # A final answer the reader can act on - not a crash to retry. Without

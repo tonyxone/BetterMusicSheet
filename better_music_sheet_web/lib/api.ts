@@ -31,6 +31,10 @@ export type AnnotationJob = {
   original_ready?: boolean;
   /** A failed sheet whose upload is kept, so it can be read again. */
   can_retry?: boolean;
+  /** Notes the reader named, and notes the sheet prints (null for a photo or
+   * scan). Absent on sheets finished before they were recorded. */
+  notes_named?: number | null;
+  notes_printed?: number | null;
 };
 
 /** Still being uploaded or read - worth checking back on. */
