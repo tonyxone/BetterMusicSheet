@@ -881,6 +881,17 @@ button.history-row { width: 100%; font-family: inherit; cursor: pointer; text-al
 /* Editing takes the pointer, and touch too, so a finger or pencil draws
    rather than scrolls the page. */
 .annotation-layer.editing { pointer-events: auto; touch-action: none; user-select: none; -webkit-user-select: none; }
+/* A printed note recognition missed, so it has no name (unnamed_notes.py):
+   ringed, and in edit mode a click starts its name. */
+.unnamed-ring { fill: rgba(186, 117, 23, 0.14); stroke: #BA7517; stroke-width: 0.7; stroke-dasharray: 1.6 1.1; }
+.unnamed-ring, .unnamed-tag { pointer-events: none; }
+.unnamed-hit { fill: transparent; cursor: pointer; }
+.unnamed-note.focused .unnamed-ring { stroke-width: 1.2; stroke-dasharray: none; animation: unnamed-pulse 0.9s ease-out 2; }
+.unnamed-tag rect { fill: #BA7517; }
+.unnamed-tag text { fill: #fff; font-weight: 700; font-family: system-ui, sans-serif; }
+@keyframes unnamed-pulse { 0% { stroke-opacity: 1; } 50% { stroke-opacity: 0.25; } 100% { stroke-opacity: 1; } }
+.sheet-editor-sub.unnamed-notice { background: #FBF1DF; color: #6B4A12; }
+.sheet-editor-sub.unnamed-notice strong { font-family: inherit; color: inherit; }
 .sheet-label { font-family: "Sheet Labels", "Arial Unicode MS", Arial, sans-serif; stroke-linejoin: round; }
 .sheet-note { font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
 .label-hit { fill: transparent; stroke: transparent; stroke-width: 0.5; cursor: move; }

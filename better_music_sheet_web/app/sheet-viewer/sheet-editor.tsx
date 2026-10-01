@@ -17,14 +17,14 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MutableRefObject, type ReactNode } from "react";
 import { fetchSheetAssets, fetchSheetFile } from "@/lib/sheet-files";
-import { loadLabels, type LabelItem, type LabelSet } from "@/lib/labels";
+import { loadLabels, stillUnnamed, type LabelItem, type LabelSet } from "@/lib/labels";
 import { correctionsForRetype, EMPTY_EDITS, isEmptyEdits, resolveLabel, useSheetEdits, type LabelEdit, type SaveState, type SheetEdits } from "@/lib/edits";
 import { fromNumbered, useNotation } from "@/lib/notation";
 import type { Timeline } from "@/lib/timeline";
 import type { SheetVariant } from "../sheet-toggle";
 import { NotationToggle } from "../notation-toggle";
 import { PdfPages, type PageInfo } from "./pdf-pages";
-import { AnnotationLayer, itemKey, moveItems, type EditorHooks, type InlineTarget, type SelectedItem, type Tool } from "./annotation-layer";
+import { AnnotationLayer, itemKey, moveItems, unnamedKey, type EditorHooks, type InlineTarget, type SelectedItem, type Tool } from "./annotation-layer";
 
 const PEN_COLORS = ["#2e2117", "#c0392b", "#1f5fbf", "#2f7d32"];
 const HIGHLIGHT_COLORS = ["#ffd84d", "#8ee07a", "#ff9ec7", "#7cc8ff"];
@@ -168,6 +168,30 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
   }, [loaded]);
   const labelsById = useMemo(() => new Map((loaded?.labels?.items ?? []).map((l) => [l.id, l])), [loaded]);
   const [notation, setNotation] = useNotation(loaded?.labels?.notation);
+
+  // Printed notes recognition missed, so they have no name (unnamed_notes.py),
+  // less those the reader has named since - in page order, top to bottom.
+  const unnamed = useMemo(() => stillUnnamed(showNames ? loaded?.labels?.unnamed ?? [] : [], doc?.texts ?? [])
+    .sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x), [showNames, loaded, doc]);
+  const [focusedUnnamed, setFocusedUnnamed] = useState<string | null>(null);
+  const showNextUnnamed = useCallback(() => {
+    if (!unnamed.length) return;
+    const at = unnamed.findIndex((u) => unnamedKey(u) === focusedUnnamed);
+    const next = unnamedKey(unnamed[(at + 1) % unnamed.length]);
+    setFocusedUnnamed(next);
+    // Centred in the sheet's own box. scrollIntoView would scroll the page
+    // too, tucking the toolbar under the site header.
+    const box = scrollRef.current;
+    const ring = box?.querySelector(`[data-unnamed="${CSS.escape(next)}"]`);
+    if (!box || !ring) return;
+    const r = ring.getBoundingClientRect();
+    const b = box.getBoundingClientRect();
+    box.scrollTo({
+      top: box.scrollTop + r.top + r.height / 2 - (b.top + b.height / 2),
+      left: box.scrollLeft + r.left + r.width / 2 - (b.left + b.width / 2),
+      behavior: "smooth",
+    });
+  }, [unnamed, focusedUnnamed]);
 
   useEffect(() => {
     if (!exportRef) return;
@@ -521,6 +545,7 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
     update, current, inline, openInline,
   } : undefined;
   const labelColor = loaded.labels?.color ?? "#000000";
+  const nameSize = loaded.labels?.items[0]?.size ?? 6.5;
   const single = visibleSelection.length === 1 ? visibleSelection[0] : null;
   const selectedLabel = single?.kind === "label" ? labelsById.get(single.id) : undefined;
   const selectedResolved = selectedLabel ? resolveLabel(selectedLabel, doc, notation) : null;
@@ -712,6 +737,17 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
           </div>
         )}
 
+        {unnamed.length > 0 && (
+          <div className="sheet-editor-sub unnamed-notice" role="status">
+            <span>
+              <strong>{unnamed.length}</strong> printed {unnamed.length === 1 ? "note wasn't" : "notes weren't"} recognized,
+              so {unnamed.length === 1 ? "it has" : "they have"} no name{editing ? ". Click a ringed note to add its name." : "."}
+            </span>
+            <button type="button" className="editor-link" onClick={showNextUnnamed}>Show next</button>
+            {!editing && <button type="button" className="editor-link" onClick={() => setEditing(true)}>Add names</button>}
+          </div>
+        )}
+
         {showSub && (
           <div className="sheet-editor-sub">
             {editing && single && selectedLabel && selectedResolved && (
@@ -802,6 +838,9 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
               labelColor={labelColor}
               showLabels={showNames}
               notation={notation}
+              unnamed={unnamed.filter((u) => u.page === page.pageNumber)}
+              focusedUnnamed={focusedUnnamed}
+              nameSize={nameSize}
               edits={doc}
               editor={hooks}
             />

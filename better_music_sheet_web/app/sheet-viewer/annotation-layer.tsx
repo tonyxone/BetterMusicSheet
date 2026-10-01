@@ -10,7 +10,7 @@
 // box), moving the selection together, drawing, erasing.
 
 import { useRef, useState } from "react";
-import type { LabelItem } from "@/lib/labels";
+import type { LabelItem, UnnamedNote } from "@/lib/labels";
 import type { Notation } from "@/lib/notation";
 import { itemKey, moveItems, newId, resolveLabel, type ItemKind, type SelectedItem, type SheetEdits } from "@/lib/edits";
 import { simplify, strokePath } from "@/lib/ink";
@@ -49,12 +49,20 @@ function approxWidth(text: string, size: number) {
 type Drag = { items: SelectedItem[]; startX: number; startY: number; before: SheetEdits; moved: boolean };
 type Marquee = { x0: number; y0: number; x1: number; y1: number; additive: boolean; base: SelectedItem[] };
 
+/** Identifies an unnamed note across renders - its position is all it has. */
+export function unnamedKey(u: UnnamedNote) {
+  return `${u.page}:${u.x}:${u.y}`;
+}
+
 export function AnnotationLayer({
   page,
   labels,
   labelColor,
   showLabels,
   notation = "letters",
+  unnamed = [],
+  focusedUnnamed = null,
+  nameSize = 6.5,
   edits,
   editor,
 }: {
@@ -64,6 +72,13 @@ export function AnnotationLayer({
   labelColor: string;
   showLabels: boolean;
   notation?: Notation;
+  /** This page's printed notes that still have no name, ringed. With an
+   * editor, clicking one starts a name beside it. */
+  unnamed?: UnnamedNote[];
+  /** The ring "Show next" brought into view (unnamedKey), marked out. */
+  focusedUnnamed?: string | null;
+  /** The size names are set in, for a name added to an unnamed note. */
+  nameSize?: number;
   edits: SheetEdits;
   editor?: EditorHooks;
 }) {
@@ -94,6 +109,20 @@ export function AnnotationLayer({
 
   function pxPerPt() {
     return svgRef.current!.getBoundingClientRect().width / w;
+  }
+
+  /** A name for an unnamed note: a note of the reader's own, set like the
+   * printed names just right of the notehead, with its box open. */
+  function addName(u: UnnamedNote, e: React.PointerEvent) {
+    if (!editor) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const id = newId("text");
+    const note = { id, page: page.pageNumber, x: u.x + u.w / 2 + 1.2, y: u.y + nameSize * 0.35, text: "", size: nameSize, color: labelColor };
+    // Like the text tool: recorded once the box closes with something in it.
+    editor.update((d) => ({ ...d, texts: [...d.texts, note] }), { transient: true });
+    editor.select([{ kind: "text", id }]);
+    editor.openInline({ kind: "text", id, page: page.pageNumber, pxPerPt: pxPerPt(), isNew: true });
   }
 
   function targetOf(el: EventTarget | null): SelectedItem | null {
@@ -386,6 +415,28 @@ export function AnnotationLayer({
                 <tspan key={i} x={t.x} dy={i ? t.size * 1.2 : 0}>{line || " "}</tspan>
               ))}
             </text>
+          </g>
+        );
+      })}
+
+      {unnamed.map((u) => {
+        const key = unnamedKey(u);
+        const r = Math.max(u.w * 0.85, 3.5);
+        const focused = key === focusedUnnamed;
+        return (
+          <g key={key} data-unnamed={key} className={`unnamed-note${focused ? " focused" : ""}`}
+            onPointerDown={interactive ? (e) => addName(u, e) : undefined}>
+            <title>{interactive ? "Add this note's name" : "This note wasn't recognized, so it has no name"}</title>
+            <circle cx={u.x} cy={u.y} r={r} className="unnamed-ring" />
+            {/* The click target is the notehead alone: a chord's rings
+                overlap, and a click must name the note it lands on. */}
+            {interactive && <circle cx={u.x} cy={u.y} r={Math.max(u.w * 0.55, 2.5)} className="unnamed-hit" />}
+            {interactive && focused && (
+              <g className="unnamed-tag">
+                <rect x={u.x + r + 1} y={u.y - nameSize * 0.75} width={nameSize * 3.2} height={nameSize * 1.5} rx={nameSize * 0.3} />
+                <text x={u.x + r + 1 + nameSize * 1.6} y={u.y + nameSize * 0.32} fontSize={nameSize * 0.95} textAnchor="middle">+ name</text>
+              </g>
+            )}
           </g>
         );
       })}

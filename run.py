@@ -921,6 +921,17 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
                              notation=notation)
     if stats is not None:
         stats["notes_named"] = len(resolved["notes"])
+    unnamed = []
+    if labels_path is not None:
+        try:
+            from unnamed_notes import unnamed_notes
+            # Printed notes nothing read - the viewer rings them. In the
+            # shrunk copy's points, like the names, until restored below.
+            unnamed = unnamed_notes(str(pdf_path), resolved, num_pages)
+            if unnamed:
+                log(f"[2/3] {len(unnamed)} printed note(s) were not recognized and have no name")
+        except Exception as e:
+            log(f"Unnamed-note check skipped: {e}")
 
     tl = None
     if timeline_path is not None:
@@ -948,7 +959,8 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
             from label_export import labels_document
             # Matched to the timeline's notes while both are still in the
             # shrunk copy's points.
-            document = labels_document(placed, tl, font_size=font_size, color=color, notation=notation)
+            document = labels_document(placed, tl, font_size=font_size, color=color, notation=notation,
+                                       unnamed=unnamed)
             if scales:
                 document = page_size.restore_labels(document, scales)
             Path(labels_path).write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")

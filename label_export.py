@@ -35,12 +35,13 @@ def _notes_by_page(timeline):
     return pages
 
 
-def labels_document(placed, timeline=None, font_size=6.5, color="#000000", notation="letters"):
+def labels_document(placed, timeline=None, font_size=6.5, color="#000000", notation="letters", unnamed=()):
     """``placed``: [(page_number, block), ...] as returned by annotate.render().
 
     Item text is always the letter name, whatever notation was printed: the
     viewer shows numbers itself, and retyping and playback corrections read
-    letters."""
+    letters. ``unnamed``: printed notes left without a name
+    (unnamed_notes.py), which the viewer points out."""
     notes = _notes_by_page(timeline)
     items = []
     block_numbers = {}
@@ -65,4 +66,5 @@ def labels_document(placed, timeline=None, font_size=6.5, color="#000000", notat
                 'size': round(block['fs'], 2), 'text': text, 'notes': note_ids,
             }
             items.append(item)
-    return {'version': 1, 'font_size': font_size, 'color': color, 'notation': notation, 'items': items}
+    return {'version': 1, 'font_size': font_size, 'color': color, 'notation': notation, 'items': items,
+            'unnamed': list(unnamed)}

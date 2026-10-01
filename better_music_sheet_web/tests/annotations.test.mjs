@@ -240,3 +240,23 @@ test('a falling note is named once, across its tied pieces', () => {
   ];
   assert.deepEqual(Array.from(timelineLib.nameSpans(notes, 0.12)), [5, 0.5, -1, 1.5, -1, -1, 6]);
 });
+
+test('an unnamed note stops being flagged once the reader writes a name beside it', () => {
+  const unnamed = [{ page: 1, x: 100, y: 50, w: 6 }, { page: 1, x: 200, y: 50, w: 6 }, { page: 2, x: 100, y: 50, w: 6 }];
+  // Where "Add name" puts a note: just right of the head, on a baseline
+  // that centres it on the head.
+  const named = { page: 1, x: 104.2, y: 52.3, size: 6.5 };
+  assert.deepEqual(Array.from(labels.stillUnnamed(unnamed, [named]), (u) => `${u.page}@${u.x}`), ['1@200', '2@100']);
+  // A note elsewhere - another page, another staff, far along - names nothing.
+  const elsewhere = [{ page: 2, x: 104, y: 90, size: 6.5 }, { page: 1, x: 150, y: 50, size: 6.5 }];
+  assert.equal(labels.stillUnnamed(unnamed, elsewhere).length, 3);
+});
+
+test('naming one note of a chord leaves the rest of the chord ringed', () => {
+  // Three heads a staff step apart, as in a whole-note chord.
+  const chord = [{ page: 1, x: 100, y: 45.5, w: 6 }, { page: 1, x: 100, y: 50, w: 6 }, { page: 1, x: 100, y: 54.5, w: 6 }];
+  const middle = { page: 1, x: 104.2, y: 50 + 6.5 * 0.35, size: 6.5 };
+  assert.deepEqual(Array.from(labels.stillUnnamed(chord, [middle]), (u) => u.y), [45.5, 54.5]);
+  const lowest = { page: 1, x: 104.2, y: 54.5 + 6.5 * 0.35, size: 6.5 };
+  assert.deepEqual(Array.from(labels.stillUnnamed(chord, [middle, lowest]), (u) => u.y), [45.5]);
+});
