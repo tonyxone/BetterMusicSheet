@@ -18,6 +18,55 @@ from scan import is_scanned, ottava_intervals
 STEP = {'C': 0, 'D': 2, 'E': 4, 'F': 5, 'G': 7, 'A': 9, 'B': 11}
 ALTER = {'SHARP': 1, 'FLAT': -1, 'NATURAL': 0, 'DOUBLE_SHARP': 2, 'DOUBLE_FLAT': -2}
 PDF_BLACK_NOTEHEAD = 0xE0A4
+# The standard SMuFL noteheads a vector PDF draws as text, with the shape name
+# Audiveris gives the same head. Audiveris finds most heads through their
+# stems, so a whole note - which has none - is the one it misses most.
+PDF_NOTEHEADS = {0xE0A2: 'WHOLE_NOTE', 0xE0A3: 'NOTEHEAD_VOID', PDF_BLACK_NOTEHEAD: 'NOTEHEAD_BLACK'}
+# How far from its staff's middle line a head may sit, in staff spaces: four
+# and a quarter is two ledger lines. Further out - high runs under an 8va -
+# it is taken only up to MAX_LEDGER_SPACES, and only when every other staff is
+# LEDGER_CLEARANCE times further away, so a note between two staves is never
+# given to the wrong one.
+# The accidental printed just left of a head, read the same way, for a head
+# Audiveris missed and so never linked one to.
+PDF_ACCIDENTALS = {0xE260: 'FLAT', 0xE261: 'NATURAL', 0xE262: 'SHARP',
+                   0xE263: 'DOUBLE_SHARP', 0xE264: 'DOUBLE_FLAT'}
+NEAR_STAFF_SPACES = 4.25
+MAX_LEDGER_SPACES = 7.0
+LEDGER_CLEARANCE = 1.5
+
+
+def _smufl_glyphs(page, table):
+    glyphs = []
+    for block in page.get_text('rawdict')['blocks']:
+        for line in block.get('lines', []):
+            for span in line.get('spans', []):
+                for char in span.get('chars', []):
+                    shape = table.get(ord(char['c']))
+                    if shape:
+                        x, y = map(float, char['origin'])
+                        glyphs.append((shape, x, y, char.get('bbox', (x, y, x, y))))
+    return glyphs
+
+
+def pdf_notehead_glyphs(page):
+    """The standard noteheads a vector PDF page draws: (shape, origin x,
+    origin y, bbox). Empty for a scan, or a PDF whose music font isn't SMuFL."""
+    return _smufl_glyphs(page, PDF_NOTEHEADS)
+
+
+def _printed_accidental(head, heads, accidentals, interline):
+    """The accidental drawn for ``head``: on its staff position, left of it,
+    and nearer than any other head on that position - one belonging to an
+    earlier note on the same line is that note's."""
+    _, x, y, bbox = head
+    left = float(bbox[0])
+    earlier = [float(b[2]) for _, hx, hy, b in heads
+               if abs(hy - y) <= interline * .3 and float(b[2]) <= left and (hx, hy) != (x, y)]
+    floor = max(earlier, default=left - 4 * interline)
+    near = [(float(b[0]), shape) for shape, _, ay, b in accidentals
+            if abs(ay - y) <= interline * .3 and floor <= float(b[0]) and float(b[2]) <= left + interline * .2]
+    return max(near)[1] if near else None
 
 
 def midi_of(diatonic, alter=0):
@@ -47,10 +96,10 @@ def _at(events, x, default):
 
 
 def vector_pdf_noteheads(page, staff_lines):
-    """Read black noteheads from a vector PDF using OMR staff geometry.
+    """Read noteheads from a vector PDF using OMR staff geometry.
 
-    MuseScore-compatible PDFs retain the standard SMuFL ``noteheadBlack``
-    glyph even when Audiveris misses that glyph.  Staff geometry is still
+    MuseScore-compatible PDFs retain the standard SMuFL notehead glyphs
+    (whole, half and black) even when Audiveris misses the note.  Staff geometry is still
     supplied by Audiveris, so this is deliberately a gap filler rather than a
     second score-recognition engine.  Scans and PDFs with outlined glyphs
     simply return no candidates.
@@ -68,32 +117,28 @@ def vector_pdf_noteheads(page, staff_lines):
         return []
 
     result = []
-    for block in page.get_text('rawdict')['blocks']:
-        for line in block.get('lines', []):
-            for span in line.get('spans', []):
-                for char in span.get('chars', []):
-                    if ord(char['c']) != PDF_BLACK_NOTEHEAD:
-                        continue
-                    x, y = map(float, char['origin'])
-                    bbox = char.get('bbox', (x, y, x, y))
-                    width = max(1.0, float(bbox[2]) - float(bbox[0]))
-                    ranked = sorted((abs(y - middle) / interline, staff, middle, interline)
-                                    for staff, middle, interline in geometry)
-                    distance, staff, middle, interline = ranked[0]
-                    # Four staff spaces covers normal ledger-note writing while
-                    # rejecting unrelated music glyphs far from every staff.
-                    if distance > 4.25:
-                        continue
-                    pitch = round((y - middle) / (interline / 2))
-                    expected_y = middle + pitch * interline / 2
-                    if abs(y - expected_y) > interline * .24:
-                        continue
-                    result.append({'staff': staff, 'shape': 'NOTEHEAD_BLACK',
-                                   'pitch': pitch, 'confidence': 1.0,
-                                   'x_pt': float(bbox[0]), 'y_pt': y - interline / 2,
-                                   'w_pt': width, 'h_pt': interline,
-                                   'cx_pt': float(bbox[0]) + width / 2, 'cy_pt': y,
-                                   'vector_pdf': True})
+    heads = pdf_notehead_glyphs(page)
+    accidentals = _smufl_glyphs(page, PDF_ACCIDENTALS)
+    for shape, x, y, bbox in heads:
+        width = max(1.0, float(bbox[2]) - float(bbox[0]))
+        ranked = sorted((abs(y - middle) / interline, staff, middle, interline)
+                        for staff, middle, interline in geometry)
+        distance, staff, middle, interline = ranked[0]
+        if distance > NEAR_STAFF_SPACES:
+            others = [d for d, *_ in ranked[1:]]
+            if distance > MAX_LEDGER_SPACES or (others and others[0] < distance * LEDGER_CLEARANCE):
+                continue
+        pitch = round((y - middle) / (interline / 2))
+        expected_y = middle + pitch * interline / 2
+        if abs(y - expected_y) > interline * .24:
+            continue
+        result.append({'staff': staff, 'shape': shape,
+                       'accidental': _printed_accidental((shape, x, y, bbox), heads, accidentals, interline),
+                       'pitch': pitch, 'confidence': 1.0,
+                       'x_pt': float(bbox[0]), 'y_pt': y - interline / 2,
+                       'w_pt': width, 'h_pt': interline,
+                       'cx_pt': float(bbox[0]) + width / 2, 'cy_pt': y,
+                       'vector_pdf': True})
     return result
 
 
@@ -117,7 +162,7 @@ def merge_vector_pdf_noteheads(page, heads, staff_lines, sx, sy, page_number):
             'x': candidate['x_pt'] / sx, 'y': candidate['y_pt'] / sy,
             'w': candidate['w_pt'] / sx, 'h': candidate['h_pt'] / sy,
             'cx': candidate['cx_pt'] / sx, 'cy': candidate['cy_pt'] / sy,
-            'vector_pdf': True,
+            'vector_pdf': True, 'pdf_accidental': candidate['accidental'],
         })
         added += 1
     return added
@@ -193,6 +238,8 @@ def resolve_score_notes(pdf_path, omr_path, num_pages, page_omr_overrides=None):
             pdf_tempos = metronome_marks(doc[page - 1])
             omr_clefs = load_omr_clefs(src, page)
             keys, alters = load_key_timeline(src, page), load_alter_map(src, page)
+            # A head only the PDF had carries the accidental the PDF drew for it.
+            alters.update({h['id']: h['pdf_accidental'] for h in heads if h.get('pdf_accidental')})
             roles = {}
             for r in regions:
                 for role, sid in enumerate(r['staff_ids']):

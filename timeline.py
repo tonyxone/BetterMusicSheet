@@ -426,6 +426,81 @@ def _recover_uniform_vector_run(measure, notes, candidates, used):
     return len(recovered)
 
 
+def _recover_aligned_vector_heads(measure, notes, candidates, used):
+    """Give playback the vector-PDF heads recognition missed, where the notes
+    they line up with say when they sound.
+
+    score_notes.merge_vector_pdf_noteheads adds these heads, so they are
+    named, but MusicXML has no rhythm for them and on their own they stay
+    silent. Two cases are certain enough to time:
+
+    - another note of a chord: a recognized note in the same staff at the
+      same x gives its start, length and voice;
+    - a whole note: it lasts to the end of the bar, starting with whatever it
+      lines up with in the other staff.
+
+    Anything else - a black or half head with no chord to join - stays silent
+    rather than be given a guessed rhythm, and keeps its name.
+    """
+    by_head = {h['source_id']: h for h in candidates}
+    placed = [(n, by_head[n['head_id']]) for n in notes if n.get('head_id') in by_head]
+    recovered = []
+    for h in sorted((h for h in candidates if h.get('vector_pdf') and h['source_id'] not in used),
+                    key=lambda h: (h['cx'], h['source_id'])):
+        role = h['role']
+        tolerance = max(h.get('w', 0) * .6, 1.0)
+        aligned = [n for n, head in placed if not n['is_grace'] and abs(head['cx'] - h['cx']) <= tolerance]
+        chord = [n for n in aligned if n['staff'] - 1 == role]
+        if chord:
+            prototype = min(chord, key=lambda n: n['start_beat_in_measure'])
+            start, duration = prototype['start_beat_in_measure'], prototype['duration_beats']
+            timing = 'aligned-chord'
+        elif h['shape'] == 'WHOLE_NOTE' and aligned:
+            prototype = min(aligned, key=lambda n: n['start_beat_in_measure'])
+            start = prototype['start_beat_in_measure']
+            duration = measure['length_beats'] - start
+            timing = 'aligned-whole-note'
+        else:
+            continue
+        if duration <= 1e-6:
+            continue
+        diatonic = h.get('label_diatonic', h['diatonic'])
+        transpose = prototype.get('transpose', 0)
+        midi = midi_of(diatonic, h['alter']) + transpose
+        if any(n['staff'] - 1 == role and n['midi'] == midi
+               and abs(n['start_beat_in_measure'] - start) < 1e-6 for n in notes + recovered):
+            continue
+        # A whole note joining nothing in its own staff borrows the other
+        # staff's note for timing only: its staff, clef and voice are its own.
+        staff_notes = [n for n in notes if n['staff'] - 1 == role]
+        if prototype['staff'] - 1 == role:
+            clef, voice = prototype['clef'], prototype['voice']
+        else:
+            sign = h.get('clef', 'G' if role == 0 else 'F')
+            clef = (staff_notes[0]['clef'] if staff_notes
+                    else {'sign': sign, 'line': 2 if sign == 'G' else 4, 'octave': 0})
+            voice = staff_notes[0]['voice'] if staff_notes else prototype['voice']
+        source_id = f'recovered:{h["source_id"]}'
+        n = dict(prototype)
+        n.update(identity=(measure['identity'], source_id), label=measure['label'],
+                 staff=role + 1, voice=voice, clef=clef,
+                 step=step_of(diatonic), octave=octave_of(diatonic), alter=h['alter'],
+                 start_beat_in_measure=start, duration_beats=duration,
+                 is_grace=False, grace={}, chord=bool(chord), tie_start=False, tie_stop=False,
+                 articulations=[], ornaments=[], fermata=False, arpeggiate=False, fingering=None,
+                 octave_shift=0, key_fifths=h.get('key_fifths', n.get('key_fifths', 0)),
+                 transpose=transpose, default_x=h['cx'], source_id=source_id, printed_id=source_id,
+                 midi=midi, xml_midi=midi, bbox_pt=h['bbox_pt'], confidence=h.get('confidence'),
+                 head_id=h['source_id'], pitch_source='pdf-vector-recovered', timing_source=timing)
+        recovered.append(n)
+        used.add(h['source_id'])
+    if recovered:
+        measure['warnings'].append(
+            'Recovered a missed notehead from the vector PDF; timing follows the notes it lines up with.')
+    notes.extend(recovered)
+    return len(recovered)
+
+
 def _prepare_musicxml_only(mxl_path, num_pages, page_omr_overrides=None):
     """Prepare playable notes when PDF/OMR geometry cannot be reconciled."""
     printed = _printed_sources(mxl_path, num_pages, page_omr_overrides)
@@ -663,6 +738,7 @@ def prepare_score(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=No
         vector_count = _recover_uniform_vector_run(m, notes, candidates, used)
         onset_count = _recover_known_onsets(m, notes, candidates, used)
         tail_count = _recover_measure_tail(m, notes, candidates, used)
+        vector_count += _recover_aligned_vector_heads(m, notes, candidates, used)
         stats['arpeggios_recovered'] = stats.get('arpeggios_recovered', 0) + _apply_pdf_arpeggios(
             notes, arpeggios.get(m['page'], ()), m)
         stats['notes_recovered'] = stats.get('notes_recovered', 0) + vector_count + onset_count + tail_count
