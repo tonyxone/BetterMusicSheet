@@ -130,4 +130,7 @@ def restore_labels(document, scales):
     for item in document["items"]:
         s = scales[item["page"] - 1]
         item["x"], item["y"], item["size"] = (round(v / s, 2) for v in (item["x"], item["y"], item["size"]))
+    for head in document.get("unnamed", ()):
+        s = scales[head["page"] - 1]
+        head["x"], head["y"], head["w"] = (round(v / s, 2) for v in (head["x"], head["y"], head["w"]))
     return document

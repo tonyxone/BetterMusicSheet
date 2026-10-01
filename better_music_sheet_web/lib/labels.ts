@@ -28,10 +28,18 @@ export type LabelItem = {
   notes: string[];
 };
 
+/** A printed note recognition never read, so it has no name on the sheet
+ * (see ../../unnamed_notes.py): its notehead's centre and width, in PDF
+ * points, top-down. Only vector PDFs have these; a scan's misses can't be
+ * told apart from the notes that were read. */
+export type UnnamedNote = { page: number; x: number; y: number; w: number };
+
 export type LabelSet = {
   color: string; items: LabelItem[]; source: "data" | "pdf";
   /** How the sheet was made to show its names, from the upload's option. */
   notation?: "letters" | "numbers";
+  /** Printed notes left without a name. Absent for older sheets. */
+  unnamed?: UnnamedNote[];
 };
 
 // ---- note names ------------------------------------------------------------
@@ -101,6 +109,36 @@ function pitchClassOf(text: string) {
 
 // ---- loading ---------------------------------------------------------------
 
+function validUnnamed(value: unknown): value is UnnamedNote {
+  const v = value as UnnamedNote;
+  return !!v && Number.isInteger(v.page) && Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.w);
+}
+
+/** The unnamed notes the reader hasn't named yet: a note of their own (a
+ * TextNote, see edits.ts) written beside a notehead is its name. Each note
+ * names only the one head nearest its middle, so naming one note of a chord
+ * leaves the rest of the chord ringed. */
+export function stillUnnamed<T extends { page: number; x: number; y: number; size: number }>(unnamed: UnnamedNote[], texts: T[]) {
+  const named = new Set<UnnamedNote>();
+  for (const t of texts) {
+    const middle = t.y - t.size * 0.35;
+    let best: UnnamedNote | null = null;
+    let bestDistance = Infinity;
+    for (const u of unnamed) {
+      const dx = t.x - (u.x + u.w / 2);
+      const dy = middle - u.y;
+      if (u.page !== t.page || named.has(u) || Math.abs(dx) > 2 * u.w + 8 || Math.abs(dy) > 12) continue;
+      const distance = Math.hypot(dx, dy);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = u;
+      }
+    }
+    if (best) named.add(best);
+  }
+  return unnamed.filter((u) => !named.has(u));
+}
+
 function validItem(value: unknown): value is LabelItem {
   const v = value as LabelItem;
   return !!v && typeof v.id === "string" && typeof v.text === "string" && Number.isFinite(v.page)
@@ -115,12 +153,13 @@ export async function loadLabels(jobId: string, annotatedPdf: ArrayBuffer | null
     if (assets?.labels) {
       const res = await fetchSheetFile(jobId, "labels");
       if (res.ok) {
-        const data = await res.json() as { color?: string; items?: unknown[]; notation?: string };
+        const data = await res.json() as { color?: string; items?: unknown[]; notation?: string; unnamed?: unknown };
         const items = (data.items ?? []).filter(validItem).map((item) => ({
           ...item, group: item.group ?? item.id, notes: Array.isArray(item.notes) ? item.notes : [],
         }));
         const notation = data.notation === "numbers" ? "numbers" as const : "letters" as const;
-        if (items.length) return { color: data.color ?? "#000000", items, source: "data", notation };
+        const unnamed = (Array.isArray(data.unnamed) ? data.unnamed : []).filter(validUnnamed);
+        if (items.length) return { color: data.color ?? "#000000", items, source: "data", notation, unnamed };
       }
     }
   } catch (err) {
