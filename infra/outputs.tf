@@ -51,6 +51,10 @@ output "admin_table" {
   value = aws_dynamodb_table.admin.name
 }
 
+output "free_upload_claims_table" {
+  value = aws_dynamodb_table.free_upload_claims.name
+}
+
 output "music_sheet_table" {
   value = aws_dynamodb_table.music_sheet.name
 }

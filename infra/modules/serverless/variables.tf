@@ -51,6 +51,7 @@ variable "users_table" { type = string }
 variable "subscriptions_table" { type = string }
 variable "master_users_table" { type = string }
 variable "admin_table" { type = string }
+variable "free_upload_claims_table" { type = string }
 variable "sheets_table" { type = string }
 variable "jobs_table" { type = string }
 variable "secret_parameter" { type = string }

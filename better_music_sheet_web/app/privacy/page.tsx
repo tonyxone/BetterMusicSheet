@@ -16,7 +16,7 @@ export default function PrivacyPage() {
         <BackButton />
         <h1 className="serif">Privacy</h1>
       </div>
-      <div className="sub">Last updated 28 September 2026</div>
+      <div className="sub">Last updated 1 October 2026</div>
 
       <p>
         This page explains what BetterMusicSheet keeps about you, why, and how
@@ -71,6 +71,13 @@ export default function PrivacyPage() {
         account from the menu under your name at the top of the page. Delete your
         sheets first if you want them gone too, and cancel any subscription
         first: deleting your account doesn&apos;t cancel it.
+      </p>
+      <p>
+        If your account had a finished sheet, deleting it leaves one thing behind:
+        a one-way, scrambled code made from your email address. It can&apos;t be
+        turned back into your address. It is kept only so that the free
+        plan&apos;s one sheet upload isn&apos;t given again to a new account with
+        the same email.
       </p>
       <p>
         To ask what we hold about you, or to have anything removed, email{" "}

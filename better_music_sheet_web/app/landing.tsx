@@ -94,7 +94,8 @@ export function Landing() {
         <h2>Cost</h2>
         <p>
           Trying the sample above is free, with no account needed. Uploading your
-          own sheet music requires an account with an active subscription — see{" "}
+          own sheet music needs an account: a free one includes one sheet upload,
+          and Premium removes that limit — see{" "}
           <Link href="/subscription/plans">plans</Link>, and the{" "}
           <Link href="/privacy">privacy policy</Link> for what is stored.
         </p>

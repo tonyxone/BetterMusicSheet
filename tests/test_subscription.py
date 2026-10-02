@@ -128,7 +128,7 @@ class SubscriptionTests(unittest.TestCase):
         self.assertEqual(response.json(), {
             "tier": "free", "plan": None, "status": None, "started_at": None,
             "current_period_end": None, "cancel_at_period_end": False,
-            "platform": None, "trial_eligible": True, "master": False,
+            "platform": None, "trial_eligible": True, "free_upload_used": False, "master": False,
         })
 
     def test_subscription_endpoint_returns_active_entitlement(self):
@@ -140,7 +140,7 @@ class SubscriptionTests(unittest.TestCase):
         self.assertEqual(response.json(), {
             "tier": "premium", "plan": "yearly", "status": "active", "started_at": None,
             "current_period_end": 2_000_000_000, "cancel_at_period_end": True,
-            "platform": "apple", "trial_eligible": False, "master": False,
+            "platform": "apple", "trial_eligible": False, "free_upload_used": False, "master": False,
         })
 
     def test_scheduled_cancellation_is_free_once_its_period_has_ended(self):
@@ -169,7 +169,7 @@ class SubscriptionTests(unittest.TestCase):
         self.assertEqual(response.json(), {
             "tier": "premium", "plan": None, "status": None, "started_at": None,
             "current_period_end": None, "cancel_at_period_end": False,
-            "platform": None, "trial_eligible": True, "master": True,
+            "platform": None, "trial_eligible": True, "free_upload_used": False, "master": True,
         })
         self.assertEqual(auth.require_premium(authorization=self.headers(MASTER_USER)["Authorization"]), MASTER_USER)
 

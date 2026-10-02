@@ -7,6 +7,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { MAX_UPLOAD_BYTES, uploadSheet } from "@/lib/sheet-files";
 import { useAuth } from "./auth-context";
+import { clientApiFetch } from "@/lib/client-api";
 import { refreshSubscription } from "@/lib/subscription";
 import { resolveUploadAttempt } from "@/lib/upload-gate";
 import { addFiles, combinePhotos, isPhoto, moveFile, removeFile } from "@/lib/photo-pages";
@@ -54,10 +55,12 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
   const [openHelp, setOpenHelp] = useState<UploadOption | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [atFreeLimit, setAtFreeLimit] = useState(false);
 
-  // Uploading is a members feature (see server.py's upload routes) - a
-  // signed-in account with an active subscription, checked fresh here
-  // rather than trusted from whatever was cached before sign-in.
+  // Uploading needs a signed-in account. Premium uploads freely; the free
+  // plan keeps one sheet at a time (lib/upload-gate.ts). Both are checked
+  // fresh here rather than trusted from whatever was cached before sign-in,
+  // and server.py enforces the limit whatever this decides.
   const photos = files.length > 0 && files.every(isPhoto);
   const file = files.length === 1 ? files[0] : null;
 
@@ -72,10 +75,14 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
     setSubmitting(true);
     setError(null);
     try {
-      const subscription = await refreshSubscription();
-      const attempt = resolveUploadAttempt(subscription);
-      if (!attempt.proceed) {
-        router.push(attempt.redirectTo);
+      const [subscription, jobs] = await Promise.all([
+        refreshSubscription(),
+        // Unreadable, the list counts as empty: the server still refuses an
+        // upload over the limit, and its message is shown like any error.
+        clientApiFetch("/api/sheets").then((res) => (res.ok ? res.json() : [])).catch(() => []),
+      ]);
+      if (!resolveUploadAttempt(subscription, jobs).proceed) {
+        setAtFreeLimit(true);
         return;
       }
       // Several photos - or one too large to send as it is - go up as one
@@ -126,7 +133,7 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
       )}
 
       <p className="upload-sub" style={{ marginTop: heading ? 6 : 0 }}>
-        Uploading requires an account with an active subscription -{" "}
+        Uploading needs an account. A free account includes one sheet upload; Premium uploads as many as you like -{" "}
         <Link href="/subscription/plans" style={{ color: "var(--accent)" }}>see plans</Link>.
       </p>
 
@@ -297,6 +304,33 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
           {preparing ? "Preparing pages…" : submitting ? "Uploading…" : !user && files.length ? "Sign in to upload" : "Upload"}
         </button>
       </form>
+      {atFreeLimit && <FreeLimitNotice onClose={() => setAtFreeLimit(false)} />}
+    </div>
+  );
+}
+
+/** A free account whose one upload is used - by a sheet it has, or had and
+ * deleted. Deleting doesn't give it back, so the only way on is Premium. The
+ * chosen file stays picked, for straight after subscribing. */
+function FreeLimitNotice({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <div className="modal-card delete-modal" role="alertdialog" aria-modal="true" aria-labelledby="free-limit-title"
+        style={{ textAlign: "left" }}>
+        <button type="button" className="modal-close" onClick={onClose} title="Close" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m6 6 12 12M18 6 6 18" />
+          </svg>
+        </button>
+        <h2 id="free-limit-title" className="modal-title">Free upload limit reached</h2>
+        <p className="modal-sub">
+          The free plan includes 1 music sheet upload, and you&apos;ve used it. Go Premium for unlimited uploads.
+        </p>
+        <div className="modal-actions">
+          <button type="button" className="btn-pill ghost" onClick={onClose}>Not now</button>
+          <Link href="/subscription/upgrade" className="btn-pill" style={{ textDecoration: "none" }}>See Premium plans</Link>
+        </div>
+      </div>
     </div>
   );
 }

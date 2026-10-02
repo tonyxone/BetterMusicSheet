@@ -4,6 +4,7 @@ at all) authenticates reads of a job a guest already owns, never a new
 upload. Runs in local (non-serverless) mode, like test_delete_sheet.py.
 """
 import unittest
+import uuid
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -77,10 +78,13 @@ class UploadRequiresSignInTests(unittest.TestCase):
         self.assertEqual(db.get_annotation_job(job_id)["user_id"], USER)
         enqueue.assert_called_once_with(job_id)
 
-    def upload(self, user_id=USER):
+    def upload(self, user_id=USER, website=True):
+        """An upload from the website - which, as any browser request to the
+        API, carries an Origin - or, with website=False, from the iOS app."""
         files = {"file": ("Song.pdf", b"%PDF-1.4 test", "application/pdf")}
+        headers = {**self.signed_in(user_id), **({"Origin": "https://bettermusicsheet.com"} if website else {})}
         with patch.object(server, "enqueue_local"):
-            response = self.client.post("/api/sheets", files=files, headers=self.signed_in(user_id))
+            response = self.client.post("/api/sheets", files=files, headers=headers)
         if response.status_code == 202:
             self.addCleanup(db.delete_annotation_job, response.json()["job_id"])
             self.addCleanup(db.delete_music_sheet, response.json()["music_sheet_id"])
@@ -91,25 +95,136 @@ class UploadRequiresSignInTests(unittest.TestCase):
         db.update_annotation_job(job_id, status=status)
         job_state.release(job)
 
-    def test_a_free_account_keeps_one_sheet_at_a_time(self):
-        free = "33333333-3333-4333-8333-333333333333"
+    def delete(self, user_id, job_id):
+        return self.client.delete(f"/api/sheets/{job_id}", headers=self.signed_in(user_id)).status_code
+
+    def free_upload_used(self, user_id):
+        return self.client.get("/api/me/subscription", headers=self.signed_in(user_id)).json()["free_upload_used"]
+
+    def test_a_free_account_uploads_one_sheet_for_good(self):
+        free = str(uuid.uuid4())
         first = self.upload(free)
         self.assertEqual(first.status_code, 202, first.text)
         self.finish(first.json()["job_id"])
 
         second = self.upload(free)
         self.assertEqual(second.status_code, 403)
-        self.assertIn("free plan keeps 1 sheet", second.json()["detail"])
+        self.assertIn("used the free plan's 1 sheet upload", second.json()["detail"])
 
-        self.assertEqual(self.client.delete(f"/api/sheets/{first.json()['job_id']}",
-                                            headers=self.signed_in(free)).status_code, 204)
-        self.assertEqual(self.upload(free).status_code, 202)
+        # Deleting the sheet doesn't give the upload back.
+        self.assertFalse(self.free_upload_used(free))
+        self.assertEqual(self.delete(free, first.json()["job_id"]), 204)
+        self.assertTrue(self.free_upload_used(free))
+        third = self.upload(free)
+        self.assertEqual(third.status_code, 403)
+        self.assertIn("used the free plan's 1 sheet upload", third.json()["detail"])
 
-    def test_a_failed_sheet_does_not_use_the_free_slot(self):
-        free = "44444444-4444-4444-8444-444444444444"
+    def test_a_failed_sheet_does_not_use_the_free_upload(self):
+        free = str(uuid.uuid4())
         first = self.upload(free)
         self.finish(first.json()["job_id"], status="failed")
         self.assertEqual(self.upload(free).status_code, 202)
+
+    def test_deleting_a_failed_sheet_does_not_use_the_free_upload(self):
+        free = str(uuid.uuid4())
+        first = self.upload(free)
+        self.finish(first.json()["job_id"], status="failed")
+        self.assertEqual(self.delete(free, first.json()["job_id"]), 204)
+        self.assertFalse(self.free_upload_used(free))
+        self.assertEqual(self.upload(free).status_code, 202)
+
+    def test_cancelling_a_sheet_before_it_finishes_does_not_use_the_free_upload(self):
+        free = str(uuid.uuid4())
+        first = self.upload(free)
+        self.assertEqual(db.get_annotation_job(first.json()["job_id"])["status"], "queued")
+        self.delete(free, first.json()["job_id"])
+        self.assertFalse(self.free_upload_used(free))
+
+    def test_a_sheet_that_finishes_while_being_deleted_still_uses_the_free_upload(self):
+        # The delete reads "processing", loses the race to the worker, and
+        # retries on the now-finished sheet: that pass must mark the account.
+        free = str(uuid.uuid4())
+        first = self.upload(free)
+        job_id = first.json()["job_id"]
+        real_change = job_state.change
+        def finish_first(changed_id, expected, **fields):
+            if fields.get("status") == "deleting" and expected.get("status") != "done":
+                self.finish(job_id)  # the worker gets there first
+                return False
+            return real_change(changed_id, expected, **fields)
+        with patch.object(job_state, "change", side_effect=finish_first):
+            self.client.delete(f"/api/sheets/{job_id}", headers=self.signed_in(free))
+        self.assertTrue(self.free_upload_used(free))
+
+    def account(self, email):
+        user_id = str(uuid.uuid4())
+        db.create_user_if_missing(user_id, email, "Reader")
+        return user_id
+
+    def delete_account(self, user_id):
+        with patch.object(server, "delete_cognito_user"):
+            return self.client.delete("/api/me", headers=self.signed_in(user_id)).status_code
+
+    def test_signing_up_again_with_the_same_email_doesnt_bring_the_free_upload_back(self):
+        email = f"reader.{uuid.uuid4().hex[:8]}@gmail.com"
+        first = self.account(email)
+        sheet = self.upload(first)
+        self.finish(sheet.json()["job_id"])
+        self.assertEqual(self.delete_account(first), 204)
+
+        # The same inbox, written another way, as a brand-new account.
+        local, _, domain = email.partition("@")
+        again = self.account(f"{local.upper().replace('.', '')}+again@googlemail.com")
+        self.assertTrue(self.free_upload_used(again))
+        refused = self.upload(again)
+        self.assertEqual(refused.status_code, 403)
+        self.assertIn("used the free plan's 1 sheet upload", refused.json()["detail"])
+        # A different address is a different reader.
+        self.assertEqual(self.upload(self.account(f"other.{uuid.uuid4().hex[:8]}@gmail.com")).status_code, 202)
+
+    def test_deleting_an_account_that_never_finished_a_sheet_leaves_no_claim(self):
+        email = f"new.{uuid.uuid4().hex[:8]}@example.com"
+        first = self.account(email)
+        failed = self.upload(first)
+        self.finish(failed.json()["job_id"], status="failed")
+        self.assertEqual(self.delete_account(first), 204)
+        self.assertEqual(self.upload(self.account(email)).status_code, 202)
+
+    def test_the_email_claim_only_applies_on_the_website(self):
+        email = f"ios.{uuid.uuid4().hex[:8]}@example.com"
+        first = self.account(email)
+        sheet = self.upload(first)
+        self.finish(sheet.json()["job_id"])
+        self.assertEqual(self.delete_account(first), 204)
+        self.assertEqual(self.upload(self.account(email), website=False).status_code, 202)
+
+    def test_the_ios_app_keeps_its_one_sheet_at_a_time_rule(self):
+        # The app sends no Origin. Its free accounts may still delete their
+        # sheet and add another, and hear the same message they always have.
+        free = str(uuid.uuid4())
+        first = self.upload(free, website=False)
+        self.finish(first.json()["job_id"])
+        second = self.upload(free, website=False)
+        self.assertEqual(second.status_code, 403)
+        self.assertIn("free plan keeps 1 sheet at a time", second.json()["detail"])
+        self.assertEqual(self.delete(free, first.json()["job_id"]), 204)
+        self.assertEqual(self.upload(free, website=False).status_code, 202)
+
+    def test_the_website_holds_to_the_lifetime_limit_whichever_app_deleted_the_sheet(self):
+        # Deleted in the iOS app, the sheet still used up the website's upload.
+        free = str(uuid.uuid4())
+        first = self.upload(free, website=False)
+        self.finish(first.json()["job_id"])
+        self.assertEqual(self.delete(free, first.json()["job_id"]), 204)
+        self.assertEqual(self.upload(free, website=True).status_code, 403)
+
+    def test_a_premium_account_deleting_a_sheet_still_uploads_freely(self):
+        premium = str(uuid.uuid4())
+        with patch.object(server, "get_entitlement", return_value={"tier": "premium"}):
+            first = self.upload(premium)
+            self.finish(first.json()["job_id"])
+            self.assertEqual(self.delete(premium, first.json()["job_id"]), 204)
+            self.assertEqual(self.upload(premium).status_code, 202)
 
     def test_premium_accounts_have_no_sheet_limit(self):
         premium = "55555555-5555-4555-8555-555555555555"

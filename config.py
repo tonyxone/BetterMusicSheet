@@ -88,6 +88,11 @@ MASTER_USERS_TABLE = os.environ.get("MASTER_USERS_TABLE")
 # same reason: without a table nobody is an admin, and every admin route 404s.
 ADMIN_TABLE = os.environ.get("ADMIN_TABLE")
 
+# Emails that have had the website's free upload, kept past account deletion
+# (see server.py's _check_free_upload). Without a table - local dev and tests
+# - they are remembered in memory for as long as the process runs.
+FREE_UPLOAD_CLAIMS_TABLE = os.environ.get("FREE_UPLOAD_CLAIMS_TABLE")
+
 # Stripe is optional until somebody starts a checkout, cancels a subscription,
 # or Stripe calls the webhook. Keeping these nullable lets the rest of the API
 # start in local development without billing credentials.
