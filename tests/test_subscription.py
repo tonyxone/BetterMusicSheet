@@ -345,6 +345,39 @@ class SubscriptionTests(unittest.TestCase):
         self.assertEqual(response.status_code, 502)
         self.assertIn("try again", response.json()["detail"])
 
+    def test_stripe_cancel_refusal_is_not_reported_as_unreachable(self):
+        # e.g. an ID from test mode while the site runs on the live key.
+        db.upsert_subscription(STRIPE_USER, "active", "monthly", "stripe", 100, 2_000_000_000,
+                               False, subscription_id="sub_123")
+        mocked, settings = self.stripe()
+        mocked.Subscription.modify.side_effect = stripe.error.InvalidRequestError(
+            "No such subscription: 'sub_123'", "id", code="resource_missing")
+        mocked.Subscription.retrieve.side_effect = stripe.error.InvalidRequestError(
+            "No such subscription: 'sub_123'", "id", code="resource_missing")
+        with settings, patch.object(stripe_billing, "stripe", mocked), \
+                self.assertLogs("stripe_billing", "WARNING") as logs:
+            response = self.client.post("/api/subscriptions/cancel", json={"platform": "stripe"}, headers=self.headers(STRIPE_USER))
+        self.assertEqual(response.status_code, 502)
+        detail = response.json()["detail"]
+        self.assertNotIn("reach", detail)
+        self.assertIn("resource_missing", detail)
+        self.assertIn("No such subscription", "\n".join(logs.output))
+        self.assertEqual(db.get_subscription(STRIPE_USER)["status"], "active")
+
+    def test_stripe_cancel_records_a_subscription_that_already_ended_in_stripe(self):
+        # Cancelled in Stripe's dashboard, and the webhook saying so missed.
+        db.upsert_subscription(STRIPE_USER, "trialing", "monthly", "stripe", 100, 2_000_000_000,
+                               False, subscription_id="sub_123")
+        mocked, settings = self.stripe()
+        mocked.Subscription.modify.side_effect = stripe.error.InvalidRequestError(
+            "A canceled subscription can only update its cancellation_details and metadata.", None)
+        mocked.Subscription.retrieve.return_value = stripe_subscription(STRIPE_USER, "canceled")
+        with settings, patch.object(stripe_billing, "stripe", mocked), self.assertLogs("stripe_billing", "WARNING"):
+            response = self.client.post("/api/subscriptions/cancel", json={"platform": "stripe"}, headers=self.headers(STRIPE_USER))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["tier"], "free")
+        self.assertEqual(db.get_subscription(STRIPE_USER)["status"], "expired")
+
     def test_stripe_webhook_maps_created_updated_and_deleted_subscriptions(self):
         stripe, settings = self.stripe()
         with settings, patch.object(stripe_billing, "stripe", stripe):
