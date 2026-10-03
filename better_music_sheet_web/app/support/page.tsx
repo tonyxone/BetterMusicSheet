@@ -28,9 +28,10 @@ export default function SupportPage() {
 
       <h2>Free and Premium</h2>
       <p>
-        With a free account you can keep one sheet at a time; to upload another,
-        delete the one you have. Premium removes that limit and unlocks the full
-        practice mode.
+        A free account keeps one sheet at a time - to upload another, delete the
+        one you have - and practice mode plays the first two lines of a sheet.
+        Premium keeps as many sheets as you like and unlocks the full practice
+        mode.
       </p>
 
       <h2>Managing or cancelling a subscription</h2>

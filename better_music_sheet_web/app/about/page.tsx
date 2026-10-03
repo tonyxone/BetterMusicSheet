@@ -89,9 +89,11 @@ export default function AboutPage() {
       <h2>Cost and accounts</h2>
       <p>
         Trying the built-in sample needs no account. Uploading your own sheet
-        music is a members feature: it requires an account with an active
-        subscription, so the same sheet stays available to sign back into from
-        anywhere. What happens to your files is set out in the{" "}
+        music needs an account, so the same sheet stays available to sign back
+        into from anywhere. A free account keeps one sheet at a time and plays
+        its first two lines in practice mode; Premium keeps as many sheets as
+        you like and unlocks the full practice mode. What happens to your files
+        is set out in the{" "}
         <a href="/privacy">privacy policy</a>.
       </p>
 

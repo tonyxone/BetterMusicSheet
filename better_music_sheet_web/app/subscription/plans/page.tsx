@@ -39,6 +39,9 @@ export default function PlansPage() {
           <li>Access on any device, synced to your account</li>
           <li>Cancel anytime, no long-term commitment</li>
         </ul>
+        <p className="subscription-muted" style={{ marginTop: 16 }}>
+          On the free plan you keep one sheet at a time, and practice mode plays its first two lines.
+        </p>
       </div>
     </div>
   );
