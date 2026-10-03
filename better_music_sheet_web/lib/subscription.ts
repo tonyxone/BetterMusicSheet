@@ -18,9 +18,6 @@ export type Subscription = {
   /** A master account: premium without a subscription (the backend's
    * master users table). Absent from older backends. */
   master?: boolean;
-  /** Whether a free account's one upload has gone to a sheet it has since
-   * deleted (server.py's _check_free_upload). Absent from older backends. */
-  free_upload_used?: boolean;
 };
 
 export const FREE_SUBSCRIPTION: Subscription = {

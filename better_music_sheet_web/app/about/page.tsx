@@ -90,8 +90,10 @@ export default function AboutPage() {
       <p>
         Trying the built-in sample needs no account. Uploading your own sheet
         music needs an account, so the same sheet stays available to sign back
-        into from anywhere. A free account includes one sheet upload; Premium
-        removes that limit. What happens to your files is set out in the{" "}
+        into from anywhere. A free account keeps one sheet at a time and plays
+        its first two lines in practice mode; Premium keeps as many sheets as
+        you like and unlocks the full practice mode. What happens to your files
+        is set out in the{" "}
         <a href="/privacy">privacy policy</a>.
       </p>
 

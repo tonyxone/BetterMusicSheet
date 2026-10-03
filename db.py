@@ -26,7 +26,7 @@ import time
 import traceback
 from decimal import Decimal
 
-from config import ADMIN_TABLE, FREE_UPLOAD_CLAIMS_TABLE, IS_PRODUCTION, MASTER_USERS_TABLE, SUBSCRIPTIONS_TABLE
+from config import ADMIN_TABLE, IS_PRODUCTION, MASTER_USERS_TABLE, SUBSCRIPTIONS_TABLE
 
 
 _SUBSCRIPTION_STATUSES = {"trialing", "active", "canceled", "expired", "past_due"}
@@ -162,20 +162,6 @@ if IS_PRODUCTION:
             Key={"user_id": user_id},
             UpdateExpression="SET hide_demo = :h",
             ExpressionAttributeValues={":h": hidden},
-        )
-
-    def has_used_free_upload(user_id):
-        user = get_user(user_id)
-        return bool(user and user.get("free_upload_used"))
-
-    def mark_free_upload_used(user_id):
-        """Remember that this account had a finished sheet - set as that
-        sheet is deleted, when its own row stops being the record of it.
-        Upsert, like set_demo_hidden. See server.py's _check_free_upload."""
-        _users_table.update_item(
-            Key={"user_id": user_id},
-            UpdateExpression="SET free_upload_used = :t",
-            ExpressionAttributeValues={":t": True},
         )
 
     # ---- music_sheet ----
@@ -326,19 +312,6 @@ else:
                 "display_name": None, "created_at": int(time.time()),
             })
             row["hide_demo"] = hidden
-
-    def has_used_free_upload(user_id):
-        with _lock:
-            user = _users.get(user_id)
-            return bool(user and user.get("free_upload_used"))
-
-    def mark_free_upload_used(user_id):
-        with _lock:
-            row = _users.setdefault(user_id, {
-                "user_id": user_id, "email": None,
-                "display_name": None, "created_at": int(time.time()),
-            })
-            row["free_upload_used"] = True
 
     # ---- subscriptions ----
     #
@@ -649,36 +622,3 @@ else:
     def add_admin(user_id):
         with _admins_lock:
             _admins.add(user_id)
-
-
-# ---- free upload claims: emails that have had the website's free upload ----
-#
-# One row per keyed one-way hash of an email address (server.py's
-# _email_key), written as an account that used the free upload is deleted, so
-# a new account with the same address doesn't get it again. Rows are never
-# removed by the app, and never listed.
-if FREE_UPLOAD_CLAIMS_TABLE:
-    import os
-
-    import boto3
-
-    _free_upload_claims_table = boto3.resource(
-        "dynamodb", region_name=os.environ.get("AWS_REGION", "us-west-1"),
-    ).Table(FREE_UPLOAD_CLAIMS_TABLE)
-
-    def is_free_upload_claimed(email_hash):
-        return "Item" in _free_upload_claims_table.get_item(Key={"email_hash": email_hash})
-
-    def claim_free_upload(email_hash):
-        _free_upload_claims_table.put_item(Item={"email_hash": email_hash, "claimed_at": int(time.time())})
-else:
-    _free_upload_claims = set()
-    _free_upload_claims_lock = threading.Lock()
-
-    def is_free_upload_claimed(email_hash):
-        with _free_upload_claims_lock:
-            return email_hash in _free_upload_claims
-
-    def claim_free_upload(email_hash):
-        with _free_upload_claims_lock:
-            _free_upload_claims.add(email_hash)

@@ -244,12 +244,10 @@ function MoreIcon() {
 
 /** How many printed lines (systems) a non-subscriber can play before playback
  * stops and the subscribe prompt appears. Lines rather than measures because
- * that is the unit someone reading the sheet actually sees. The allowance
- * doubles once that prompt has been closed once (see subscribePromptSeen in
- * Player), so a visitor who dismisses it gets a slightly bigger taste on the
- * next try rather than hitting the exact same wall. */
-const FREE_LINES_FIRST_PLAY = 1;
-const FREE_LINES_AFTER_PROMPT = 2;
+ * that is the unit someone reading the sheet actually sees. The same on every
+ * try: the free plan plays the first two lines of a sheet, as the plans page
+ * says. */
+const FREE_LINES = 2;
 
 export function PlayView() {
   const router = useRouter();
@@ -401,14 +399,8 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
 
   /** Whether the subscribe prompt is open right now. */
   const [subscribePromptOpen, setSubscribePromptOpen] = useState(false);
-  /** Whether it has already been shown and closed once this visit - unlocks
-   * FREE_LINES_AFTER_PROMPT (see there). */
-  const [subscribePromptSeen, setSubscribePromptSeen] = useState(false);
   const openSubscribePrompt = useCallback(() => setSubscribePromptOpen(true), []);
-  const closeSubscribePrompt = useCallback(() => {
-    setSubscribePromptOpen(false);
-    setSubscribePromptSeen(true);
-  }, []);
+  const closeSubscribePrompt = useCallback(() => setSubscribePromptOpen(false), []);
 
   /** Index of the first measure past the free lines, or null when a visitor
    * can play everything.
@@ -418,18 +410,17 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
    * backend having to label them. */
   const lockedFrom = useMemo(() => {
     if (unlimited || !timeline) return null;
-    const allowedLines = subscribePromptSeen ? FREE_LINES_AFTER_PROMPT : FREE_LINES_FIRST_PLAY;
     const seen: string[] = [];
     for (const m of timeline.measures) {
       if (!m.bbox_pt || m.page === null) continue;
       const line = `${m.page}:${Math.round(m.bbox_pt[1])}`;
       if (!seen.includes(line)) {
         seen.push(line);
-        if (seen.length > allowedLines) return m.index;
+        if (seen.length > FREE_LINES) return m.index;
       }
     }
     return null;
-  }, [unlimited, timeline, subscribePromptSeen]);
+  }, [unlimited, timeline]);
 
   /** A non-subscriber can play up to here and no further. */
   const freeEndBeat = useMemo(() => {

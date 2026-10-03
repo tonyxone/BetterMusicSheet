@@ -20,13 +20,6 @@ locals {
     Effect   = "Allow", Action = ["dynamodb:GetItem"],
     Resource = "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.master_users_table}"
   }
-  # The website's free upload, remembered by email past account deletion
-  # (../../../server.py's _check_free_upload): read on upload, written once
-  # as an account that used it is deleted. Never deleted, never scanned.
-  free_upload_claims_statement = {
-    Effect   = "Allow", Action = ["dynamodb:GetItem", "dynamodb:PutItem"],
-    Resource = "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.free_upload_claims_table}"
-  }
   # The admin dashboard (../../../admin.py): who may open it (read-only for
   # the same reason as master_users_statement), whole-table reads for its
   # lists, and a look at this region's queue and worker service.
@@ -81,7 +74,7 @@ resource "aws_iam_role" "api" {
 resource "aws_iam_role_policy" "api" {
   role = aws_iam_role.api.id
   policy = jsonencode({ Version = "2012-10-17", Statement = concat([
-    local.logs_statement, local.db_statement, local.master_users_statement, local.free_upload_claims_statement, local.new_files_statement,
+    local.logs_statement, local.db_statement, local.master_users_statement, local.new_files_statement,
     local.list_files_statement, local.cognito_delete_statement, local.alerts_statement,
     { Effect = "Allow", Action = ["s3:GetObject", "s3:DeleteObject"], Resource = "arn:aws:s3:::${var.legacy_bucket}/*" },
     { Effect = "Allow", Action = ["s3:ListBucket"], Resource = "arn:aws:s3:::${var.legacy_bucket}" },

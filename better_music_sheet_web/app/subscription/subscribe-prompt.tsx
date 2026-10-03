@@ -42,7 +42,7 @@ export function SubscribePrompt({ onClose }: { onClose: () => void }) {
         </button>
         <h2 className="serif modal-title">Keep practicing</h2>
         <p className="modal-sub">
-          That&apos;s the free preview. Subscribe for full practice mode on every piece{trial ? ", with a 7-day free trial" : ""}.
+          That&apos;s the free preview: the first two lines. Subscribe for full practice mode on every piece{trial ? ", with a 7-day free trial" : ""}.
         </p>
         <Link className="btn-pill" href="/subscription/upgrade" onClick={onClose} style={{ display: "block", textAlign: "center" }}>
           {trial ? "Start 7-day free trial" : "Subscribe"}

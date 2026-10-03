@@ -133,7 +133,7 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
       )}
 
       <p className="upload-sub" style={{ marginTop: heading ? 6 : 0 }}>
-        Uploading needs an account. A free account includes one sheet upload; Premium uploads as many as you like -{" "}
+        Uploading needs an account. A free account keeps one sheet at a time; Premium keeps as many as you like -{" "}
         <Link href="/subscription/plans" style={{ color: "var(--accent)" }}>see plans</Link>.
       </p>
 
@@ -309,9 +309,9 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
   );
 }
 
-/** A free account whose one upload is used - by a sheet it has, or had and
- * deleted. Deleting doesn't give it back, so the only way on is Premium. The
- * chosen file stays picked, for straight after subscribing. */
+/** A free account that already has a sheet: the free plan keeps one at a
+ * time, so the way on is to delete it (or go Premium). The chosen file stays
+ * picked, for straight after either. */
 function FreeLimitNotice({ onClose }: { onClose: () => void }) {
   return (
     <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
@@ -322,12 +322,13 @@ function FreeLimitNotice({ onClose }: { onClose: () => void }) {
             <path d="m6 6 12 12M18 6 6 18" />
           </svg>
         </button>
-        <h2 id="free-limit-title" className="modal-title">Free upload limit reached</h2>
+        <h2 id="free-limit-title" className="modal-title">One sheet at a time on the free plan</h2>
         <p className="modal-sub">
-          The free plan includes 1 music sheet upload, and you&apos;ve used it. Go Premium for unlimited uploads.
+          The free plan keeps one sheet at a time. Delete your current sheet to upload this one, or go Premium to keep as many as you like.
         </p>
         <div className="modal-actions">
           <button type="button" className="btn-pill ghost" onClick={onClose}>Not now</button>
+          <Link href="/sheets" className="btn-pill ghost" style={{ textDecoration: "none" }}>Go to my sheet</Link>
           <Link href="/subscription/upgrade" className="btn-pill" style={{ textDecoration: "none" }}>See Premium plans</Link>
         </div>
       </div>

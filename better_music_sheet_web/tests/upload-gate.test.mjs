@@ -32,11 +32,11 @@ test('a premium account proceeds with the upload, however many sheets it has', (
   assert.equal(result.proceed, true);
 });
 
-test('a free account uploads its first sheet', () => {
+test('a free account with no sheet uploads', () => {
   assert.equal(api.resolveUploadAttempt(subscription({ tier: "free" }), []).proceed, true);
 });
 
-test('a free account that has a sheet has reached its upload limit', () => {
+test('a free account that has a sheet is at its limit', () => {
   for (const status of ["done", "processing", "queued", "uploading"]) {
     const result = api.resolveUploadAttempt(subscription({ tier: "free" }), [sheet(status)]);
     assert.equal(result.proceed, false, status);
@@ -44,21 +44,15 @@ test('a free account that has a sheet has reached its upload limit', () => {
   }
 });
 
-test('deleting the sheet does not give the free upload back', () => {
-  // The server marks the account as the finished sheet is deleted.
-  const result = api.resolveUploadAttempt(subscription({ tier: "free", free_upload_used: true }), []);
-  assert.equal(result.proceed, false);
-  assert.equal(result.reason, "free-limit");
+test('deleting the sheet lets a free account upload again', () => {
+  // Once the sheet is gone (or going), the one slot is free again.
+  assert.equal(api.resolveUploadAttempt(subscription({ tier: "free" }), [sheet("deleted")]).proceed, true);
+  assert.equal(api.resolveUploadAttempt(subscription({ tier: "free" }), [sheet("deleting")]).proceed, true);
 });
 
-test('a failed sheet does not use up the free upload', () => {
-  // The same rule as server.py's _check_free_upload.
-  const result = api.resolveUploadAttempt(subscription({ tier: "free" }), [sheet("failed"), sheet("deleting"), sheet("deleted")]);
-  assert.equal(result.proceed, true);
-});
-
-test('premium uploads even after a free upload was used', () => {
-  const result = api.resolveUploadAttempt(subscription({ tier: "premium", free_upload_used: true }), [sheet("done")]);
+test('a failed sheet does not take up the free slot', () => {
+  // The same rule as server.py's _check_free_sheet_limit.
+  const result = api.resolveUploadAttempt(subscription({ tier: "free" }), [sheet("failed")]);
   assert.equal(result.proceed, true);
 });
 

@@ -35,11 +35,9 @@ resource "aws_lambda_function" "api" {
       APPLE_PRODUCT_YEARLY         = var.apple_product_yearly
       # The admin dashboard (../../../admin.py): who may open it, and which
       # worker service its system view describes.
-      ADMIN_TABLE = var.admin_table
-      # Emails that have had the website's free upload (../../../server.py).
-      FREE_UPLOAD_CLAIMS_TABLE = var.free_upload_claims_table
-      WORKER_CLUSTER           = var.cluster_name
-      WORKER_SERVICE           = "${local.name}-worker"
+      ADMIN_TABLE    = var.admin_table
+      WORKER_CLUSTER = var.cluster_name
+      WORKER_SERVICE = "${local.name}-worker"
     })
   }
   logging_config {

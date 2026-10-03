@@ -135,35 +135,6 @@ resource "aws_dynamodb_table" "admin" {
   }
 }
 
-# Email addresses that have had the website's one free upload, kept after
-# their account is deleted so signing up again doesn't bring it back (see
-# ../server.py's _check_free_upload). Each row is a keyed one-way hash of
-# the address, never the address itself. Only the API reads and writes it.
-resource "aws_dynamodb_table" "free_upload_claims" {
-  name         = "${var.project}-free-upload-claims"
-  billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "email_hash"
-
-  attribute {
-    name = "email_hash"
-    type = "S"
-  }
-
-  point_in_time_recovery {
-    enabled = true
-  }
-
-  stream_enabled   = local.us_east_1_enabled
-  stream_view_type = local.us_east_1_enabled ? "NEW_AND_OLD_IMAGES" : null
-  dynamic "replica" {
-    for_each = local.us_east_1_enabled ? [local.us_east_1] : []
-    content {
-      region_name            = replica.value
-      point_in_time_recovery = true
-    }
-  }
-}
-
 resource "aws_dynamodb_table" "music_sheet" {
   name         = "${var.project}-music-sheet"
   billing_mode = "PAY_PER_REQUEST"

@@ -3,8 +3,6 @@
 New uploads use immutable artifacts and a standalone worker. Legacy routes
 remain available during the staged deployment and for existing history.
 """
-import hashlib
-import hmac
 import json
 import os
 import queue
@@ -18,7 +16,7 @@ from pathlib import Path
 from typing import Literal, Optional
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -30,7 +28,6 @@ import apple_billing
 import stripe_billing
 from auth import (
     BACKEND_JWT_LIFETIME_SECONDS,
-    BACKEND_JWT_SECRET,
     GUEST_USER_ID,
     delete_cognito_user,
     exchange_authorization_code,
@@ -256,10 +253,7 @@ def subscription(user_id: str = Depends(get_signed_in_user_id)):
     button and terms from that."""
     if user_id is None:
         raise HTTPException(401, "not signed in")
-    return {**get_entitlement(user_id), "trial_eligible": is_trial_eligible(user_id),
-            # Whether the free plan's one upload has gone to a sheet since
-            # deleted - the web app tells the reader before they upload.
-            "free_upload_used": _free_upload_spent(user_id)}
+    return {**get_entitlement(user_id), "trial_eligible": is_trial_eligible(user_id)}
 
 
 class DemoHiddenRequest(BaseModel):
@@ -384,14 +378,6 @@ def delete_account(user_id: str = Depends(get_signed_in_user_id)):
         raise HTTPException(401, "not signed in")
     if db.get_in_progress_job(user_id):
         raise HTTPException(409, "Wait for your current upload to finish before deleting your account.")
-    # An account that had a finished sheet leaves its email's claim on the
-    # free upload behind, so signing up again with it doesn't bring the free
-    # upload back. First, like Cognito: if it can't be written, nothing is
-    # deleted yet and the reader can try again.
-    user = db.get_user(user_id) or {}
-    if user.get("email") and (db.has_used_free_upload(user_id)
-                              or any(job["status"] == "done" for job in db.list_annotation_jobs(user_id))):
-        db.claim_free_upload(_email_key(user["email"]))
     delete_cognito_user(user_id)
     for job in db.list_annotation_jobs(user_id):
         db.delete_annotation_job(job["job_id"])
@@ -416,55 +402,18 @@ class UploadRequest(BaseModel):
     color: str = Field(default="#000000", pattern=r"^#[0-9a-fA-F]{6}$")
 
 
-FREE_UPLOAD_USED = ("You've used the free plan's 1 sheet upload. "
-                    "Go Premium for unlimited uploads.")
-FREE_SHEET_AT_A_TIME = ("The free plan keeps 1 sheet at a time. Delete your current sheet to "
-                        "upload another, or go Premium for unlimited sheets.")
-
-
-def _email_key(email):
-    """A keyed one-way hash of an email address, for remembering that it had
-    the free upload without keeping the address. Aliases of one inbox hash
-    alike - case, a +tag, and the dots Gmail ignores - so they can't be used
-    to sign up again. Keyed with a key derived from the backend's secret, so
-    a list of known addresses can't be hashed to match the stored rows."""
-    local, _, domain = email.strip().lower().partition("@")
-    local = local.split("+", 1)[0]
-    if domain in ("gmail.com", "googlemail.com"):
-        local, domain = local.replace(".", ""), "gmail.com"
-    key = hmac.new(BACKEND_JWT_SECRET.encode(), b"free-upload-email/v1", hashlib.sha256).digest()
-    return hmac.new(key, f"{local}@{domain}".encode(), hashlib.sha256).hexdigest()
-
-
-def _free_upload_spent(user_id):
-    """Whether this account's one free website upload is gone: to a sheet it
-    has since deleted, or - by its email - to an account deleted before it."""
-    if db.has_used_free_upload(user_id):
-        return True
-    email = (db.get_user(user_id) or {}).get("email")
-    return bool(email) and db.is_free_upload_claimed(_email_key(email))
-
-
-def _check_free_upload(user_id, from_website):
-    """A free account keeps FREE_SHEET_LIMIT sheets. A failed or cancelled
-    upload doesn't count - nothing came of it - so a failed sheet can be
-    read again (retry_sheet) or replaced.
-
-    On the website the limit is for good: deleting the sheet doesn't give the
-    upload back (delete_job marks the account as it goes). The iOS app keeps
-    its own rule, one sheet at a time, until it changes too - it is told
-    apart by sending no Origin header, which every browser request to this
-    cross-origin API carries and no page can remove."""
+def _check_free_sheet_limit(user_id):
+    """A free account keeps FREE_SHEET_LIMIT sheets; a failed one doesn't
+    count, so reading it again (retry_sheet) counts it once more."""
     if get_entitlement(user_id)["tier"] != "premium":
         kept = [job for job in db.list_annotation_jobs(user_id)
                 if job["status"] not in ("failed", "deleting", "deleted")]
-        if from_website and (len(kept) >= FREE_SHEET_LIMIT or _free_upload_spent(user_id)):
-            raise HTTPException(403, FREE_UPLOAD_USED)
         if len(kept) >= FREE_SHEET_LIMIT:
-            raise HTTPException(403, FREE_SHEET_AT_A_TIME)
+            raise HTTPException(403, "The free plan keeps 1 sheet at a time. Delete your current sheet to "
+                                     "upload another, or go Premium for unlimited sheets.")
 
 
-def reserve_upload(body, user_id, from_website=False):
+def reserve_upload(body, user_id):
     if Path(body.filename).suffix.lower() not in ALLOWED_EXTENSIONS:
         raise HTTPException(400, "Only PDF, JPG and PNG files are supported.")
     if body.style not in ("unicode", "ascii"):
@@ -475,7 +424,7 @@ def reserve_upload(body, user_id, from_website=False):
         raise HTTPException(409, "You already have a sheet processing. Wait for it to finish.")
     # One job in progress at a time (above, and atomically in job_state), so
     # two concurrent uploads can't both slip under the limit.
-    _check_free_upload(user_id, from_website)
+    _check_free_sheet_limit(user_id)
     try:
         return job_state.create(uuid.uuid4().hex, user_id, body.filename,
                                 body.model_dump(include={"style", "octave", "notation", "font_size", "dpi", "auto_retry", "color"}),
@@ -485,15 +434,14 @@ def reserve_upload(body, user_id, from_website=False):
 
 
 @app.post("/api/uploads", status_code=201)
-def create_upload(body: UploadRequest, user_id: str = Depends(get_signed_in_user_id),
-                  origin: Optional[str] = Header(None)):
+def create_upload(body: UploadRequest, user_id: str = Depends(get_signed_in_user_id)):
     # Uploading is a members feature - a guest id no longer reserves one (see
     # get_current_user_id's docstring for what that identifies instead).
     if user_id is None:
         raise HTTPException(401, "Sign in to upload a sheet.")
     if not SERVERLESS:
         raise HTTPException(404, "Direct uploads are not enabled on this server.")
-    job = reserve_upload(body, user_id, from_website=bool(origin))
+    job = reserve_upload(body, user_id)
     try:
         upload = storage.create_upload(job, {
             ".pdf": "application/pdf", ".jpg": "image/jpeg",
@@ -529,7 +477,6 @@ async def submit_sheet(
     dpi: Optional[int] = Form(None), auto_retry: bool = Form(True),
     color: str = Form("#000000"),
     user_id: str = Depends(get_signed_in_user_id),
-    origin: Optional[str] = Header(None),
 ):
     if user_id is None:
         raise HTTPException(401, "Sign in to upload a sheet.")
@@ -551,7 +498,7 @@ async def submit_sheet(
                                  color=color)
         except ValueError:
             raise HTTPException(400, "Invalid file or annotation options.")
-        job = reserve_upload(body, user_id, from_website=bool(origin))
+        job = reserve_upload(body, user_id)
         try:
             if IS_PRODUCTION:
                 storage._s3_for(job).upload_file(str(raw), storage.job_bucket(job), job["input_key"])
@@ -623,8 +570,7 @@ def job_status(job_id: str, user_id: str = Depends(get_current_user_id)):
 
 
 @app.post("/api/sheets/{job_id}/retry", status_code=202)
-def retry_sheet(job_id: str, user_id: str = Depends(get_signed_in_user_id),
-                origin: Optional[str] = Header(None)):
+def retry_sheet(job_id: str, user_id: str = Depends(get_signed_in_user_id)):
     """Read a failed sheet again, from the file it kept - after a fix, the
     reader tries again from the sheet itself instead of uploading anew."""
     if user_id is None:
@@ -635,7 +581,7 @@ def retry_sheet(job_id: str, user_id: str = Depends(get_signed_in_user_id),
     if not job_state.can_retry(job):
         raise HTTPException(409, "This upload didn't finish, so there is nothing to read again. "
                                  "Please upload the file again.")
-    _check_free_upload(user_id, from_website=bool(origin))
+    _check_free_sheet_limit(user_id)
     try:
         if not job_state.retry(job):
             raise HTTPException(409, "This sheet isn't waiting to be tried again.")
@@ -653,14 +599,6 @@ def retry_sheet(job_id: str, user_id: str = Depends(get_signed_in_user_id),
         except Exception:
             traceback.print_exc()
     return job_status(job_id, user_id)
-
-
-def _remember_free_upload(job):
-    """The free plan's one upload is for good: before a finished sheet's row
-    goes, the account's own record is marked as having had one. Whatever the
-    plan - a lapsed Premium account is a free one too."""
-    if job["status"] == "done":
-        db.mark_free_upload_used(job["user_id"])
 
 
 @app.delete("/api/sheets/{job_id}", status_code=204)
@@ -688,9 +626,6 @@ def delete_job(job_id: str, user_id: str = Depends(get_current_user_id)):
         for _ in range(3):
             if job["status"] in ("deleting", "deleted"):
                 return Response(status_code=204)
-            # Checked on every pass: a sheet that finishes while this delete
-            # retries is a finished sheet being deleted too.
-            _remember_free_upload(job)
             if job_state.change(job_id, {"status": job["status"]}, status="deleting", next_check_at=int(time.time())):
                 break
             job = _owned_job_or_404(job_id, user_id)
@@ -710,7 +645,6 @@ def delete_job(job_id: str, user_id: str = Depends(get_current_user_id)):
 
     if job["status"] in job_state.ACTIVE:
         raise HTTPException(409, "Wait for this sheet to finish processing before deleting it.")
-    _remember_free_upload(job)
 
     jobs = db.list_annotation_jobs(user_id)
     other_jobs = [candidate for candidate in jobs if candidate["job_id"] != job_id]

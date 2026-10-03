@@ -12,10 +12,10 @@ function planFromQuery(value: string | null): "monthly" | "yearly" | null {
 
 // The same on both plans - they differ only in how they're billed.
 const BENEFITS = [
-  "Upload your own sheets",
+  "Keep as many sheets as you like",
   "Every note labelled",
+  "Full practice mode, every line",
   "Practise on a keyboard",
-  "Unlimited sheet storage",
   "Access anywhere",
 ];
 
