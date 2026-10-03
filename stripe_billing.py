@@ -3,6 +3,7 @@
 Configuration is checked at the point of use so an API instance can serve
 non-billing routes without Stripe credentials configured.
 """
+import logging
 import time
 
 import stripe
@@ -10,7 +11,13 @@ import stripe
 # patch stripe_billing.stripe with a Mock() (see test_subscription.py), and
 # `except stripe.error.StripeError` would then try to match against a Mock
 # attribute instead of a real exception class.
-from stripe.error import StripeError
+from stripe.error import (
+    APIConnectionError,
+    APIError,
+    InvalidRequestError,
+    RateLimitError,
+    StripeError,
+)
 from fastapi import HTTPException
 
 import db
@@ -25,6 +32,12 @@ from config import (
 TRIAL_DAYS = 7
 
 ALREADY_SUBSCRIBED = "This account already has an active subscription."
+
+logger = logging.getLogger(__name__)
+
+# Failures where Stripe never gave an answer, or a transient one; trying
+# again later can work. Every other StripeError is Stripe refusing the call.
+_UNREACHABLE = (APIConnectionError, APIError, RateLimitError)
 
 
 def _value(item, key, default=None):
@@ -44,6 +57,22 @@ def _require(*settings):
 def _configure_api():
     _require(("STRIPE_SECRET_KEY", STRIPE_SECRET_KEY))
     stripe.api_key = STRIPE_SECRET_KEY
+
+
+def _stripe_failed(action, exc):
+    """Log what Stripe actually answered, and turn it into a message that
+    says what happened. Only a failure to get an answer is worth retrying;
+    a refusal (no such subscription, a key without permission) will fail
+    the same way every time, so it shouldn't be dressed up as a network
+    blip. Stripe's own text can quote part of the API key, so the visitor
+    gets just its error code; the log has the rest."""
+    logger.warning("Stripe failed to %s: %s: %s", action, type(exc).__name__, exc)
+    if isinstance(exc, _UNREACHABLE):
+        return HTTPException(502, f"We couldn't reach Stripe to {action}. Please try again in a moment.")
+    code = f" ({exc.code})" if getattr(exc, "code", None) else ""
+    return HTTPException(
+        502, f"Stripe declined to {action}{code}. Please contact bettermusicsheet@gmail.com.",
+    )
 
 
 def _prices():
@@ -168,7 +197,7 @@ def confirm_checkout(user_id, session_id):
     try:
         session = stripe.checkout.Session.retrieve(session_id, expand=["subscription"])
     except StripeError as exc:
-        raise HTTPException(502, "We couldn't confirm that checkout with Stripe. Please try again in a moment.") from exc
+        raise _stripe_failed("confirm that checkout", exc) from exc
     if _value(session, "client_reference_id") != user_id:
         raise HTTPException(403, "This checkout session belongs to a different account.")
     subscription = _value(session, "subscription")
@@ -201,7 +230,7 @@ def change_plan(user_id, plan):
             proration_behavior="create_prorations",
         )
     except StripeError as exc:
-        raise HTTPException(502, "We couldn't reach Stripe to change your plan. Please try again in a moment.") from exc
+        raise _stripe_failed("change your plan", exc) from exc
     return _sync_subscription(updated)
 
 
@@ -242,10 +271,26 @@ def cancel_subscription(user_id):
             or not subscription.get("subscription_id")):
         raise HTTPException(404, "No active Stripe subscription found.")
     _configure_api()
+    subscription_id = subscription["subscription_id"]
     try:
-        updated = stripe.Subscription.modify(
-            subscription["subscription_id"], cancel_at_period_end=True,
-        )
+        updated = stripe.Subscription.modify(subscription_id, cancel_at_period_end=True)
     except StripeError as exc:
-        raise HTTPException(502, "We couldn't reach Stripe to cancel your subscription. Please try again in a moment.") from exc
+        # Stripe refuses to schedule the end of a subscription that has
+        # already ended - cancelled from its dashboard, say, with the
+        # webhook that would have said so missed. Then there is nothing
+        # left to cancel: record the end, as that webhook would have.
+        ended = _ended_in_stripe(subscription_id) if isinstance(exc, InvalidRequestError) else None
+        if ended is None:
+            raise _stripe_failed("cancel your subscription", exc) from exc
+        logger.warning("Stripe subscription %s had already ended; recording that", subscription_id)
+        return _sync_subscription(ended, deleted=True)
     return _sync_subscription(updated)
+
+
+def _ended_in_stripe(subscription_id):
+    """The subscription as Stripe has it, if Stripe says it has ended."""
+    try:
+        current = stripe.Subscription.retrieve(subscription_id)
+    except StripeError:
+        return None
+    return current if _value(current, "status") in ("canceled", "incomplete_expired") else None

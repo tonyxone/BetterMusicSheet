@@ -233,7 +233,15 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
     if (view === "forgot") {
       return run(async () => {
         await forgotPassword(email);
-        go("reset", "We've emailed you a reset code.");
+        // The client has PreventUserExistenceErrors on, so Cognito answers
+        // "sent" even when no password account has this address - most often
+        // someone who signed up with Google or Apple. Say so rather than
+        // promising an email that will never arrive.
+        go(
+          "reset",
+          `If ${email} has a password account, a reset code is on its way - check spam too. ` +
+            "Signed up with Google or Apple? There's no password to reset; use that button on the sign-in screen.",
+        );
       });
     }
 
@@ -276,7 +284,10 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
           <p className="modal-sub">Enter the code we sent to {email}.</p>
         )}
         {view === "forgot" && (
-          <p className="modal-sub">We&apos;ll email you a code to set a new password.</p>
+          <p className="modal-sub">
+            We&apos;ll email you a code to set a new password. If you signed in with Google or Apple, go back and
+            use that button instead - those accounts don&apos;t have a password.
+          </p>
         )}
 
         {notice && <p className="modal-notice">{notice}</p>}
