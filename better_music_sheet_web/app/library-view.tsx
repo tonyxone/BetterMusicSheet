@@ -7,7 +7,6 @@ import { KeyboardIcon } from "./keyboard-icon";
 import { BackButton } from "./back-button";
 import { DemoSampleCard } from "./demo-sample-card";
 import { isActive, type AnnotationJob } from "@/lib/api";
-import { useSubscription } from "@/lib/subscription";
 import { paginateLibrary } from "@/lib/library-pagination";
 import { noteCountLabel } from "@/lib/note-count";
 
@@ -30,7 +29,6 @@ const STATUS_LABEL: Record<AnnotationJob["status"], string> = {
 // showBack: on /history there is a page above to return to; at the root there
 // is not, so the caller decides rather than this component guessing.
 export function LibraryView({ showBack = false }: { showBack?: boolean }) {
-  const { subscription } = useSubscription();
   const [jobs, setJobs] = useState<AnnotationJob[] | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AnnotationJob | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -108,13 +106,15 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
                 </Link>
                 <div className="history-actions">
                   {/* Practice plays a finished sheet; before that it shows the
-                      upload and picks the names up once they're ready. */}
+                      upload and picks the names up once they're ready. Open
+                      to every plan: without Premium it plays the first lines,
+                      then offers Premium (play-view.tsx's FREE_LINES). */}
                   {(job.status === "done" || job.original_ready) && (
                     <Link
-                      href={subscription?.tier === "premium" ? `/play?job=${job.job_id}` : "/subscription/upgrade"}
+                      href={`/play?job=${job.job_id}`}
                       className="history-action history-play"
-                      title={subscription?.tier === "premium" ? "Practice with the keyboard" : "Unlock practice mode"}
-                      aria-label={subscription?.tier === "premium" ? "Practice with the keyboard" : "Unlock practice mode"}
+                      title="Practice with the keyboard"
+                      aria-label="Practice with the keyboard"
                     >
                       <KeyboardIcon size={40} />
                     </Link>

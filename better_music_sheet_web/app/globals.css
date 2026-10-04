@@ -509,6 +509,46 @@ details.options[open] summary::before { content: "▾ "; }
 .subscription-action a { color: var(--accent); font-size: 14px; }
 .subscription-error { max-width: 440px; padding: 10px 12px; border-radius: 10px; background: var(--danger-bg); color: var(--danger) !important; }
 .subscription-muted { color: var(--ink-soft); }
+/* Free, Monthly and Yearly in one row (the Free card first), drawn alike -
+   Free just isn't one of the choices (iOS's FreePlanCard). On a phone the
+   cards stack, Premium's first. */
+.subscription-tiers {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 14px;
+  max-width: 860px; margin: 0 auto 22px; text-align: left;
+}
+.subscription-tiers .subscription-plans { max-width: none; margin: 0; }
+.free-plan-points { list-style: none; margin: 0; padding: 14px 0 0; border-top: 1px solid var(--paper-deep); display: grid; gap: 8px; }
+/* The separator lines up across the row: every list starts right after a
+   description given room for two lines, rather than sinking to the card's
+   foot - where Free's shorter list would put its line lower. */
+.subscription-tiers .subscription-card > p:not(.subscription-price) { min-height: 3em; }
+.subscription-tiers .subscription-benefits { margin-top: 0; }
+.subscription-card p:has(+ .free-plan-points) { margin-bottom: 14px; }
+.free-plan-points li { display: flex; gap: 10px; font-size: 13.5px; line-height: 1.45; color: var(--ink); }
+.free-plan-mark { flex: none; width: 14px; font-weight: 700; text-align: center; }
+.free-plan-points li.included .free-plan-mark { color: var(--success); }
+.free-plan-points li.limited .free-plan-mark { color: var(--danger); }
+@media (max-width: 760px) {
+  .subscription-tiers { grid-template-columns: 1fr; }
+  .subscription-tiers .free-plan-card { order: 2; }
+}
+/* The way into Premium, as iOS draws it: a gold gradient capsule with white
+   text (PremiumButtonStyle). The shadow keeps the text readable over the
+   gradient's pale end. */
+.btn-premium {
+  display: block; width: 100%; height: 46px; margin-top: 20px; border: 0; border-radius: 999px;
+  background: linear-gradient(135deg, #FCE3AF, #A37239); color: #fff;
+  font: inherit; font-size: 15px; font-weight: 600; text-shadow: 0 1px 2px rgba(80, 50, 15, 0.45);
+  cursor: pointer;
+}
+.btn-premium:hover { filter: brightness(1.04); }
+.btn-premium:active { opacity: 0.8; }
+/* Premium's whole page in a window, over the sign-in window. */
+.modal-card.premium-window { max-width: 900px; padding: 8px 8px 24px; }
+/* A button that opens a window, written into a sentence like a link. */
+.inline-link { border: 0; padding: 0; background: none; font: inherit; color: var(--accent); cursor: pointer; }
+.inline-link:hover { text-decoration: underline; }
+.premium-window .subscription-page { padding-top: 24px; padding-bottom: 0; }
 .manage-card { max-width: 540px; margin: 22px auto 0; text-align: left; }
 .manage-card dl { margin: 0 0 22px; }
 .manage-card dl > div { display: flex; justify-content: space-between; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--paper-deep); }

@@ -19,6 +19,37 @@ const BENEFITS = [
   "Access anywhere",
 ];
 
+/** What an account has without subscribing - the limits server.py
+ * (FREE_SHEET_LIMIT) and play-view.tsx (FREE_LINES) enforce. Not a choice
+ * on this page: it's the plan everyone starts on, shown beside Premium's for
+ * comparison, as the iOS app's paywall does. */
+const FREE_POINTS: { included: boolean; text: string }[] = [
+  { included: true, text: "Every note labelled" },
+  { included: true, text: "Edit, retype and download your sheet" },
+  { included: false, text: "One sheet at a time" },
+  { included: false, text: "First two lines in practice mode" },
+];
+
+/** Drawn like a plan card, so the three read as one row - but not one of
+ * the choices: it's outside the plans' radio group. */
+export function FreePlanCard() {
+  return (
+    <section className="subscription-card free-plan-card" aria-label="Free plan">
+      <h2>Free</h2>
+      <p className="subscription-price">$0</p>
+      <p>Your plan without Premium.</p>
+      <ul className="free-plan-points">
+        {FREE_POINTS.map((point) => (
+          <li key={point.text} className={point.included ? "included" : "limited"}>
+            <span className="free-plan-mark" aria-hidden="true">{point.included ? "✓" : "–"}</span>
+            {point.text}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function Benefits() {
   return (
     <ul className="subscription-benefits">
@@ -87,7 +118,10 @@ function TrialTerms({ plan, trial, starting, onAgree, onClose }: {
   );
 }
 
-export function Paywall() {
+/** ``previewOnly``: the plans to look at, with nothing to choose or buy -
+ * for someone not signed in yet (the sign-in window's "See Premium plans",
+ * like the iOS app's). */
+export function Paywall({ previewOnly = false }: { previewOnly?: boolean } = {}) {
   const { user, loading, openSignIn } = useAuth();
   // Only an account that has never subscribed gets the trial; a signed-out
   // visitor is shown the trial, and the server re-checks at checkout.
@@ -98,12 +132,22 @@ export function Paywall() {
   const router = useRouter();
   const subscribed = subscription?.tier === "premium";
   useEffect(() => {
-    if (subscribed) router.replace("/subscription");
-  }, [subscribed, router]);
+    if (subscribed && !previewOnly) router.replace("/subscription");
+  }, [subscribed, previewOnly, router]);
   const searchParams = useSearchParams();
   // Nothing is pre-selected: the visitor picks a billing period themselves.
   // A link that names one (?plan=yearly) still arrives with it chosen.
-  const [plan, setPlan] = useState<"monthly" | "yearly" | null>(planFromQuery(searchParams.get("plan")));
+  const [chosen, setPlan] = useState<"monthly" | "yearly" | null>(planFromQuery(searchParams.get("plan")));
+  const plan = previewOnly ? null : chosen;
+  // In a preview the cards are only to read: no radio, no selection.
+  const choice = (value: "monthly" | "yearly") => previewOnly ? {} : {
+    role: "radio",
+    "aria-checked": plan === value,
+    tabIndex: 0,
+    onClick: () => setPlan(value),
+    onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setPlan(value); } },
+    style: { cursor: "pointer" },
+  };
   const [starting, setStarting] = useState(false);
   const [termsOpen, setTermsOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -153,30 +197,17 @@ export function Paywall() {
           on a keyboard that lights up each note as it plays.
         </p>
       </div>
-      <div className="subscription-plans" role="radiogroup" aria-label="Choose a billing period">
-        <article
-          className={`subscription-card${plan === "monthly" ? " selected" : ""}`}
-          role="radio"
-          aria-checked={plan === "monthly"}
-          tabIndex={0}
-          onClick={() => setPlan("monthly")}
-          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setPlan("monthly"); } }}
-          style={{ cursor: "pointer" }}
-        >
+      {/* Free, Monthly and Yearly side by side; only the two plans are a choice. */}
+      <div className="subscription-tiers">
+      <FreePlanCard />
+      <div className="subscription-plans" {...(previewOnly ? {} : { role: "radiogroup", "aria-label": "Choose a billing period" })}>
+        <article className={`subscription-card${plan === "monthly" ? " selected" : ""}`} {...choice("monthly")}>
           <h2>Monthly</h2>
           <p className="subscription-price">$1.99 <small>/ month</small></p>
           <p>Flexible access, billed monthly.</p>
           <Benefits />
         </article>
-        <article
-          className={`subscription-card${plan === "yearly" ? " selected" : ""}`}
-          role="radio"
-          aria-checked={plan === "yearly"}
-          tabIndex={0}
-          onClick={() => setPlan("yearly")}
-          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setPlan("yearly"); } }}
-          style={{ cursor: "pointer" }}
-        >
+        <article className={`subscription-card${plan === "yearly" ? " selected" : ""}`} {...choice("yearly")}>
           <h2>
             Yearly <span style={{ color: "var(--success)", fontSize: 11, fontWeight: 700, marginLeft: 4 }}>Save 20%</span>
           </h2>
@@ -185,6 +216,12 @@ export function Paywall() {
           <Benefits />
         </article>
       </div>
+      </div>
+      {previewOnly ? (
+        <div className="subscription-action">
+          <p>Sign in to subscribe. Your subscription belongs to your account, so it works in the iOS app too.</p>
+        </div>
+      ) : (
       <div className="subscription-action">
         <button type="button" className="btn-pill" onClick={start} disabled={!plan || starting || loading || subscriptionLoading}>
           {trial ? "Start 7-day free trial" : "Subscribe"}
@@ -198,6 +235,7 @@ export function Paywall() {
         </p>
         {error && <p className="subscription-error">{error}</p>}
       </div>
+      )}
       {termsOpen && plan && (
         <TrialTerms plan={plan} trial={trial} starting={starting} onAgree={checkout} onClose={() => setTermsOpen(false)} />
       )}
