@@ -15,7 +15,7 @@ import { PremiumWindow } from "./subscription/premium-window";
 type UploadOption = "notation" | "style" | "fontSize" | "color" | "dpi" | "octave" | "autoRetry";
 
 const OPTION_HELP: Record<UploadOption, string> = {
-  notation: "Letter names each note C, D, E... Jianpu (numbered notation, 簡譜) shows a number instead: 1 = C, 2 = D, 3 = E, 4 = F, 5 = G, 6 = A, 7 = B in every key, so a number always means the same piano key - F♯ reads ♯4 and B♭ reads ♭7. You can switch between the two while viewing the sheet at any time; this sets the printed download.",
+  notation: "Letter names each note C, D, E... Jianpu (numbered notation, 簡譜) shows a number instead, and Solfège shows a syllable: 1/do = C, 2/re = D, 3/mi = E, 4/fa = F, 5/so = G, 6/la = A, 7/si = B in every key, so a number or syllable always means the same piano key - F♯ reads ♯4/♯fa and B♭ reads ♭7/♭si. You can switch between all three while viewing the sheet at any time; this sets the printed download.",
   style: "Unicode uses musical accidental symbols such as B♭ and C♯. ASCII uses plain-text Bb and C#, which can be easier to copy into older software.",
   fontSize: "Controls the printed note-label size. Larger labels are easier to read but have less room around dense chords.",
   color: "Sets the printed colour of every note label. A colour makes the labels easy to tell apart from the printed music, while black keeps the page looking like the original. Pale colours can be hard to read on white paper.",
@@ -47,7 +47,7 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
   const [preparing, setPreparing] = useState(false);
   const [style, setStyle] = useState<"unicode" | "ascii">("unicode");
   const [octave, setOctave] = useState(false);
-  const [notation, setNotation] = useState<"letters" | "numbers">("letters");
+  const [notation, setNotation] = useState<"letters" | "numbers" | "solfege">("letters");
   const [fontSize, setFontSize] = useState(6.5);
   const [color, setColor] = useState("#000000");
   const [dpi, setDpi] = useState("");
@@ -196,9 +196,10 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
             <div className="opt-row">
               <label htmlFor="notation" className="main">Note names</label>
               <OptionHelp option="notation" label="Note names" open={openHelp} onToggle={setOpenHelp} />
-              <select id="notation" value={notation} onChange={(e) => setNotation(e.target.value as "letters" | "numbers")}>
+              <select id="notation" value={notation} onChange={(e) => setNotation(e.target.value as "letters" | "numbers" | "solfege")}>
                 <option value="letters">Letter (C D E)</option>
                 <option value="numbers">簡 Jianpu (1 2 3)</option>
+                <option value="solfege">Solfège (do re mi)</option>
               </select>
             </div>
             {openHelp === "notation" && <OptionExplanation option="notation" />}

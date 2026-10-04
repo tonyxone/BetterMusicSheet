@@ -37,7 +37,7 @@ export type UnnamedNote = { page: number; x: number; y: number; w: number };
 export type LabelSet = {
   color: string; items: LabelItem[]; source: "data" | "pdf";
   /** How the sheet was made to show its names, from the upload's option. */
-  notation?: "letters" | "numbers";
+  notation?: "letters" | "numbers" | "solfege";
   /** Printed notes left without a name. Absent for older sheets. */
   unnamed?: UnnamedNote[];
 };
@@ -157,7 +157,8 @@ export async function loadLabels(jobId: string, annotatedPdf: ArrayBuffer | null
         const items = (data.items ?? []).filter(validItem).map((item) => ({
           ...item, group: item.group ?? item.id, notes: Array.isArray(item.notes) ? item.notes : [],
         }));
-        const notation = data.notation === "numbers" ? "numbers" as const : "letters" as const;
+        const notation = data.notation === "numbers" ? "numbers" as const
+          : data.notation === "solfege" ? "solfege" as const : "letters" as const;
         const unnamed = (Array.isArray(data.unnamed) ? data.unnamed : []).filter(validUnnamed);
         if (items.length) return { color: data.color ?? "#000000", items, source: "data", notation, unnamed };
       }

@@ -125,6 +125,7 @@ export function NoteRoll({
     const names = {
       letters: notes.map((n) => timelineNoteName(n, "letters")),
       numbers: notes.map((n) => timelineNoteName(n, "numbers")),
+      solfege: notes.map((n) => timelineNoteName(n, "solfege")),
     };
     const nameEnds = nameSpans(notes, MIN_BAR_BEATS);
     let width = 0;

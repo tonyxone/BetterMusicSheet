@@ -19,7 +19,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { fetchSheetAssets, fetchSheetFile } from "@/lib/sheet-files";
 import { loadLabels, stillUnnamed, type LabelItem, type LabelSet } from "@/lib/labels";
 import { correctionsForRetype, EMPTY_EDITS, isEmptyEdits, resolveLabel, useSheetEdits, type LabelEdit, type SaveState, type SheetEdits } from "@/lib/edits";
-import { fromNumbered, useNotation } from "@/lib/notation";
+import { fromNumbered, fromSolfege, useNotation } from "@/lib/notation";
 import type { Timeline } from "@/lib/timeline";
 import type { SheetVariant } from "../sheet-toggle";
 import { NotationToggle } from "../notation-toggle";
@@ -347,10 +347,12 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
     const item = labelsById.get(id);
     const now = current();
     if (!item || !now) return;
-    // A number typed while names read as numbers is stored as the letter
-    // it means, like every other name.
+    // A number or solfège syllable typed while names read that way is stored
+    // as the letter it means, like every other name.
     const typed = raw.trim();
-    const text = (notation === "numbers" ? fromNumbered(typed, item.text) : null) ?? typed;
+    const reparsed = notation === "numbers" ? fromNumbered(typed, item.text)
+      : notation === "solfege" ? fromSolfege(typed, item.text) : null;
+    const text = reparsed ?? typed;
     const edit: LabelEdit = { ...(now.labels[id] ?? {}) };
     if (!text) {
       update((d) => ({ ...d, labels: withLabelEdit(d.labels, id, { ...edit, hidden: true }) }));
