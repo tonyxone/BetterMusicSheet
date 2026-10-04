@@ -85,6 +85,19 @@ async def json_errors(request, call_next):
         )
 
 
+@app.middleware("http")
+async def no_store_by_default(request, call_next):
+    """Keep every response out of the browser's HTTP cache unless a route says
+    otherwise. What this API returns depends on who is asking - the token or
+    X-Guest-Id header - but a cache keys on the URL alone. A sheet file comes
+    back with Last-Modified, which a browser caches on its own, so after
+    signing out the same URL was answered from the cache and the account's
+    sheet still played for whoever was left at the keyboard."""
+    response = await call_next(request)
+    response.headers.setdefault("Cache-Control", "no-store")
+    return response
+
+
 # comma-separated list of allowed UI origins, e.g. "https://bettermusicsheet.com";
 # defaults to "*" (any origin) which is fine for local dev, not for production.
 # Added last, so it is the outermost middleware and can attach headers to
