@@ -976,8 +976,8 @@ def main():
     ap.add_argument("-o", "--output", default=None)
     ap.add_argument("--style", choices=["unicode", "ascii"], default="unicode")
     ap.add_argument("--octave", action="store_true")
-    ap.add_argument("--notation", choices=["letters", "numbers"], default="letters",
-                    help="letter names (C D E) or jianpu numbers, 1 = C (1 2 3)")
+    ap.add_argument("--notation", choices=["letters", "numbers", "solfege"], default="letters",
+                    help="letter names (C D E), jianpu numbers, 1 = C (1 2 3), or solfege (do re mi)")
     ap.add_argument("--font-size", type=float, default=6.5)
     ap.add_argument("--color", default="#000000",
                      help="Note-label colour as #rrggbb (default: black).")

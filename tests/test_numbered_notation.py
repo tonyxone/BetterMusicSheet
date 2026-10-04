@@ -3,7 +3,7 @@ import unittest
 
 import annotate
 from label_export import labels_document
-from labels import numbered_label
+from labels import numbered_label, solfege_label
 
 # Diatonic pitch values (0 = B4, counting down): C4 = 6, F4 = 3, G4 = 2.
 C4, D4, E4, F4, G4, A4, B4 = 6, 5, 4, 3, 2, 1, 0
@@ -27,6 +27,25 @@ class NumberedLabelTests(unittest.TestCase):
         self.assertEqual(numbered_label(F4, -2), '♭3')   # F double flat, a black key
 
 
+class SolfegeLabelTests(unittest.TestCase):
+    def test_one_is_always_do(self):
+        names = [(C4, 0), (D4, 0), (E4, 0), (F4, 0), (G4, 0), (A4, 0), (B4, 0)]
+        self.assertEqual([solfege_label(d, a) for d, a in names],
+                          ['do', 're', 'mi', 'fa', 'so', 'la', 'si'])
+
+    def test_black_keys_keep_their_printed_sharp_or_flat(self):
+        names = [(D4, -1), (E4, -1), (F4, 0), (G4, -1), (A4, -1), (B4, -1), (C4, 0)]
+        self.assertEqual([solfege_label(d, a) for d, a in names],
+                          ['♭re', '♭mi', 'fa', '♭so', '♭la', '♭si', 'do'])
+        self.assertEqual(solfege_label(F4, 1, style='ascii'), '#fa')
+
+    def test_white_keys_read_as_their_own_syllable_however_spelled(self):
+        self.assertEqual(solfege_label(E4, 1), 'fa')    # E#
+        self.assertEqual(solfege_label(C4, -1), 'si')   # Cb
+        self.assertEqual(solfege_label(C4, 2), 're')    # C double sharp
+        self.assertEqual(solfege_label(F4, -2), '♭mi')  # F double flat, a black key
+
+
 class RecordTests(unittest.TestCase):
     def resolved(self, fifths, *notes):
         return {'pages': {}, 'notes': [
@@ -39,6 +58,12 @@ class RecordTests(unittest.TestCase):
         r = self.resolved(1, (F4, 1), (F4, 0), (G4, 0))
         records = annotate.records_from_resolved(r, notation='numbers')
         self.assertEqual([rec['labels'] for rec in records], [['♯4'], ['4'], ['5']])
+        self.assertEqual([rec['letters'] for rec in records], [['F♯'], ['F'], ['G']])
+
+    def test_solfege_is_printed_whatever_the_key_and_letters_kept_for_the_viewer(self):
+        r = self.resolved(1, (F4, 1), (F4, 0), (G4, 0))
+        records = annotate.records_from_resolved(r, notation='solfege')
+        self.assertEqual([rec['labels'] for rec in records], [['♯fa'], ['fa'], ['so']])
         self.assertEqual([rec['letters'] for rec in records], [['F♯'], ['F'], ['G']])
 
     def test_letters_by_default(self):

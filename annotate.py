@@ -163,12 +163,13 @@ def records_from_resolved(resolved, style='unicode', octave=False, suppress_repe
     """Render every recognized written note, including tied continuations.
 
     Optional compact labeling compares full pitches, never display strings.
-    ``notation='numbers'`` prints jianpu numbers, 1 = C (labels.numbered_label),
-    instead of letters; each record's 'letters' keeps the letter names either
-    way, for the viewer's own labels.
+    ``notation='numbers'`` prints jianpu numbers, 1 = C (labels.numbered_label);
+    ``notation='solfege'`` prints fixed-do syllables, do = C (labels.solfege_label);
+    either instead of letters. Each record's 'letters' keeps the letter names
+    either way, for the viewer's own labels.
     """
     from collections import defaultdict
-    from labels import diatonic_label, numbered_label
+    from labels import diatonic_label, numbered_label, solfege_label
     groups = defaultdict(list)
     widths = defaultdict(list)
     for n in resolved['notes']:
@@ -190,9 +191,14 @@ def records_from_resolved(resolved, style='unicode', octave=False, suppress_repe
         marks = ['?' if n.get('pitch_uncertain') else '' for n in group]
         letters = [diatonic_label(n.get('label_diatonic', n['diatonic']), symbols.get(n['alter'], ''), style=style, octave=octave)
                    + mark for n, mark in zip(group, marks)]
-        labels = letters if notation != 'numbers' else [
-            numbered_label(n.get('label_diatonic', n['diatonic']), n['alter'], style=style) + mark
-            for n, mark in zip(group, marks)]
+        if notation == 'numbers':
+            labels = [numbered_label(n.get('label_diatonic', n['diatonic']), n['alter'], style=style) + mark
+                      for n, mark in zip(group, marks)]
+        elif notation == 'solfege':
+            labels = [solfege_label(n.get('label_diatonic', n['diatonic']), n['alter'], style=style) + mark
+                      for n, mark in zip(group, marks)]
+        else:
+            labels = letters
         boxes = [n['bbox_pt'] for n in group]
         width = sum(n['w'] for n in group) / len(group)
         staff_lines = resolved.get('pages', {}).get(first['page'], {}).get('staff_lines_pt', {})

@@ -406,7 +406,7 @@ class UploadRequest(BaseModel):
     content_type: str = "application/octet-stream"
     style: str = "unicode"
     octave: bool = False
-    notation: Literal["letters", "numbers"] = "letters"
+    notation: Literal["letters", "numbers", "solfege"] = "letters"
     font_size: float = Field(default=6.5, ge=3, le=20, allow_inf_nan=False)
     dpi: Optional[DpiOption] = None
     auto_retry: bool = True

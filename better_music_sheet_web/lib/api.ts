@@ -20,7 +20,7 @@ export type AnnotationJob = {
   style: string;
   octave: boolean;
   /** Absent on jobs created before the option existed (letters). */
-  notation?: "letters" | "numbers";
+  notation?: "letters" | "numbers" | "solfege";
   font_size: number;
   dpi: number | null;
   /** "#rrggbb". Absent on jobs created before the option existed. */

@@ -12,7 +12,7 @@
 // close to centre, and A# right. Centring them (the naive layout) is the
 // single thing that makes a drawn keyboard look wrong.
 
-import { toNumbered, type Notation } from "@/lib/notation";
+import { toNumbered, toSolfege, type Notation } from "@/lib/notation";
 
 export const FIRST_MIDI = 21; // A0
 export const LAST_MIDI = 108; // C8
@@ -54,10 +54,13 @@ export function noteName(midi: number, withOctave = false) {
 }
 
 /** What a key is labelled with: the white keys only, either by letter - with
- * the octave on each C (C4) - or by its jianpu number, C = 1 to B = 7. */
+ * the octave on each C (C4) - by its jianpu number, C = 1 to B = 7, or by its
+ * solfège syllable, C = do to B = si. */
 export function keyLabel(midi: number, notation: Notation) {
   if (isBlackKey(midi)) return "";
-  return notation === "numbers" ? toNumbered(noteName(midi)) : noteName(midi, midi % 12 === 0);
+  if (notation === "numbers") return toNumbered(noteName(midi));
+  if (notation === "solfege") return toSolfege(noteName(midi));
+  return noteName(midi, midi % 12 === 0);
 }
 
 export type KeyLayout = {
