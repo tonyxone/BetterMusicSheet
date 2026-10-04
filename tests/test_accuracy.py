@@ -756,6 +756,50 @@ class AccuracyTests(unittest.TestCase):
         page.get_drawings = lambda: []
         self.assertEqual(pdf_marks.octave_intervals(page, {1: (40, 50, 60, 70, 80)}), {})
 
+    def test_pdf_octave_glyph_with_solid_line_is_recognized(self):
+        # MuseScore 4 exports the 8va line as a solid stroke.
+        from types import SimpleNamespace
+        for label in ('', '8va'):
+            page = SimpleNamespace(get_text=lambda _, label=label: {'blocks': [{'lines': [{'spans': [
+                {'text': label, 'bbox': (20, 20, 28, 30)}]}]}]},
+                get_drawings=lambda: [{'dashes': '[] 0', 'items': [('l', pymupdf.Point(40, 25), pymupdf.Point(180, 25))]}])
+            self.assertEqual(pdf_marks.octave_intervals(page, {1: (40, 50, 60, 70, 80)}), {1: [(18, 182, 1)]}, msg=label)
+
+    def test_pdf_bare_continuation_shifts_the_way_its_line_did(self):
+        # MuseScore: "8" glyph + "va" text, a solid line to the right edge;
+        # the next system restarts it under a bare "8" that sits nearer the
+        # bass staff above than the treble staff below.
+        from types import SimpleNamespace
+        staffs = {1: (40, 45, 50, 55, 60), 2: (80, 85, 90, 95, 100),
+                  3: (140, 145, 150, 155, 160), 4: (180, 185, 190, 195, 200)}
+        spans = [{'text': '', 'bbox': (300, 20, 306, 30)},
+                 {'text': 'va', 'bbox': (306, 21, 316, 31)},
+                 {'text': '', 'bbox': (20, 105, 26, 115)}]
+        lines = [((318, 25), (400, 25)), ((28, 110), (400, 110)),
+                 ((10, 40), (400, 40))]  # a staff line: where the systems end
+        page = SimpleNamespace(
+            get_text=lambda _: {'blocks': [{'lines': [{'spans': spans}]}]},
+            get_drawings=lambda: [{'dashes': '[] 0', 'items': [
+                ('l', pymupdf.Point(*a), pymupdf.Point(*b))]} for a, b in lines])
+        self.assertEqual(pdf_marks.octave_intervals(page, staffs),
+                         {1: [(298, 402, 1)], 3: [(18, 402, 1)]})
+
+    def test_pdf_octave_glyph_suffix_vb_lowers_the_staff_above(self):
+        from types import SimpleNamespace
+        page = SimpleNamespace(get_text=lambda _: {'blocks': [{'lines': [{'spans': [
+            {'text': '', 'bbox': (20, 85, 26, 95)}, {'text': 'vb', 'bbox': (26, 86, 36, 96)}]}]}]},
+            get_drawings=lambda: [{'dashes': '[] 0', 'items': [('l', pymupdf.Point(38, 90), pymupdf.Point(180, 90))]}])
+        self.assertEqual(pdf_marks.octave_intervals(page, {1: (40, 50, 60, 70, 80), 2: (100, 110, 120, 130, 140)}),
+                         {1: [(18, 182, -1)]})
+
+    def test_pdf_bare_text_digit_beside_a_solid_line_is_not_an_octave(self):
+        # A tuplet bracket is a plain number with solid lines either side.
+        from types import SimpleNamespace
+        page = SimpleNamespace(get_text=lambda _: {'blocks': [{'lines': [{'spans': [
+            {'text': '8', 'bbox': (20, 20, 28, 30)}]}]}]},
+            get_drawings=lambda: [{'dashes': '[] 0', 'items': [('l', pymupdf.Point(30, 25), pymupdf.Point(180, 25))]}])
+        self.assertEqual(pdf_marks.octave_intervals(page, {1: (40, 50, 60, 70, 80)}), {})
+
     def test_pdf_octave_label_with_embedded_dashes_is_recognized(self):
         from types import SimpleNamespace
         for label in ('8-', '8--', '8va-', '8va--'):
