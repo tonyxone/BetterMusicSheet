@@ -10,6 +10,14 @@ OCTAVES = {0xE510: 1, 0xE511: 1, 0xE512: 1, 0xE513: 1,
            0xE514: 2, 0xE515: 2, 0xE516: 2,
            0xE517: 3, 0xE518: 3, 0xE519: 3,
            0xE51C: 1, 0xE51D: 2, 0xE51E: 3}
+# The glyphs that say which way they shift (alta up, bassa down). The bare
+# numerals (U+E510 "8", U+E514 "15", U+E517 "22") leave it to a "va"/"vb"
+# set beside them, or to the line they continue.
+OCTAVE_DIRECTIONS = {0xE511: 1, 0xE515: 1, 0xE518: 1,
+                     0xE512: -1, 0xE513: -1, 0xE516: -1, 0xE519: -1,
+                     0xE51C: -1, 0xE51D: -1, 0xE51E: -1}
+_ALTA_SUFFIX = re.compile(r'(va|ma)\b', re.IGNORECASE)
+_BASSA_SUFFIX = re.compile(r'(vb|mb|ba|bassa)\b', re.IGNORECASE)
 # Legacy Opus fonts predate SMuFL and expose notation glyphs through unrelated
 # Unicode characters. In OpusSpecialStd, these render as 8va and 8.
 LEGACY_OCTAVES = {('OpusSpecialStd', '”“'): 1,
@@ -120,22 +128,24 @@ def time_signatures(page):
 
 
 def octave_intervals(page, staff_lines):
-    dashed = []
+    dashed, solid = [], []
     for drawing in page.get_drawings():
-        if not drawing.get('dashes') or drawing['dashes'].startswith('[]'):
-            continue
+        dashes = drawing.get('dashes')
+        target = solid if not dashes or dashes.startswith('[]') else dashed
         for item in drawing['items']:
             if item[0] == 'l':
                 a, b = item[1:3]
                 if abs(a.y - b.y) < 1 and abs(a.x - b.x) > 20:
-                    dashed.append((min(a.x, b.x), max(a.x, b.x), (a.y + b.y) / 2))
-    intervals = {}
-    for span in text_spans(page):
+                    target.append((min(a.x, b.x), max(a.x, b.x), (a.y + b.y) / 2))
+    spans = text_spans(page)
+    marks = []
+    for span in spans:
         text = span['text'].strip()
         amount = LEGACY_OCTAVES.get((span.get('font'), text))
         direction = 1 if amount is not None else None
-        if amount is None:
-            amount = OCTAVES.get(ord(text)) if len(text) == 1 else None
+        if amount is None and len(text) == 1:
+            amount = OCTAVES.get(ord(text))
+            direction = OCTAVE_DIRECTIONS.get(ord(text))
         suffix = ''
         label = text
         if amount is None:
@@ -157,13 +167,48 @@ def octave_intervals(page, staff_lines):
         label_right = x1
         if suffix:
             label_right = x0 + (x1 - x0) * len(label) / len(text)
-        lines = [(a, b, y) for a, b, y in dashed
+        # MuseScore sets "va"/"vb" as its own span right after the numeral
+        # glyph, in a text font; it says which way, and the line starts after it.
+        if direction is None and not suffix:
+            for other in spans:
+                ox0, oy0, ox1, _ = other['bbox']
+                if -1 <= ox0 - x1 <= 2 and abs(oy0 - y0) < 4:
+                    after = other['text'].strip()
+                    if _BASSA_SUFFIX.search(after):
+                        direction = -1
+                    elif _ALTA_SUFFIX.match(after):
+                        direction = 1
+                    else:
+                        continue
+                    label_right = ox1
+                    break
+        # MuseScore 4 draws the line solid. Only an unambiguous label may take
+        # one: beside a bare text "8" or "15" a solid line may be a tuplet
+        # bracket.
+        pool = dashed if label.isdigit() else dashed + solid
+        lines = [(a, b, y) for a, b, y in pool
                  if -3 <= a - label_right <= 20 and y0 - 2 <= y <= y1 + 2]
         # Some exporters encode the complete continuation as horizontally
         # stretched hyphens in the label span and emit no vector line at all.
         if not lines and suffix and x1 - label_right > 20:
             lines = [(label_right, x1, (y0 + y1) / 2)]
+        marks.append((y0, x0, amount, direction, lines))
+
+    # A line running on to the next system restarts there under a bare "8",
+    # which by itself can't say up or down - and in the gap between two
+    # systems the bass staff above is often nearer than the treble staff
+    # below. It shifts the way the line it continues did: the last one on
+    # the page that ran to the systems' right edge.
+    ends = [b for _, b, _ in dashed + solid]
+    right_edge = max(ends) if ends else None
+    intervals, carried = {}, None
+    for _, x0, amount, direction, lines in sorted(marks, key=lambda m: (m[0], m[1])):
+        if direction is None:
+            direction = carried
         if len(lines) != 1:
+            # A label with no line of its own, set at the end of a system,
+            # still opens a line the next system continues.
+            carried = direction if right_edge is not None and x0 >= right_edge - 60 else None
             continue
         _, right, y = lines[0]
         candidates = []
@@ -172,12 +217,15 @@ def octave_intervals(page, staff_lines):
                 candidates.append((min(ys) - y, staff, 1))
             elif direction != 1 and y > max(ys):
                 candidates.append((y - max(ys), staff, -1))
+        carried = None
         if not candidates:
             continue
         candidates.sort()
         distance, staff, sign = candidates[0]
         if distance > 65 or len(candidates) > 1 and candidates[1][0] - distance < 3:
             continue
+        if right_edge is not None and right >= right_edge - 3:
+            carried = sign
         intervals.setdefault(staff, []).append((x0 - 2, right + 2, sign * amount))
     return intervals
 
