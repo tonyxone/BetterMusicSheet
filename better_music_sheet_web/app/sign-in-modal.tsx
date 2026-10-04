@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { signIn } from "@/lib/auth";
+import { PremiumWindow } from "./subscription/premium-window";
 import {
   CognitoError,
   callbackRedirectUri,
@@ -97,6 +98,7 @@ const TITLES: Record<View, string> = {
 
 export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSignedIn: () => void }) {
   const [view, setView] = useState<View>("signin");
+  const [plansOpen, setPlansOpen] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
@@ -389,7 +391,15 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
             <button type="button" title="Return to the sign-in form" onClick={() => go("signin")}>Back to sign in</button>
           )}
         </div>
+
+        {/* A look at Premium before signing in, as on iOS's sign-in screen. */}
+        {view === "signin" && (
+          <button type="button" className="btn-premium" onClick={() => setPlansOpen(true)}>
+            See Premium plans
+          </button>
+        )}
       </div>
+      {plansOpen && <PremiumWindow onClose={() => setPlansOpen(false)} />}
     </div>
   );
 }

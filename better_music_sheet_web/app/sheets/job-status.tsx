@@ -9,8 +9,7 @@ import { fetchSheetAssets, fetchSheetFile } from "@/lib/sheet-files";
 import { SheetToggle, type SheetVariant } from "../sheet-toggle";
 import { KeyboardIcon } from "../keyboard-icon";
 import { BackButton } from "../back-button";
-import { DEMO_JOB_ID, isActive, type AnnotationJob } from "@/lib/api";
-import { useSubscription } from "@/lib/subscription";
+import { isActive, type AnnotationJob } from "@/lib/api";
 import type { CustomizedExport } from "../sheet-viewer/sheet-editor";
 
 // pdf.js and the editor stay out of every other route's bundle, and out of
@@ -23,7 +22,6 @@ const SheetEditor = dynamic(() => import("../sheet-viewer/sheet-editor").then((m
 const POLL_INTERVAL_MS = 2500;
 
 export function JobStatus() {
-  const { subscription } = useSubscription();
   const jobId = useSearchParams().get("job");
   const [job, setJob] = useState<AnnotationJob | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -141,10 +139,6 @@ export function JobStatus() {
   }
 
   // Readable: done, or the names still coming (or failed) over the upload.
-  // The bundled demo plays in full for everyone (see server.py's read
-  // carve-out and play-view.tsx's exemption for this same job id), so its
-  // practice link skips the subscription gate real sheets go through.
-  const practiceUnlocked = jobId === DEMO_JOB_ID || subscription?.tier === "premium";
   // Until the names exist there is only the upload to show.
   const shown: SheetVariant = done ? variant : "original";
   const namesUnavailable = done ? null
@@ -157,11 +151,13 @@ export function JobStatus() {
           <h2 className="serif">{job.sheet_name}</h2>
         </div>
         <div className="result-actions">
+          {/* Open to every plan: without Premium, Play plays the first lines
+              and then offers Premium (play-view.tsx's FREE_LINES). */}
           <Link
-            href={practiceUnlocked ? `/play?job=${jobId}` : "/subscription/upgrade"}
+            href={`/play?job=${jobId}`}
             className="icon-link"
-            title={practiceUnlocked ? "Practice with the keyboard" : "Unlock practice mode"}
-            aria-label={practiceUnlocked ? "Practice with the keyboard" : "Unlock practice mode"}
+            title="Practice with the keyboard"
+            aria-label="Practice with the keyboard"
           >
             <KeyboardIcon size={44} />
           </Link>

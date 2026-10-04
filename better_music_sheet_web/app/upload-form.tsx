@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { DragDropProvider } from "@dnd-kit/react";
 import { isSortable, useSortable } from "@dnd-kit/react/sortable";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { MAX_UPLOAD_BYTES, uploadSheet } from "@/lib/sheet-files";
 import { useAuth } from "./auth-context";
@@ -11,6 +10,7 @@ import { clientApiFetch } from "@/lib/client-api";
 import { refreshSubscription } from "@/lib/subscription";
 import { resolveUploadAttempt } from "@/lib/upload-gate";
 import { addFiles, combinePhotos, isPhoto, moveFile, removeFile } from "@/lib/photo-pages";
+import { PremiumWindow } from "./subscription/premium-window";
 
 type UploadOption = "notation" | "style" | "fontSize" | "color" | "dpi" | "octave" | "autoRetry";
 
@@ -56,6 +56,7 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [atFreeLimit, setAtFreeLimit] = useState(false);
+  const [plansOpen, setPlansOpen] = useState(false);
 
   // Uploading needs a signed-in account. Premium uploads freely; the free
   // plan keeps one sheet at a time (lib/upload-gate.ts). Both are checked
@@ -134,7 +135,7 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
 
       <p className="upload-sub" style={{ marginTop: heading ? 6 : 0 }}>
         Uploading needs an account. A free account keeps one sheet at a time; Premium keeps as many as you like -{" "}
-        <Link href="/subscription/plans" style={{ color: "var(--accent)" }}>see plans</Link>.
+        <button type="button" className="inline-link" onClick={() => setPlansOpen(true)}>see plans</button>.
       </p>
 
       <form onSubmit={handleSubmit} style={{ marginTop: 40 }}>
@@ -304,7 +305,11 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
           {preparing ? "Preparing pages…" : submitting ? "Uploading…" : !user && files.length ? "Sign in to upload" : "Upload"}
         </button>
       </form>
-      {atFreeLimit && <FreeLimitNotice onClose={() => setAtFreeLimit(false)} />}
+      {atFreeLimit && (
+        <FreeLimitNotice onClose={() => setAtFreeLimit(false)}
+          onSeePlans={() => { setAtFreeLimit(false); setPlansOpen(true); }} />
+      )}
+      {plansOpen && <PremiumWindow onClose={() => setPlansOpen(false)} />}
     </div>
   );
 }
@@ -312,7 +317,7 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
 /** A free account that already has a sheet: the free plan keeps one at a
  * time, so the way on is to delete it (or go Premium). The chosen file stays
  * picked, for straight after either. */
-function FreeLimitNotice({ onClose }: { onClose: () => void }) {
+function FreeLimitNotice({ onClose, onSeePlans }: { onClose: () => void; onSeePlans: () => void }) {
   return (
     <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <div className="modal-card delete-modal" role="alertdialog" aria-modal="true" aria-labelledby="free-limit-title"
@@ -327,9 +332,7 @@ function FreeLimitNotice({ onClose }: { onClose: () => void }) {
           The free plan keeps one sheet at a time. Delete your current sheet to upload this one, or go Premium to keep as many as you like.
         </p>
         <div className="modal-actions">
-          <button type="button" className="btn-pill ghost" onClick={onClose}>Not now</button>
-          <Link href="/sheets" className="btn-pill ghost" style={{ textDecoration: "none" }}>Go to my sheet</Link>
-          <Link href="/subscription/upgrade" className="btn-pill" style={{ textDecoration: "none" }}>See Premium plans</Link>
+          <button type="button" className="btn-pill" onClick={onSeePlans}>See Premium plans</button>
         </div>
       </div>
     </div>

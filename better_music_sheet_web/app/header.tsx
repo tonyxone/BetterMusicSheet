@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { Logo } from "./logo";
-import { KeyboardIcon } from "./keyboard-icon";
 import { HistoryIcon } from "./history-icon";
 import { SignInIcon } from "./sign-in-icon";
 import { useAuth } from "./auth-context";
@@ -21,17 +20,6 @@ export function Header() {
         <Logo />
       </Link>
       <nav className="flex items-center gap-3">
-        {/* Practice opens for everyone - a non-subscriber gets a limited
-            preview and a prompt to subscribe, rather than being turned away
-            before ever seeing the page (see play-view.tsx). */}
-        <Link
-          href="/play"
-          className="icon-link"
-          title="Practice with the keyboard"
-          aria-label="Practice with the keyboard"
-        >
-          <KeyboardIcon size={44} />
-        </Link>
         {/* /history, not "/": the root is the Library only for a signed-in
             visitor, and a guest with sheets of their own needs this to work
             too. */}
