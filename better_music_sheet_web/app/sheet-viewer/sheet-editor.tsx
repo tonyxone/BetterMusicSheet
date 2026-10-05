@@ -17,6 +17,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MutableRefObject, type ReactNode } from "react";
 import { fetchSheetAssets, fetchSheetFile } from "@/lib/sheet-files";
+import { photoAsPdf } from "@/lib/photo-pages";
 import { loadLabels, stillUnnamed, type LabelItem, type LabelSet } from "@/lib/labels";
 import { correctionsForRetype, EMPTY_EDITS, isEmptyEdits, resolveLabel, useSheetEdits, type LabelEdit, type SaveState, type SheetEdits } from "@/lib/edits";
 import { fromNumbered, fromSolfege, useNotation } from "@/lib/notation";
@@ -134,9 +135,16 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
         // No annotated copy yet (names still being added, or that failed):
         // the API says so with a null, and asking anyway only logs a 404.
         const noNames = !!assets && assets.pdf === null;
+        // A photo whose names aren't there - still being added, or that failed
+        // - is shown as the page the worker reads it as, so it can still be
+        // read, marked up and downloaded like any other sheet.
+        const photo = noNames && !!assets?.original && !!assets.original_type?.startsWith("image/");
         const [annotated, original, timeline] = await Promise.all([
           noNames ? Promise.resolve(null) : fetchBytes(jobId, "pdf").catch((err) => { console.error(err); return null; }),
-          originalIsPdf ? fetchBytes(jobId, "original").then((b) => (isPdf(b) ? b : null)).catch(() => null) : Promise.resolve(null),
+          originalIsPdf ? fetchBytes(jobId, "original").then((b) => (isPdf(b) ? b : null)).catch(() => null)
+            : photo ? fetchBytes(jobId, "original").then((b) => photoAsPdf(b, assets!.original_type!))
+              .catch((err) => { console.error(err); return null; })
+            : Promise.resolve(null),
           fetchSheetFile(jobId, "timeline").then((r) => (r.ok ? r.json() as Promise<Timeline> : null)).catch(() => null),
         ]);
         if (!annotated && !original) throw new Error("no PDF to show");

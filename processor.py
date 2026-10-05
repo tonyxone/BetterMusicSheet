@@ -19,6 +19,30 @@ STAGES = {
 }
 RECOGNITION = STAGES["[1/3]"]
 
+# A photo becomes a page sized so that recognition, which reads a PDF at 300
+# DPI, sees the photo's own pixels one to one. The web app sizes the photos it
+# puts together the same way (lib/photo-pages.ts), and so does the viewer for
+# a photo whose names failed - marks made there are in this page's points. The
+# dpi the picture itself claims is ignored: a phone screenshot says 72 or 96,
+# which had recognition read it three to four times enlarged and blurred.
+PHOTO_DPI = 300
+
+
+def photo_as_pdf(raw, pdf):
+    """Write the photo at ``raw`` to ``pdf`` as one PHOTO_DPI page, turned
+    the way its orientation tag says, at its full resolution."""
+    import pymupdf
+    with pymupdf.open(raw) as photo, pymupdf.open("pdf", photo.convert_to_pdf()) as converted,             pymupdf.open() as out:
+        stored = pymupdf.Pixmap(str(raw))
+        width, height = stored.width, stored.height
+        turned = converted[0].rect
+        # Turned a quarter: the stored pixels' sides swap.
+        if (turned.width > turned.height) != (width > height):
+            width, height = height, width
+        page = out.new_page(width=width * 72 / PHOTO_DPI, height=height * 72 / PHOTO_DPI)
+        page.show_pdf_page(page.rect, converted, 0)
+        out.save(pdf)
+
 
 def publish(directory, **progress):
     """Hand progress to worker.py, which owns the database write.
@@ -47,8 +71,7 @@ def generate(raw, directory, options):
             if doc.is_pdf:
                 doc.save(pdf)
             else:
-                with pymupdf.open("pdf", doc.convert_to_pdf()) as converted:
-                    converted.save(pdf)
+                photo_as_pdf(raw, pdf)
     except Exception as exc:
         raise InvalidSheet(f"Upload a valid, unencrypted PDF or image with at most {MAX_PAGES} pages.") from exc
 
