@@ -114,6 +114,29 @@ def main(directory):
         # generic message instead.
         (directory / "result.json").write_text(json.dumps({"error": str(exc), "permanent": True}))
         return 2
+    except Exception as exc:
+        # Still a crash to retry, but worker.py would otherwise only see an
+        # exit status: this is what its attempt log says went wrong.
+        (directory / "result.json").write_text(json.dumps({"crash": crash_cause(directory, exc)}))
+        raise
+
+
+def crash_cause(directory, exc):
+    """One line saying why a run crashed. For Audiveris, its own log names the
+    page and the error (e.g. "Error processing stub ... no such edge in graph:
+    Exclusion" on "[input#2]"); the CalledProcessError says only "exit 1"."""
+    import subprocess
+    if isinstance(exc, subprocess.CalledProcessError):
+        try:
+            logs = sorted((directory / "work").rglob("*.log"), key=lambda p: p.stat().st_mtime)
+            lines = logs[-1].read_text(encoding="utf-8", errors="replace").splitlines() if logs else []
+        except OSError:
+            lines = []
+        problems = [line for line in lines if "Error processing stub" in line or "No system found" in line]
+        if problems:
+            return "Audiveris: " + " ".join(problems[-1].split())[:400]
+        return f"Audiveris exited with status {exc.returncode}"
+    return f"{type(exc).__name__}: {exc}"[:400]
 
 
 if __name__ == "__main__":

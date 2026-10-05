@@ -121,14 +121,15 @@ def run_processor(job, directory, tick):
                 raise TimeoutError(job_state.TOO_LONG)
             tick()
         result = directory / "result.json"
-        if result.exists():
-            data = json.loads(result.read_text())
-            if data.get("permanent"):
-                from processor import InvalidSheet
-                raise InvalidSheet(data["error"])
-        if process.returncode or not result.exists():
+        data = json.loads(result.read_text()) if result.exists() else {}
+        if data.get("permanent"):
+            from processor import InvalidSheet
+            raise InvalidSheet(data["error"])
+        if process.returncode or not data or "crash" in data:
             # Shown to the reader only once every attempt has failed.
-            raise RuntimeError(job_state.UNREADABLE)
+            error = RuntimeError(job_state.UNREADABLE)
+            error.crash = data.get("crash")
+            raise error
         return data
     finally:
         stop_process(process)
@@ -231,10 +232,12 @@ def process_job(job_id, extend=lambda: None, runner=run_processor):
     except Exception as exc:
         traceback.print_exc()
         permanent = isinstance(exc, (InvalidSheet, TimeoutError)) or job["attempt_count"] >= MAX_ATTEMPTS
+        crash = getattr(exc, "crash", None)
+        alerts.attempt_failed(job, str(exc), crash, retrying=not permanent)
         try:
             if permanent:
                 job_state.finish(job, status="failed", error=str(exc), stage="Processing failed")
-                alerts.job_failed(job, str(exc))
+                alerts.job_failed(job, str(exc), crash)
             else:
                 now = int(time.time())
                 job_state.owned(job, status="queued", error=None, stage="Retrying interrupted processing",

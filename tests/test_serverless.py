@@ -1,5 +1,7 @@
 """AWS contract tests use Moto; they never access the real account."""
+import contextlib
 import importlib
+import io
 import json
 import os
 import tempfile
@@ -329,6 +331,34 @@ class ServerlessTests(unittest.TestCase):
         for expected in (USER, job["music_sheet_id"], "Summer.pdf", "bad recognition",
                          f"s3://new-files/{job['input_key']} (us-west-1)"):
             self.assertIn(expected, body)
+
+    def test_every_failed_attempt_is_logged_with_its_cause(self):
+        read = self.alert_inbox()
+        self.upload()
+        crash = RuntimeError(job_state.UNREADABLE)
+        crash.crash = "Audiveris: WARN [input#2] Book 2044 | Error processing stub no such edge in graph: Exclusion"
+        runner = Mock(side_effect=crash)
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            self.assertFalse(worker.process_job("a", runner=runner))
+            self.assertTrue(worker.process_job("a", runner=Mock(side_effect=fake_runner)))
+        events = [json.loads(line) for line in printed.getvalue().splitlines() if line.startswith("{")]
+        failed, done = [e for e in events if e["event"] == "attempt_failed"], [e for e in events if e["event"] == "job_done"]
+        self.assertEqual(len(failed), 1)
+        self.assertEqual((failed[0]["job_id"], failed[0]["attempt"], failed[0]["retrying"]), ("a", 1, True))
+        self.assertIn("no such edge in graph", failed[0]["crash"])
+        self.assertEqual(done[0]["attempts"], 2, "a success after a crash says so")
+        self.assertEqual(read(), [], "a retried attempt is logged, not alerted")
+
+    def test_a_final_failure_email_names_the_cause(self):
+        read = self.alert_inbox()
+        self.upload()
+        crash = RuntimeError(job_state.UNREADABLE)
+        crash.crash = "Audiveris: Error processing stub no such edge in graph: Exclusion"
+        for _ in range(config.MAX_ATTEMPTS):
+            worker.process_job("a", runner=Mock(side_effect=crash))
+        [alert] = read()
+        self.assertIn("Cause:      Audiveris: Error processing stub", alert["Message"])
 
     def test_controller_failures_alert(self):
         read = self.alert_inbox()
