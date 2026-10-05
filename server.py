@@ -297,6 +297,49 @@ def set_demo_hidden(body: DemoHiddenRequest, user_id: str = Depends(get_signed_i
     return {"hidden": body.hidden}
 
 
+class Preferences(BaseModel):
+    """The reader's own settings, one set for every sheet. Every field is
+    optional: a PUT carries only what changed. Unknown keys are refused, so a
+    typo in a client is a 422 rather than a setting silently never read."""
+    model_config = {"extra": "forbid"}
+    # Which copy a sheet opens on: with the note names, or as uploaded.
+    sheet_view: Optional[Literal["annotated", "original"]] = None
+    # How the names are written. Absent until chosen: each sheet then shows
+    # the notation it was made with.
+    notation: Optional[Literal["letters", "numbers", "solfege"]] = None
+    # The practice page. The instrument ids belong to the web and iOS
+    # players, so only their shape is checked here.
+    instrument: Optional[str] = Field(None, pattern=r"^[a-z0-9-]{1,32}$")
+    speed: Optional[float] = Field(None, ge=0.1, le=2)
+    show_key_names: Optional[bool] = None
+    show_note_names: Optional[bool] = None
+    sound_on: Optional[bool] = None
+    sheet_open: Optional[bool] = None
+    roll_open: Optional[bool] = None
+    # The sheet's share of the space it splits with the piano roll.
+    split: Optional[float] = Field(None, ge=0, le=1)
+
+
+@app.get("/api/me/preferences")
+def preferences(user_id: str = Depends(get_signed_in_user_id)):
+    """The signed-in account's settings - only those ever chosen; a client
+    uses its own default for the rest. A guest keeps theirs in the browser
+    (see better_music_sheet_web/lib/preferences.ts)."""
+    if user_id is None:
+        raise HTTPException(401, "not signed in")
+    return {"preferences": db.get_preferences(user_id)}
+
+
+@app.put("/api/me/preferences")
+def save_preferences(body: Preferences, user_id: str = Depends(get_signed_in_user_id)):
+    """Save the settings in the body, leaving every other one as it was, and
+    return them all."""
+    if user_id is None:
+        raise HTTPException(401, "not signed in")
+    changes = body.model_dump(exclude_unset=True, exclude_none=True)
+    return {"preferences": db.update_preferences(user_id, changes) if changes else db.get_preferences(user_id)}
+
+
 @app.post("/api/subscriptions/stripe/checkout")
 def stripe_checkout(body: StripeCheckoutRequest, user_id: str = Depends(get_signed_in_user_id)):
     if user_id is None:

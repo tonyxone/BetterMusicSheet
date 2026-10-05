@@ -16,6 +16,7 @@ function load(entry) {
   const external = {
     react: { useCallback: () => {}, useEffect: () => {}, useRef: () => ({}), useState: () => [], useSyncExternalStore: () => null },
     './client-api': { clientApiFetch: async () => { throw new Error('no network in tests'); } },
+    './preferences': { usePreference: (_key, fallback) => [fallback, () => {}] },
     './sheet-files': { fetchSheetAssets: async () => null, fetchSheetFile: async () => null },
     './pdfjs': { openPdf: async () => { throw new Error('no pdf.js in tests'); } },
   };
