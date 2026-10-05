@@ -209,6 +209,31 @@ class RereadTests(unittest.TestCase):
         with patch("run.load_system_staff_groups", side_effect=lambda _, page: groups[page]):
             self.assertEqual(run.missing_staves("book.omr", 3), 3)
 
+    def test_a_page_that_lost_the_same_staff_everywhere_still_counts(self):
+        # Every system down to one staff: nothing is "missing" against the
+        # fullest system, but a piano score has lost its other hand.
+        groups = {1: [[1], [2]]}
+        with patch("run.load_system_staff_groups", side_effect=lambda _, page: groups[page]):
+            self.assertEqual(run.missing_staves("book.omr", 1), 0)
+            self.assertEqual(run.lone_staves("book.omr", 1), 2)
+
+    def test_a_screenshot_with_phone_chrome_is_still_binarized(self):
+        # A status bar and an address bar take a third of the picture.
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.path = Path(temporary.name)
+        source = self.path / "screenshot.pdf"
+        with pymupdf.open() as doc:
+            page = doc.new_page(width=300, height=300)
+            page.draw_rect(pymupdf.Rect(0, 0, 300, 100), color=None, fill=(.2, .2, .2))
+            for y in range(150, 175, 6):
+                page.draw_line((20, y), (280, y), color=(.5, .5, .5))
+            image = page.get_pixmap(dpi=100)
+        with pymupdf.open() as doc:
+            doc.new_page(width=300, height=300).insert_image(pymupdf.Rect(0, 0, 300, 300), pixmap=image)
+            doc.save(source)
+        self.assertNotEqual(scan.prepare_for_recognition(source, self.path / "out"), source)
+
     def test_nothing_to_binarize_means_no_reread(self):
         audiveris = MagicMock()
         with patch("scan.prepare_for_recognition", side_effect=lambda pdf, *_: Path(pdf)), \

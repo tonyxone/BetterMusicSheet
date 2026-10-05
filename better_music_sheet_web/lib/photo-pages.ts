@@ -97,6 +97,36 @@ async function photoToJpeg(file: File, longSide: number, quality: number) {
   return { bytes: new Uint8Array(await blob.arrayBuffer()), width, height };
 }
 
+/** An uploaded photo as the one-page PDF the worker reads it as
+ * (processor.photo_as_pdf): turned the way its orientation tag says, at full
+ * resolution, sized at RECOGNITION_DPI. The viewer shows a photo whose names
+ * failed through it, so marks made there land where they will on the
+ * annotated sheet if a later attempt succeeds. */
+export async function photoAsPdf(bytes: ArrayBuffer, type: string): Promise<ArrayBuffer> {
+  const { PDFDocument } = await import("pdf-lib");
+  const bitmap = await createImageBitmap(new Blob([bytes], { type }), { imageOrientation: "from-image" });
+  const { width, height } = bitmap;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d")!;
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, width, height);
+  context.drawImage(bitmap, 0, 0);
+  bitmap.close();
+  // A screenshot stays lossless; a photo is already a JPEG.
+  const png = type === "image/png";
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, png ? "image/png" : "image/jpeg", 0.92));
+  if (!blob) throw new Error("Couldn't read the photo.");
+  const encoded = new Uint8Array(await blob.arrayBuffer());
+  const pdf = await PDFDocument.create();
+  const image = png ? await pdf.embedPng(encoded) : await pdf.embedJpg(encoded);
+  const page = pdf.addPage([width * 72 / RECOGNITION_DPI, height * 72 / RECOGNITION_DPI]);
+  page.drawImage(image, { x: 0, y: 0, width: page.getWidth(), height: page.getHeight() });
+  const saved = await pdf.save();
+  return saved.buffer.slice(saved.byteOffset, saved.byteOffset + saved.byteLength) as ArrayBuffer;
+}
+
 /** The photos as one PDF, a page each, in order - under `maxBytes` if it can
  * be done without making the pages too small to read. */
 export async function combinePhotos(files: File[], maxBytes: number): Promise<File> {

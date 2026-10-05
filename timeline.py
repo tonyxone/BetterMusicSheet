@@ -2,7 +2,7 @@
 from collections import defaultdict
 from copy import deepcopy
 import pymupdf
-from audiveris_heads import load_time_signatures
+from audiveris_heads import has_sheet, load_time_signatures
 from pdf_marks import arpeggio_signs, time_signatures
 
 import musicxml
@@ -757,7 +757,11 @@ def prepare_score(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=No
             stats['measures_without_note_positions'] += 1
             m['warnings'].append('Some notes have approximate positions or unverified pitch alignment.')
         printed_beat += m['length_beats']
-    stats['pages_without_regions'] = sum(not resolved['pages'].get(p, {}).get('regions') for p in range(1, num_pages + 1))
+    # A page the book left out as holding no music - a cover picture - is
+    # not one whose music went unrecognized.
+    stats['pages_without_regions'] = sum(
+        not resolved['pages'].get(p, {}).get('regions') for p in range(1, num_pages + 1)
+        if has_sheet((page_omr_overrides or {}).get(p, {}).get('omr', omr_path), p))
     return {'resolved': resolved, 'printed': printed, 'stats': stats}
 
 

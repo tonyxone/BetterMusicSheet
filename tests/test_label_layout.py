@@ -121,5 +121,23 @@ class LabelLayoutTests(unittest.TestCase):
         self.assertEqual(blocks[0]['labels'], chord()['labels'])
 
 
+class CrowdedLabelTests(unittest.TestCase):
+    def test_a_label_with_no_clear_spot_is_still_placed(self):
+        # Noteheads packed edge to edge around the chord leave no clear space
+        # anywhere within reach: the label goes over them rather than failing
+        # the sheet.
+        doc = fitz.open()
+        self.addCleanup(doc.close)
+        page = doc.new_page(width=320, height=250)
+        record = chord(labels=['C'])
+        record['note_boxes_pt'] = [(x, y, x + 3, y + 3) for x in range(0, 320, 3) for y in range(0, 250, 3)]
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            blocks = layout_page_records([record], 6.5, fitz.Font('helv'), 3.2, page)
+        self.assertEqual(len(blocks), 1)
+        self.assertTrue(all(12 <= box.x0 and box.x1 <= 308 for box in label_boxes(blocks[0])))
+        self.assertIn('No completely clear label space', str(caught[-1].message))
+
+
 if __name__ == '__main__':
     unittest.main()

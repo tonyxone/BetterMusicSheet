@@ -47,9 +47,12 @@ INK_LEVEL = 160
 # what a digitally rendered sheet looks like - and what makes one fixed
 # threshold safe. A photographed or paper-scanned page has a grey, unevenly lit
 # background that a global threshold would turn into black blotches, and is
-# left to Audiveris's own adaptive binarization, as before.
+# left to Audiveris's own adaptive binarization, as before. Measured at 100
+# DPI: photos of a page have none of it (0.0, real and synthetic), while phone
+# screenshots, whose status bar, address bar and artwork take a share of the
+# picture, have 0.41-0.68 - so the line sits well clear of both.
 WHITE_LEVEL = 250
-MIN_WHITE_FRACTION = 0.75
+MIN_WHITE_FRACTION = 0.35
 
 _WHITE = bytes(1 if v >= WHITE_LEVEL else 0 for v in range(256))
 _BINARY = bytes(0 if v < INK_LEVEL else 255 for v in range(256))
