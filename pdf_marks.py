@@ -5,6 +5,7 @@ and unsupported fonts return no evidence and keep the recognition fallback.
 SMuFL references: W3C 1.4 tables/octaves.html and tables/metronome-marks.html.
 """
 import re
+from collections import Counter
 
 OCTAVES = {0xE510: 1, 0xE511: 1, 0xE512: 1, 0xE513: 1,
            0xE514: 2, 0xE515: 2, 0xE516: 2,
@@ -22,6 +23,9 @@ _BASSA_SUFFIX = re.compile(r'(vb|mb|ba|bassa)\b', re.IGNORECASE)
 # Unicode characters. In OpusSpecialStd, these render as 8va and 8.
 LEGACY_OCTAVES = {('OpusSpecialStd', '”“'): 1,
                   ('OpusSpecialStd', '“'): 1}
+# The same legacy fonts share Sonata's character layout, where "œ" is the
+# black notehead - the glyph any page of music draws most.
+SONATA_BLACK_NOTEHEAD = ord('œ')
 METRONOMES = {0xECA2: 4, 0xECA3: 2, 0xECA4: 2, 0xECA5: 1,
               0xECA6: 1, 0xECA7: .5, 0xECA8: .5, 0xECA9: .25,
               0xECAA: .25, ord('♩'): 1, ord('♪'): .5}
@@ -83,6 +87,12 @@ def time_signatures(page):
     digits too. A font that draws private-use music glyphs somewhere on this
     page is a notation font, so its digits are notation digits; that is what
     separates the two cases without hard-coding font names.
+
+    Pre-SMuFL fonts in the Sonata layout (Sibelius's Opus, Finale's Maestro
+    and their kin) draw no private-use glyphs at all: their black notehead is
+    "œ" and their time digits are ASCII. A font whose most-drawn glyph is that
+    notehead is a notation font too - no text font draws "œ" more often than
+    every other letter.
     """
     chars = [(ord(c['c']), c['origin'], span.get('font', ''))
              for block in page.get_text('rawdict')['blocks']
@@ -90,6 +100,12 @@ def time_signatures(page):
              for span in line['spans']
              for c in span.get('chars', [])]
     music_fonts = {font for code, _, font in chars if 0xE000 <= code <= 0xF8FF}
+    drawn = {}
+    for code, _, font in chars:
+        if not chr(code).isspace():
+            drawn.setdefault(font, Counter())[code] += 1
+    music_fonts |= {font for font, counts in drawn.items()
+                    if counts.most_common(1)[0][0] == SONATA_BLACK_NOTEHEAD}
 
     rows, marks = {}, []
     for code, (x, y), font in chars:

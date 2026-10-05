@@ -506,6 +506,21 @@ class AccuracyTests(unittest.TestCase):
             {'c': '4', 'origin': (200, 30)}]}
         self.assertEqual([m['beats'] for m in pdf_marks.time_signatures(self._page(music, prose))], [3])
 
+    def test_pdf_meter_reads_ascii_digits_from_a_sonata_layout_font(self):
+        # Sibelius's Opus (and Finale's Maestro) predate SMuFL: no private-use
+        # glyphs, the black notehead is "œ" and the time digits are ASCII.
+        opus = {'font': 'OpusStd', 'chars': [{'c': 'œ', 'origin': (40 + i, 60)} for i in range(5)] + [
+            {'c': '4', 'origin': (10, 20)},
+            {'c': '4', 'origin': (10, 30)}]}
+        self.assertEqual([m['beats'] for m in pdf_marks.time_signatures(self._page(opus))], [4])
+
+    def test_pdf_meter_ignores_a_text_font_that_merely_contains_oe(self):
+        # French lyrics ("cœur") with stacked verse numbers must stay prose.
+        lyrics = {'font': 'Times', 'chars': [{'c': c, 'origin': (40 + i * 5, 60)} for i, c in enumerate('cœur, mon cœur')] + [
+            {'c': '1', 'origin': (10, 20)},
+            {'c': '2', 'origin': (10, 30)}]}
+        self.assertEqual(pdf_marks.time_signatures(self._page(lyrics)), [])
+
     def test_pdf_meter_rejects_stacked_fingerings(self):
         # Two fingerings on a chord stack exactly like a time signature. "5
         # over 1" is a plausible fingering and an implausible meter.
@@ -675,6 +690,28 @@ class AccuracyTests(unittest.TestCase):
         self.assertEqual(t['audio_notes'][0]['duration_beats'], 8)
         self.assertEqual([n['attack'] for n in t['notes']], [True, False])
         self.assertTrue(all(n['bbox_pt'] for n in t['notes']))
+
+    def build_with_meters(self, marks, first=3):
+        """Two measures recognized as 4/4 in one system - the first holding
+        `first` beats, the second a half note - with the given printed meters."""
+        with patch.object(timeline, 'time_signatures', side_effect=lambda page: marks):
+            return self.build([[[(6, 0, 1, None)], [(6, 0, 1, None)]]],
+                              measure(ATTR + note(duration=first)) + measure(note(duration=2), 2))[1]
+
+    def test_printed_meter_change_carries_into_later_measures(self):
+        t = self.build_with_meters([dict(x=10, y=130, beats=3.0)])
+        self.assertEqual([m['length_beats'] for m in t['measures']], [3, 3])
+        # The half note no longer fits 3 beats, so that doubt stays; the full
+        # first measure's mismatch was only against the misread 4/4.
+        self.assertFalse(any(w.startswith('Recognized duration') for w in t['measures'][0]['warnings']))
+        self.assertTrue(any(w.startswith('Recognized duration') for w in t['measures'][1]['warnings']))
+        t = self.build_with_meters([dict(x=10, y=130, beats=4.0), dict(x=110, y=130, beats=2.0)], first=4)
+        self.assertEqual([m['length_beats'] for m in t['measures']], [4, 2])
+
+    def test_a_courtesy_meter_closing_a_system_is_not_its_last_measure_s(self):
+        # Sibelius prints the next system's meter after the last bar's notes.
+        t = self.build_with_meters([dict(x=10, y=130, beats=3.0), dict(x=190, y=130, beats=5.0)])
+        self.assertEqual([m['length_beats'] for m in t['measures']], [3, 3])
 
     def test_octave_shift_not_applied_twice(self):
         direction = '<direction><direction-type><octave-shift type="down" size="8"/></direction-type></direction>'

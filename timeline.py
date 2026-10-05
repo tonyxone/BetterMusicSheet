@@ -656,8 +656,11 @@ def prepare_score(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=No
         m['bbox_pt'] = region['bbox_pt'] if region else None
         if region:
             x0, y0, x1, y1 = region['bbox_pt']
+            # A change of meter is printed at the start of its measure. One in
+            # the right half is the courtesy signature closing a system, which
+            # belongs to the next measure - reprinted there at its own start.
             values = {e['beats'] for e in meters.get(m['page'], [])
-                      if x0 <= e['x'] < x1 and y0 <= e['y'] <= y1}
+                      if x0 <= e['x'] < (x0 + x1) / 2 and y0 <= e['y'] <= y1}
             if len(values) == 1:
                 pdf_meter = values.pop()
         # A signature carries forward until the next one, so the doubt does too.
@@ -671,6 +674,10 @@ def prepare_score(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=No
                     'Time signature corrected from the printed PDF.')
                 m['nominal_length_beats'] = pdf_meter
                 m['length_beats'] = max(pdf_meter, m['content_length_beats'])
+                # The mismatch was against the misread meter; the notes fit
+                # the printed one.
+                if abs(m['content_length_beats'] - pdf_meter) <= 1e-6:
+                    m['warnings'][:] = [w for w in m['warnings'] if not w.startswith('Recognized duration differs')]
         if meter_unreliable and pdf_meter is None:
             m['warnings'].append(
                 'The printed time signature could not be read confidently and none '
