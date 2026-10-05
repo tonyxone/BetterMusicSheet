@@ -164,6 +164,12 @@ STUB_CRASH = ("WARN  [input#2]                      Book 2044 | Error processing
               "java.lang.RuntimeException: java.lang.IllegalArgumentException: no such edge in graph: Exclusion")
 
 
+SHEET_REMOVED = ("WARN  [input#1]                 SheetStub 411  | input#1   With a too low interline value of 7 pixels,  "
+                 "either this sheet contains no multi-line staves,  or the picture resolution is too low (try 300 DPI).\n"
+                 "WARN  [input#1]                      Book 2044 | Error processing stub "
+                 "org.audiveris.omr.step.StepException: Sheet removed\n")
+
+
 class CrashRerunTests(unittest.TestCase):
     """A page crash that comes and goes between runs of the same file is read
     again at once, rather than costing a whole job attempt and its wait."""
@@ -178,15 +184,19 @@ class CrashRerunTests(unittest.TestCase):
 
     def audiveris(self, *outcomes):
         """A run_audiveris stand-in: each call writes its own log, then
-        crashes with that log line or succeeds."""
+        crashes with that log line, splits into movements, or succeeds."""
         calls = iter(outcomes)
+        self.runs = []
 
-        def fake(pdf_path, out_dir, dpi=None):
+        def fake(pdf_path, out_dir, dpi=None, constants=None):
+            self.runs.append((dpi, constants))
             outcome = next(calls)
             (out_dir / "input.omr").write_text("partial book")
             if outcome == "ok":
                 (out_dir / "input-1.log").write_text("all good")
                 return out_dir / "input.mxl", out_dir / "input.omr"
+            if outcome == "movements":
+                raise run.SplitIntoMovements("split")
             (out_dir / "input-1.log").write_text(outcome)
             raise subprocess.CalledProcessError(1, ["java"])
         return fake
@@ -196,12 +206,12 @@ class CrashRerunTests(unittest.TestCase):
         with patch.object(run, "run_audiveris", side_effect=self.audiveris(*outcomes)) as calls:
             try:
                 return run.recognize_book(self.pdf, self.work, log=log.append), calls.call_count, log
-            except subprocess.CalledProcessError:
+            except (subprocess.CalledProcessError, run.SplitIntoMovements):
                 return None, calls.call_count, log
 
     def test_a_page_crash_is_read_again_at_once(self):
         result, calls, log = self.recognize(STUB_CRASH, STUB_CRASH, "ok")
-        self.assertEqual(result, (self.work / "input.mxl", self.work / "input.omr"))
+        self.assertEqual(result, (self.work / "input.mxl", self.work / "input.omr", None))
         self.assertEqual(calls, 3)
         self.assertIn("reading the sheet again (2 of 2)", log[-1])
 
@@ -220,6 +230,33 @@ class CrashRerunTests(unittest.TestCase):
             result, calls, _ = self.recognize(STUB_CRASH, "ok")
         self.assertIsNone(result)
         self.assertEqual(calls, 1)
+
+    def test_a_removed_sheet_is_not_a_crash(self):
+        result, calls, _ = self.recognize(SHEET_REMOVED.replace("too low interline", "unreadable"), "ok")
+        self.assertIsNone(result)
+        self.assertEqual(calls, 1)
+
+    def test_too_coarse_a_page_is_read_again_finer(self):
+        result, calls, log = self.recognize(SHEET_REMOVED, "ok")
+        self.assertEqual(result, (self.work / "input.mxl", self.work / "input.omr", 700))
+        self.assertEqual([dpi for dpi, _ in self.runs], [None, 700])
+        self.assertIn("700 DPI", log[-1])
+
+    def test_a_page_still_too_coarse_at_the_limit_is_not_read_again(self):
+        result, calls, _ = self.recognize(SHEET_REMOVED.replace("of 7 pixels", "of 3 pixels"),
+                                          SHEET_REMOVED.replace("of 7 pixels", "of 5 pixels"), "ok")
+        self.assertIsNone(result)
+        self.assertEqual([dpi for dpi, _ in self.runs], [None, run.MAX_UPSCALE_DPI])
+
+    def test_a_book_split_into_movements_is_read_as_one_piece(self):
+        result, calls, _ = self.recognize("movements", "ok")
+        self.assertEqual(result, (self.work / "input.mxl", self.work / "input.omr", None))
+        self.assertEqual([constants for _, constants in self.runs], [None, run.NO_MOVEMENTS])
+
+    def test_movements_are_given_up_on_after_one_more_read(self):
+        result, calls, _ = self.recognize("movements", "movements", "ok")
+        self.assertIsNone(result)
+        self.assertEqual(calls, 2)
 
 
 if __name__ == "__main__":

@@ -600,6 +600,23 @@ class AccuracyTests(unittest.TestCase):
         self.assertEqual([round(n['start_beat_in_measure'], 6) for n in ns], [0, 0, round(1/3, 6)])
         self.assertEqual(ms[0]['content_length_beats'], 1)
 
+    def test_an_octave_line_closed_by_an_earlier_voice_stays_closed(self):
+        # Audiveris wrote Calice de Vino's m1 this way: the stop sits in voice
+        # 1, before the backup to voice 2 that holds the line's earlier start.
+        def shift(kind):
+            return f'<direction><direction-type><octave-shift type="{kind}" size="8"/></direction-type><staff>1</staff></direction>'
+        ns, _ = self.parse(measure(ATTR + note(duration=2) + shift('stop') + note('D', duration=2)
+                                   + '<backup><duration>4</duration></backup>' + shift('down') + note('E', duration=4, voice=2))
+                           + measure(note('F', duration=4), 2))
+        self.assertEqual([n['octave_shift'] for n in ns], [0, 0, 0, 0])
+
+    def test_an_octave_line_left_open_ends_with_its_page(self):
+        shift = '<direction><direction-type><octave-shift type="down" size="8"/></direction-type><staff>1</staff></direction>'
+        ns, _ = self.parse(measure(ATTR + shift + note(duration=4))
+                           + measure('<print new-system="yes"/>' + note('D', duration=4), 2)
+                           + measure('<print new-page="yes"/>' + note('E', duration=4), 3))
+        self.assertEqual([n['octave_shift'] for n in ns], [1, 1, 0])
+
     def test_implicit_final_measure_is_not_padded(self):
         _, ms = self.parse(measure(ATTR + note(duration=4)) + measure(note(duration=1), 2, 'implicit="yes"'))
         self.assertEqual([m['length_beats'] for m in ms], [4, 1])
