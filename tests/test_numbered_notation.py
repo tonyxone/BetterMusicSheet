@@ -66,6 +66,17 @@ class RecordTests(unittest.TestCase):
         self.assertEqual([rec['labels'] for rec in records], [['♯fa'], ['fa'], ['so']])
         self.assertEqual([rec['letters'] for rec in records], [['F♯'], ['F'], ['G']])
 
+    def test_labels_shrink_with_small_engraving_only(self):
+        # A 300 DPI phone screenshot as a PDF page: 2.2pt noteheads.
+        small = self.resolved(0, (F4, 0), (G4, 0))
+        for n in small['notes']:
+            n['bbox_pt'][2] = n['bbox_pt'][0] + 2.2
+        self.assertAlmostEqual(annotate.records_from_resolved(small)[0]['scale'], 2.2 / annotate.NORMAL_NOTEHEAD_PT)
+        normal = self.resolved(0, (F4, 0), (G4, 0))
+        for n in normal['notes']:
+            n['bbox_pt'][2] = n['bbox_pt'][0] + 6
+        self.assertEqual(annotate.records_from_resolved(normal)[0]['scale'], 1)
+
     def test_letters_by_default(self):
         records = annotate.records_from_resolved(self.resolved(0, (F4, 1)))
         self.assertEqual(records[0]['labels'], ['F♯'])

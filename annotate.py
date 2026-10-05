@@ -158,6 +158,11 @@ def build_records(pdf_path, omr_path, num_pages, style='unicode', octave=False, 
     return records
 
 
+# A notehead's width on ordinary engraving: the narrowest of this project's
+# test pieces measures 5.0pt (the widest 7.2pt).
+NORMAL_NOTEHEAD_PT = 5.0
+
+
 def records_from_resolved(resolved, style='unicode', octave=False, suppress_repeated_chords=True,
                           notation='letters'):
     """Render every recognized written note, including tied continuations.
@@ -171,11 +176,17 @@ def records_from_resolved(resolved, style='unicode', octave=False, suppress_repe
     from collections import defaultdict
     from labels import diatonic_label, numbered_label, solfege_label
     groups = defaultdict(list)
-    widths = defaultdict(list)
+    widths, head_pts = defaultdict(list), defaultdict(list)
     for n in resolved['notes']:
         groups[(n['page'], n['staff'], n['chord_id'])].append(n)
         widths[n['page']].append(n['w'])
+        if n.get('bbox_pt'):
+            head_pts[n['page']].append(n['bbox_pt'][2] - n['bbox_pt'][0])
     medians = {p: sorted(ws)[len(ws) // 2] for p, ws in widths.items()}
+    # The label size suits ordinary engraving. Music printed smaller - a phone
+    # screenshot saved as a small PDF page - gets labels shrunk to match, or a
+    # dense bar has nowhere to put a name that clears its noteheads.
+    engraving = {p: min(1, sorted(ws)[len(ws) // 2] / NORMAL_NOTEHEAD_PT) for p, ws in head_pts.items()}
     seen, records = {}, []
     symbols = {-2: '𝄫', -1: '♭', 0: '', 1: '♯', 2: '𝄪'}
     for group in sorted(groups.values(), key=lambda g: (g[0]['page'], g[0]['system'], g[0]['staff'], min(n['cx'] for n in g))):
@@ -211,7 +222,8 @@ def records_from_resolved(resolved, style='unicode', octave=False, suppress_repe
             'top_y_pt': min((b[1] + b[3]) / 2 for b in boxes),
             'bottom_y_pt': max((b[1] + b[3]) / 2 for b in boxes),
             'labels': labels, 'letters': letters, 'measure': (first['system_measure'] or 0) + 1,
-            'scale': max(.65, min(1, width / medians[first['page']])) if medians[first['page']] else 1,
+            'scale': (max(.65, min(1, width / medians[first['page']])) if medians[first['page']] else 1)
+                     * engraving.get(first['page'], 1),
             'notehead_w_pt': sum(b[2] - b[0] for b in boxes) / len(boxes),
             'note_boxes_pt': boxes, 'staff_lines_pt': staff_ys,
             'staff_top_pt': staff_top, 'staff_bottom_pt': staff_bottom,

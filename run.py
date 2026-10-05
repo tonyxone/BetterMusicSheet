@@ -4,6 +4,7 @@ Usage:
     .venv\\Scripts\\python.exe run.py "input.pdf" -o "annotated.pdf"
 """
 import argparse
+import re
 import statistics
 import subprocess
 import sys
@@ -136,7 +137,7 @@ class NotMusic(ValueError):
     processor.py hands NOT_MUSIC_MESSAGE to the reader instead of retrying."""
 
 
-def run_audiveris(pdf_path, out_dir, dpi=None, sheets=None, switches=None, binarize=False):
+def run_audiveris(pdf_path, out_dir, dpi=None, sheets=None, switches=None, binarize=False, constants=None):
     """Recognize ``pdf_path`` into ``out_dir``; returns the .mxl and .omr.
 
     ``binarize`` has Audiveris read a black-and-white copy of the scanned pages
@@ -170,6 +171,8 @@ def run_audiveris(pdf_path, out_dir, dpi=None, sheets=None, switches=None, binar
         cmd += ["-constant",
                 f"org.audiveris.omr.sheet.ProcessingSwitches.{name}="
                 f"{'true' if enabled else 'false'}"]
+    for name, value in (constants or {}).items():
+        cmd += ["-constant", f"{name}={value}"]
     if sheets is not None:
         # -sheets keeps each selected page's original sheet number in the
         # output .omr (e.g. "-sheets 3" still produces sheet#3, not sheet#1),
@@ -181,9 +184,16 @@ def run_audiveris(pdf_path, out_dir, dpi=None, sheets=None, switches=None, binar
     stem = pdf_path.stem
     mxl = out_dir / f"{stem}.mxl"
     omr = out_dir / f"{stem}.omr"
+    if omr.exists() and not mxl.exists() and any(out_dir.glob(f"{stem}.mvt*.mxl")):
+        raise SplitIntoMovements(f"Audiveris split {pdf_path.name} into movements")
     if not mxl.exists() or not omr.exists():
         raise RuntimeError(f"Audiveris did not produce expected output ({mxl}, {omr})")
     return mxl, omr
+
+
+class SplitIntoMovements(RuntimeError):
+    """Audiveris took an indented system for the start of a new movement and
+    exported one file per movement, which nothing downstream reads."""
 
 
 def _no_system_found(work_dir, stem):
@@ -217,34 +227,88 @@ def _a_sheet_crashed(work_dir, stem):
     opposed to failing for a reason a fresh run would only repeat."""
     logs = sorted(work_dir.glob(f"{stem}-*.log"))
     try:
-        return bool(logs) and "Error processing stub" in logs[-1].read_text(encoding="utf-8", errors="replace")
+        return bool(logs) and _STUB_CRASH.search(logs[-1].read_text(encoding="utf-8", errors="replace")) is not None
     except OSError:
         return False
 
 
+# A sheet Audiveris drops as unreadable ends up in the same log line as a
+# crash, but a fresh run at the same resolution only drops it again.
+_STUB_CRASH = re.compile(r"Error processing stub (?!\S*StepException: Sheet removed)")
+# "With a too low interline value of 7 pixels, either this sheet contains no
+# multi-line staves, or the picture resolution is too low". A phone screenshot
+# saved as a PDF: its staff lines are there, just too few pixels apart.
+_LOW_INTERLINE = re.compile(r"too low interline value of (\d+) pixels")
+# Rasterizing such a page finer gives Audiveris enough pixels between the
+# lines; measured on two screenshots with 7px and 9px interlines, both read
+# in full at 600 DPI. Bounded, as the pages it applies to are small but the
+# cost grows with the square.
+MAX_UPSCALE_DPI = 800
+
+
+def _upscaled_dpi(work_dir, stem, dpi):
+    """The DPI that gives the staves Audiveris dropped as too fine a usable
+    interline, or None if there are none or it would not read them finer."""
+    logs = sorted(work_dir.glob(f"{stem}-*.log"))
+    try:
+        found = _LOW_INTERLINE.findall(logs[-1].read_text(encoding="utf-8", errors="replace")) if logs else []
+    except OSError:
+        return None
+    if not found:
+        return None
+    current = dpi or DEFAULT_DPI
+    needed = current * MIN_INTERLINE_PX / max(1, min(int(px) for px in found))
+    target = min(MAX_UPSCALE_DPI, -(-int(needed) // 100) * 100)
+    return target if target > current else None
+
+
+# Audiveris starts a new movement at an indented system, and an indent is all
+# it takes - the cut-off last system of a phone photo was one. Raised past any
+# page width, no system counts as indented, and the book exports as one piece.
+NO_MOVEMENTS = {"org.audiveris.omr.sheet.SystemManager.minIndentation": 1000}
+
+
 def recognize_book(pdf_path, work_dir, dpi=None, log=print):
-    """The whole-book Audiveris pass, run again at once if a page crashed."""
+    """The whole-book Audiveris pass, read again where a fresh run does
+    better: at once if a page crashed, finer if its staves were too coarse to
+    find, and as one piece if it came back split into movements. Returns the
+    .mxl, the .omr, and the DPI they were read at."""
     started = time.monotonic()
-    for rerun in range(1, CRASH_RERUNS + 2):
+    constants, runs, crashes = None, 0, 0
+    while True:
+        runs += 1
         try:
-            return run_audiveris(pdf_path, work_dir, dpi=dpi)
+            mxl, omr = run_audiveris(pdf_path, work_dir, dpi=dpi, constants=constants)
+            return mxl, omr, dpi
+        except SplitIntoMovements:
+            if constants:
+                raise
+            log("[1/3] Audiveris split the sheet into movements; reading it again as one piece ...")
+            constants = NO_MOVEMENTS
         except subprocess.CalledProcessError:
             if _no_system_found(work_dir, pdf_path.stem):
                 raise NotMusic(NOT_MUSIC_MESSAGE)
-            # One more run costs about what the runs so far averaged.
-            spent = time.monotonic() - started
-            if (rerun > CRASH_RERUNS or spent * (rerun + 1) / rerun > CRASH_RERUN_BUDGET_SECONDS
-                    or not _a_sheet_crashed(work_dir, pdf_path.stem)):
-                raise
-            log(f"[1/3] Audiveris crashed on a page; reading the sheet again ({rerun} of {CRASH_RERUNS}) ...")
-            _clear_audiveris_output(work_dir, pdf_path.stem)
+            finer = _upscaled_dpi(work_dir, pdf_path.stem, dpi)
+            if finer:
+                log(f"[1/3] The pages are too low-resolution to read; reading them again at {finer} DPI ...")
+                dpi = finer
+            else:
+                crashes += 1
+                # One more run costs about what the runs so far averaged.
+                spent = time.monotonic() - started
+                if (crashes > CRASH_RERUNS or spent * (runs + 1) / runs > CRASH_RERUN_BUDGET_SECONDS
+                        or not _a_sheet_crashed(work_dir, pdf_path.stem)):
+                    raise
+                log(f"[1/3] Audiveris crashed on a page; reading the sheet again ({crashes} of {CRASH_RERUNS}) ...")
+        _clear_audiveris_output(work_dir, pdf_path.stem)
 
 
 def _clear_audiveris_output(work_dir, stem):
     """Remove a failed run's book and log, so the next run starts clean and
     its own log is the one read back - by _a_sheet_crashed, and by the
     worker's page progress."""
-    for path in [work_dir / f"{stem}.omr", work_dir / f"{stem}.mxl", *work_dir.glob(f"{stem}-*.log")]:
+    for path in [work_dir / f"{stem}.omr", work_dir / f"{stem}.mxl", *work_dir.glob(f"{stem}.mvt*.mxl"),
+                 *work_dir.glob(f"{stem}-*.log")]:
         path.unlink(missing_ok=True)
 
 
@@ -653,7 +717,7 @@ def retry_variants(pdf_path, page, base_dpi=None, poor_recall=False):
     interline = staff_interline_pt(pdf_path, page)
     small_staves = interline is None or interline * 300 / 72 < MIN_INTERLINE_PX
     dearer = []
-    if base_dpi != RETRY_DPI and (small_staves or poor_recall):
+    if (base_dpi or DEFAULT_DPI) < RETRY_DPI and (small_staves or poor_recall):
         dearer = [(f"{RETRY_DPI} DPI", {"sheets": [page], "dpi": RETRY_DPI}),
                   (f"{RETRY_DPI} DPI with inferred tuplets",
                    {"sheets": [page], "dpi": RETRY_DPI, "switches": {"implicitTuplets": True}})]
@@ -918,7 +982,7 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
     pdf_path, scales = page_size.shrink_oversized(upload, work_dir / "page-size")
 
     log(f"[1/3] Running Audiveris OMR on {pdf_path.name} ...")
-    mxl, omr = recognize_book(pdf_path, work_dir, dpi, log)
+    mxl, omr, dpi = recognize_book(pdf_path, work_dir, dpi, log)
     num_pages = count_pages(pdf_path)
 
     if not has_any_staff(omr, num_pages):
