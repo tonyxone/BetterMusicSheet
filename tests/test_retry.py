@@ -5,6 +5,7 @@ after that failed. A failed sheet keeps its upload and can be read again
 (in-memory) mode, like test_delete_sheet.py.
 """
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +17,7 @@ import auth
 import db
 import job_state
 import processor
+import run
 import server
 import storage
 
@@ -138,6 +140,86 @@ class NotMusicTests(unittest.TestCase):
             with patch.object(processor, "generate", side_effect=RuntimeError("Audiveris died")):
                 with self.assertRaises(RuntimeError):
                     processor.main(directory)
+            # ...and says why, for the worker's attempt log.
+            crash = json.loads((directory / "result.json").read_text())["crash"]
+            self.assertEqual(crash, "RuntimeError: Audiveris died")
+
+    def test_an_audiveris_crash_is_described_from_its_own_log(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory / "options.json").write_text("{}")
+            (directory / "work").mkdir()
+            (directory / "work" / "input-20261004T1721.log").write_text(
+                "INFO  [input#2]  StepMonitoring 98 | LINKS\n" + STUB_CRASH + "\njava.util.concurrent.ExecutionException: ...\n")
+            failure = subprocess.CalledProcessError(1, ["java"])
+            with patch.object(processor, "generate", side_effect=failure):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    processor.main(directory)
+            crash = json.loads((directory / "result.json").read_text())["crash"]
+            self.assertIn("[input#2]", crash)
+            self.assertIn("no such edge in graph: Exclusion", crash)
+
+
+STUB_CRASH = ("WARN  [input#2]                      Book 2044 | Error processing stub "
+              "java.lang.RuntimeException: java.lang.IllegalArgumentException: no such edge in graph: Exclusion")
+
+
+class CrashRerunTests(unittest.TestCase):
+    """A page crash that comes and goes between runs of the same file is read
+    again at once, rather than costing a whole job attempt and its wait."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.work = Path(self.tmp.name)
+        self.pdf = self.work / "input.pdf"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def audiveris(self, *outcomes):
+        """A run_audiveris stand-in: each call writes its own log, then
+        crashes with that log line or succeeds."""
+        calls = iter(outcomes)
+
+        def fake(pdf_path, out_dir, dpi=None):
+            outcome = next(calls)
+            (out_dir / "input.omr").write_text("partial book")
+            if outcome == "ok":
+                (out_dir / "input-1.log").write_text("all good")
+                return out_dir / "input.mxl", out_dir / "input.omr"
+            (out_dir / "input-1.log").write_text(outcome)
+            raise subprocess.CalledProcessError(1, ["java"])
+        return fake
+
+    def recognize(self, *outcomes):
+        log = []
+        with patch.object(run, "run_audiveris", side_effect=self.audiveris(*outcomes)) as calls:
+            try:
+                return run.recognize_book(self.pdf, self.work, log=log.append), calls.call_count, log
+            except subprocess.CalledProcessError:
+                return None, calls.call_count, log
+
+    def test_a_page_crash_is_read_again_at_once(self):
+        result, calls, log = self.recognize(STUB_CRASH, STUB_CRASH, "ok")
+        self.assertEqual(result, (self.work / "input.mxl", self.work / "input.omr"))
+        self.assertEqual(calls, 3)
+        self.assertIn("reading the sheet again (2 of 2)", log[-1])
+
+    def test_reruns_are_bounded(self):
+        result, calls, _ = self.recognize(STUB_CRASH, STUB_CRASH, STUB_CRASH, "ok")
+        self.assertIsNone(result)
+        self.assertEqual(calls, 1 + run.CRASH_RERUNS)
+
+    def test_any_other_failure_is_not_rerun(self):
+        result, calls, _ = self.recognize("java.lang.OutOfMemoryError", "ok")
+        self.assertIsNone(result)
+        self.assertEqual(calls, 1)
+
+    def test_a_long_book_leaves_the_rerun_to_the_job_retry(self):
+        with patch.object(run.time, "monotonic", side_effect=[0, run.CRASH_RERUN_BUDGET_SECONDS]):
+            result, calls, _ = self.recognize(STUB_CRASH, "ok")
+        self.assertIsNone(result)
+        self.assertEqual(calls, 1)
 
 
 if __name__ == "__main__":

@@ -7,12 +7,14 @@ import argparse
 import statistics
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pymupdf as fitz
 
 import page_size
 import scan
+from config import MAX_JOB_SECONDS
 from audiveris_heads import (
     _parse_sheet, load_sheet_heads, load_staff_lines, load_system_staff_groups,
 )
@@ -197,6 +199,53 @@ def _no_system_found(work_dir, stem):
     except OSError:
         return False
     return "No system found" in text
+
+
+# Audiveris sometimes throws while cleaning up one page ("no such edge in
+# graph: Exclusion"), and then exports nothing for the whole book. Whether it
+# does changes from run to run on the very same file - one sheet failed 4 runs
+# in a row and then went through - so an immediate fresh run usually succeeds,
+# for a fraction of what a whole job retry costs. Bounded by time as well as
+# count, so a long book that crashes falls back to the job retry instead of
+# spending its time limit here.
+CRASH_RERUNS = 2
+CRASH_RERUN_BUDGET_SECONDS = MAX_JOB_SECONDS / 3
+
+
+def _a_sheet_crashed(work_dir, stem):
+    """Whether Audiveris's log for this run shows one of its sheets threw - as
+    opposed to failing for a reason a fresh run would only repeat."""
+    logs = sorted(work_dir.glob(f"{stem}-*.log"))
+    try:
+        return bool(logs) and "Error processing stub" in logs[-1].read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+
+
+def recognize_book(pdf_path, work_dir, dpi=None, log=print):
+    """The whole-book Audiveris pass, run again at once if a page crashed."""
+    started = time.monotonic()
+    for rerun in range(1, CRASH_RERUNS + 2):
+        try:
+            return run_audiveris(pdf_path, work_dir, dpi=dpi)
+        except subprocess.CalledProcessError:
+            if _no_system_found(work_dir, pdf_path.stem):
+                raise NotMusic(NOT_MUSIC_MESSAGE)
+            # One more run costs about what the runs so far averaged.
+            spent = time.monotonic() - started
+            if (rerun > CRASH_RERUNS or spent * (rerun + 1) / rerun > CRASH_RERUN_BUDGET_SECONDS
+                    or not _a_sheet_crashed(work_dir, pdf_path.stem)):
+                raise
+            log(f"[1/3] Audiveris crashed on a page; reading the sheet again ({rerun} of {CRASH_RERUNS}) ...")
+            _clear_audiveris_output(work_dir, pdf_path.stem)
+
+
+def _clear_audiveris_output(work_dir, stem):
+    """Remove a failed run's book and log, so the next run starts clean and
+    its own log is the one read back - by _a_sheet_crashed, and by the
+    worker's page progress."""
+    for path in [work_dir / f"{stem}.omr", work_dir / f"{stem}.mxl", *work_dir.glob(f"{stem}-*.log")]:
+        path.unlink(missing_ok=True)
 
 
 # Audiveris's cost tracks the rasterized area of a page and, to within the
@@ -869,12 +918,7 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
     pdf_path, scales = page_size.shrink_oversized(upload, work_dir / "page-size")
 
     log(f"[1/3] Running Audiveris OMR on {pdf_path.name} ...")
-    try:
-        mxl, omr = run_audiveris(pdf_path, work_dir, dpi=dpi)
-    except subprocess.CalledProcessError:
-        if _no_system_found(work_dir, pdf_path.stem):
-            raise NotMusic(NOT_MUSIC_MESSAGE)
-        raise
+    mxl, omr = recognize_book(pdf_path, work_dir, dpi, log)
     num_pages = count_pages(pdf_path)
 
     if not has_any_staff(omr, num_pages):
