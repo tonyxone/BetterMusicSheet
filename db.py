@@ -164,6 +164,26 @@ if IS_PRODUCTION:
             ExpressionAttributeValues={":h": hidden},
         )
 
+    # ---- per-user settings ----
+
+    def get_preferences(user_id):
+        user = get_user(user_id)
+        return dict(user.get("preferences") or {}) if user else {}
+
+    def update_preferences(user_id, changes):
+        """Merge ``changes`` into the account's settings and return them all.
+        Upserts the row, like set_demo_hidden. Read-merge-write rather than
+        one SET per key: a map attribute has to exist before a path inside it
+        can be set, and the last writer winning is right for a setting."""
+        merged = {**get_preferences(user_id), **changes}
+        _users_table.update_item(
+            Key={"user_id": user_id},
+            UpdateExpression="SET preferences = :p",
+            ExpressionAttributeValues={":p": {
+                k: Decimal(str(v)) if isinstance(v, float) else v for k, v in merged.items()}},
+        )
+        return merged
+
     # ---- music_sheet ----
 
     def create_music_sheet(music_sheet_id, user_id, sheet_name):
@@ -312,6 +332,22 @@ else:
                 "display_name": None, "created_at": int(time.time()),
             })
             row["hide_demo"] = hidden
+
+    # ---- per-user settings ----
+
+    def get_preferences(user_id):
+        with _lock:
+            user = _users.get(user_id)
+            return dict(user.get("preferences") or {}) if user else {}
+
+    def update_preferences(user_id, changes):
+        with _lock:
+            row = _users.setdefault(user_id, {
+                "user_id": user_id, "email": None,
+                "display_name": None, "created_at": int(time.time()),
+            })
+            row["preferences"] = {**(row.get("preferences") or {}), **changes}
+            return dict(row["preferences"])
 
     # ---- subscriptions ----
     #

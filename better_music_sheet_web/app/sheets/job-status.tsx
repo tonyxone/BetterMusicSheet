@@ -10,6 +10,7 @@ import { SheetToggle, type SheetVariant } from "../sheet-toggle";
 import { KeyboardIcon } from "../keyboard-icon";
 import { BackButton } from "../back-button";
 import { isActive, type AnnotationJob } from "@/lib/api";
+import { usePreference } from "@/lib/preferences";
 import type { CustomizedExport } from "../sheet-viewer/sheet-editor";
 
 // pdf.js and the editor stay out of every other route's bundle, and out of
@@ -31,7 +32,8 @@ export function JobStatus() {
   const cancellingRef = useRef(false);
   // Which copy the preview shows. Owned here rather than by the preview
   // itself: the Download menu up in the page's actions follows it too.
-  const [variant, setVariant] = useState<SheetVariant>("annotated");
+  // The reader's own choice, the same on every sheet (lib/preferences.ts).
+  const [variant, setVariant] = usePreference("sheet_view", "annotated");
   const [originalMissing, setOriginalMissing] = useState<string | null>(null);
   // Set by the editor once the sheet has loaded: builds the Customized PDF.
   const customizedRef = useRef<CustomizedExport | null>(null);
@@ -140,7 +142,9 @@ export function JobStatus() {
 
   // Readable: done, or the names still coming (or failed) over the upload.
   // Until the names exist there is only the upload to show.
-  const shown: SheetVariant = done ? variant : "original";
+  // One without its upload stored shows the names, without changing the
+  // reader's choice for the next sheet.
+  const shown: SheetVariant = !done ? "original" : originalMissing ? "annotated" : variant;
   const namesUnavailable = done ? null
     : job.status === "failed" ? "Note names couldn't be added to this sheet" : "Note names are still being added";
   return (

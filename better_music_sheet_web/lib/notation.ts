@@ -12,8 +12,8 @@
 // printed sharp or flat (D♯ is ♯2/♯re, E♭ is ♭3/♭mi); a double sharp or flat
 // on one reads as the nearest spelling with a single one (F𝄫 is ♭3/♭mi).
 
-import { useCallback, useSyncExternalStore } from "react";
 import { parseNoteName, type SpelledPitch } from "./labels";
+import { usePreference } from "./preferences";
 import type { Timeline } from "./timeline";
 
 export type Notation = "letters" | "numbers" | "solfege";
@@ -129,38 +129,10 @@ export function displayText(text: string, notation: Notation) {
 
 // ---- the reader's choice ---------------------------------------------------
 
-const NOTATION_KEY = "bms_label_notation";
-const NOTATION_EVENT = "bms-label-notation";
-// Where the choice lives when browser storage is unavailable.
-let unsaved: Notation | null = null;
-
-function savedNotation(): Notation | null {
-  try {
-    const v = localStorage.getItem(NOTATION_KEY);
-    return v === "letters" || v === "numbers" || v === "solfege" ? v : unsaved;
-  } catch {
-    return unsaved;
-  }
-}
-
-function subscribe(onChange: () => void) {
-  window.addEventListener(NOTATION_EVENT, onChange);
-  window.addEventListener("storage", onChange);
-  return () => {
-    window.removeEventListener(NOTATION_EVENT, onChange);
-    window.removeEventListener("storage", onChange);
-  };
-}
-
-/** The reader's letters/numbers choice, remembered in this browser and kept
- * in step across every viewer on the page. Until they choose, ``fallback``
- * (the notation the sheet was made with) is used. */
+/** The reader's letters/numbers/solfège choice - saved with their other
+ * settings (lib/preferences.ts), so it is the same on every sheet and, signed
+ * in, on every device - kept in step across every viewer on the page. Until
+ * they choose, ``fallback`` (the notation the sheet was made with) is used. */
 export function useNotation(fallback: Notation = "letters") {
-  const chosen = useSyncExternalStore(subscribe, savedNotation, () => null);
-  const choose = useCallback((next: Notation) => {
-    unsaved = next;
-    try { localStorage.setItem(NOTATION_KEY, next); } catch { /* Optional. */ }
-    window.dispatchEvent(new Event(NOTATION_EVENT));
-  }, []);
-  return [chosen ?? fallback, choose] as const;
+  return usePreference("notation", fallback);
 }

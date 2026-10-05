@@ -29,6 +29,7 @@ import type { Corrections } from "@/lib/corrections";
 import { EMPTY_EDITS, fetchEdits, type SheetEdits } from "@/lib/edits";
 import { loadLabels, type LabelSet } from "@/lib/labels";
 import { useNotation } from "@/lib/notation";
+import { usePreference } from "@/lib/preferences";
 import { AnnotationLayer } from "../sheet-viewer/annotation-layer";
 import { tempoClock, tempoControl } from "./tempo";
 import { GRACE_SECONDS, SynthEngine, INSTRUMENTS, isInstrumentId, type InstrumentId } from "./synth";
@@ -350,9 +351,14 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
   const [pdfError, setPdfError] = useState<string | null>(null);
   // The uploaded copy, fetched only if the visitor asks for it - most never
   // do, and it is a second PDF over the wire.
-  const [variant, setVariant] = useState<SheetVariant>("annotated");
+  // The practice page's settings are the reader's own, the same on every
+  // sheet and, signed in, on every device (lib/preferences.ts).
+  const [savedView, setSavedView] = usePreference("sheet_view", "annotated");
   const [originalData, setOriginalData] = useState<ArrayBuffer | null>(null);
   const [originalBlocked, setOriginalBlocked] = useState<string | null>(null);
+  // Shown with the names while the original can't be, without changing the
+  // reader's choice for the next sheet.
+  const variant: SheetVariant = originalBlocked ? "annotated" : savedView;
   // The reader's own changes (lib/edits.ts), made in the sheet preview:
   // retyped names correct playback, and the names and marks are drawn over
   // the original here too. `overlayReady` holds the sheet back until it is
@@ -365,7 +371,7 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
   const [playing, setPlaying] = useState(false);
   // Full speed by default; the slider still goes down to 0.1x for picking a
   // passage apart.
-  const [speed, setSpeed] = useState(1);
+  const [speed, setSpeed] = usePreference("speed", 1);
   // What the speed slider actually achieves, after tempoClock's own
   // MAX_EFFECTIVE_BPM clamp - can read lower than `speed` when a BPM
   // override near the ceiling leaves no headroom for it. Falls back to the
@@ -375,10 +381,15 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
     () => (timeline ? tempoClock(timeline, speed, baseBpm).rate : speed),
     [timeline, speed, baseBpm],
   );
-  const [showKeyNames, setShowKeyNames] = useState(false);
-  const [showNoteNames, setShowNoteNames] = useState(true);
-  const [soundOn, setSoundOn] = useState(true);
-  const [instrument, setInstrument] = useState<InstrumentId>("grand");
+  const [showKeyNames, setShowKeyNames] = usePreference("show_key_names", false);
+  const [showNoteNames, setShowNoteNames] = usePreference("show_note_names", true);
+  const [soundOn, setSoundOn] = usePreference("sound_on", true);
+  const [savedInstrument, setSavedInstrument] = usePreference("instrument", "grand");
+  // Stands in for the chosen instrument while it can't be loaded, without
+  // changing the choice: the next sheet tries the reader's own again.
+  const [instrumentFallback, setInstrumentFallback] = useState<InstrumentId | null>(null);
+  const instrument: InstrumentId = instrumentFallback
+    ?? (isInstrumentId(savedInstrument) ? savedInstrument : "grand");
   const [audioLoading, setAudioLoading] = useState(false);
   const [audioError, setAudioError] = useState("");
   const audioRequest = useRef(0);
@@ -452,10 +463,6 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
         if (!tlRes.ok) throw new Error(`couldn't load playback data (${tlRes.status})`);
         const tl = await tlRes.json();
         if (cancelled) return;
-        try {
-          const savedInstrument = localStorage.getItem("sheet-instrument");
-          if (savedInstrument && isInstrumentId(savedInstrument)) setInstrument(savedInstrument);
-        } catch { /* Storage is optional. */ }
         let saved: Corrections = {};
         try {
           const { doc } = await fetchEdits(jobId);
@@ -553,10 +560,7 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
         if (!cancelled) setOriginalData(buffer);
       } catch (err) {
         console.error("Loading the original sheet failed:", err);
-        if (!cancelled) {
-          setOriginalBlocked("The original couldn't be loaded");
-          setVariant("annotated");
-        }
+        if (!cancelled) setOriginalBlocked("The original couldn't be loaded");
       }
     })();
     return () => { cancelled = true; };
@@ -620,7 +624,7 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
           return null;
         }
         if (request !== audioRequest.current || !ctxRef.current) return null;
-        setInstrument("basic");
+        setInstrumentFallback("basic");
         setAudioError(
           `Couldn't load ${INSTRUMENTS.find((i) => i.id === chosen)?.name ?? "the selected instrument"} ` +
           "(check your connection) — playing with the offline synth instead."
@@ -719,8 +723,8 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
     playWholePiece();
   }, [timeline, playWholePiece, audioLoading]);
 
-  const [sheetOpen, setSheetOpen] = useState(true);
-  const [rollOpen, setRollOpen] = useState(true);
+  const [sheetOpen, setSheetOpen] = usePreference("sheet_open", true);
+  const [rollOpen, setRollOpen] = usePreference("roll_open", true);
   /** Only consulted on a narrow viewport - see the .play-options CSS, which
    * shows that group unconditionally once the window is wide enough to fit
    * it inline. */
@@ -731,7 +735,7 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
    * a pixel height means the division survives a window resize or a phone
    * turning sideways, instead of pinning one panel and letting the other take
    * the damage. */
-  const [split, setSplit] = useState(0.5);
+  const [split, setSplit] = usePreference("split", 0.5);
   const sheetRef = useRef<HTMLElement | null>(null);
   const rollRef = useRef<HTMLElement | null>(null);
   const dragRef = useRef<{ startY: number; sheetPx: number } | null>(null);
@@ -762,7 +766,7 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
     const { totalPx } = panelHeights();
     if (totalPx <= 0) return;
     setSplit(clampSplit(drag.sheetPx + (e.clientY - drag.startY), totalPx));
-  }, [panelHeights]);
+  }, [panelHeights, setSplit]);
 
   const endDrag = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     dragRef.current = null;
@@ -777,7 +781,7 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
   const nudgeSplit = useCallback((deltaPx: number) => {
     const { sheetPx, totalPx } = panelHeights();
     if (totalPx > 0) setSplit(clampSplit(sheetPx + deltaPx, totalPx));
-  }, [panelHeights]);
+  }, [panelHeights, setSplit]);
 
   /** Whether a step has placed the playhead yet - see step(). */
   const steppedRef = useRef(false);
@@ -962,12 +966,12 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
         title="Sheet"
         nodeRef={sheetRef}
         open={sheetOpen}
-        onToggle={() => setSheetOpen((v) => !v)}
+        onToggle={() => setSheetOpen(!sheetOpen)}
         grow={rollOpen ? split : 1}
         actions={
           <div className="play-panel-toggles">
             {((labelsLive && variant === "annotated") || showKeyNames || showNoteNames) && <NotationToggle value={notation} onChange={setNotation} />}
-            <SheetToggle value={variant} onChange={setVariant} unavailable={originalBlocked} />
+            <SheetToggle value={variant} onChange={setSavedView} unavailable={originalBlocked} />
           </div>
         }
       >
@@ -1116,7 +1120,7 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
             aria-pressed={showKeyNames}
             title={showKeyNames ? "Hide key names" : "Show key names"}
             aria-label={showKeyNames ? "Hide key names" : "Show key names"}
-            onClick={() => setShowKeyNames((v) => !v)}
+            onClick={() => setShowKeyNames(!showKeyNames)}
           >
             <KeyNamesIcon />
           </button>
@@ -1126,7 +1130,7 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
             aria-pressed={showNoteNames}
             title={showNoteNames ? "Hide names on falling notes" : "Show names on falling notes"}
             aria-label={showNoteNames ? "Hide names on falling notes" : "Show names on falling notes"}
-            onClick={() => setShowNoteNames((v) => !v)}
+            onClick={() => setShowNoteNames(!showNoteNames)}
           >
             <NoteNamesIcon />
           </button>
@@ -1137,7 +1141,7 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
             aria-pressed={soundOn}
             title={soundOn ? "Mute" : "Unmute"}
             aria-label={soundOn ? "Mute" : "Unmute"}
-            onClick={() => setSoundOn((v) => !v)}
+            onClick={() => setSoundOn(!soundOn)}
           >
             {/* The glyph itself carries the state, so it stays readable even
                 where the pressed styling is subtle. */}
@@ -1175,8 +1179,8 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
             <label>Instrument <select value={instrument} onChange={(e) => {
               const value = e.target.value;
               if (!isInstrumentId(value)) return;
-              setInstrument(value);
-              try { localStorage.setItem("sheet-instrument", value); } catch { /* Optional. */ }
+              setInstrumentFallback(null);
+              setSavedInstrument(value);
               void ensurePlayback(timeline, value);
             }}>{INSTRUMENTS.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}</select></label>
           </div>
@@ -1189,7 +1193,7 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
         label="Falling notes"
         nodeRef={rollRef}
         open={rollOpen}
-        onToggle={() => setRollOpen((v) => !v)}
+        onToggle={() => setRollOpen(!rollOpen)}
         grow={sheetOpen ? 1 - split : 1}
         flush
         dark

@@ -102,6 +102,16 @@ class ServerlessTests(unittest.TestCase):
         for module in (config, db, storage, job_state, worker, server, controller):
             importlib.reload(module)
 
+    def test_settings_are_saved_to_the_account(self):
+        # DynamoDB has no float type: a speed of 0.7 is stored as a Decimal
+        # and must come back as the number it was.
+        self.client.put("/api/me/preferences", json={"speed": 0.7, "sheet_view": "original"},
+                        headers=self.signed_in())
+        response = self.client.put("/api/me/preferences", json={"sound_on": False}, headers=self.signed_in())
+        expected = {"preferences": {"speed": 0.7, "sheet_view": "original", "sound_on": False}}
+        self.assertEqual(response.json(), expected)
+        self.assertEqual(self.client.get("/api/me/preferences", headers=self.signed_in()).json(), expected)
+
     def upload(self, job_id="a", user=USER, data=b"source"):
         job = job_state.create(job_id, user, "Summer.pdf", OPTIONS, len(data))
         version = self.s3.put_object(Bucket="new-files", Key=job["input_key"], Body=data)["VersionId"]
