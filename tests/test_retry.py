@@ -253,6 +253,15 @@ class CrashRerunTests(unittest.TestCase):
         self.assertEqual(result, (self.work / "input.mxl", self.work / "input.omr", None))
         self.assertEqual([constants for _, constants in self.runs], [None, run.NO_MOVEMENTS])
 
+    def test_every_read_allows_a_two_digit_time_signature(self):
+        # Without it Audiveris skips a 12/8 and loses the chords past 4/4.
+        with patch.object(run.subprocess, "run") as audiveris:
+            with self.assertRaises(RuntimeError):  # the stand-in writes no output
+                run.run_audiveris(self.pdf, self.work, constants=run.NO_MOVEMENTS)
+        cmd = audiveris.call_args.args[0]
+        self.assertIn("org.audiveris.omr.sheet.time.TimeBuilder.maxTimeWidth=3", cmd)
+        self.assertIn("org.audiveris.omr.sheet.SystemManager.minIndentation=1000", cmd)
+
     def test_movements_are_given_up_on_after_one_more_read(self):
         result, calls, _ = self.recognize("movements", "movements", "ok")
         self.assertIsNone(result)

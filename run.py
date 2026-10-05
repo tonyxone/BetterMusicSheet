@@ -137,6 +137,14 @@ class NotMusic(ValueError):
     processor.py hands NOT_MUSIC_MESSAGE to the reader instead of retrying."""
 
 
+# Audiveris caps a time signature's width below what a two-digit numeral
+# takes. Nuvole Bianche's 12/8 (Sibelius, the 1 and 2 touching) was skipped,
+# so every bar after it was expected in 4/4 and lost the chords past that
+# length. At 3 interlines it reads 12/8; page 1 of all 20 local test pieces
+# read the same time signatures and bar lengths as before.
+WIDE_TIME_SIGNATURES = {"org.audiveris.omr.sheet.time.TimeBuilder.maxTimeWidth": 3}
+
+
 def run_audiveris(pdf_path, out_dir, dpi=None, sheets=None, switches=None, binarize=False, constants=None):
     """Recognize ``pdf_path`` into ``out_dir``; returns the .mxl and .omr.
 
@@ -171,7 +179,7 @@ def run_audiveris(pdf_path, out_dir, dpi=None, sheets=None, switches=None, binar
         cmd += ["-constant",
                 f"org.audiveris.omr.sheet.ProcessingSwitches.{name}="
                 f"{'true' if enabled else 'false'}"]
-    for name, value in (constants or {}).items():
+    for name, value in {**WIDE_TIME_SIGNATURES, **(constants or {})}.items():
         cmd += ["-constant", f"{name}={value}"]
     if sheets is not None:
         # -sheets keeps each selected page's original sheet number in the
