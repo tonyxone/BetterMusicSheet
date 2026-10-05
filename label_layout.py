@@ -119,11 +119,14 @@ def layout_page_records(page_records, font_size, measure_font, margin_pt, page):
             for cell in cells(note):
                 note_cells.setdefault(cell, []).append(note)
 
+    def on_page(boxes):
+        return not any(box.x0 < 12 or box.x1 > page.rect.width - 12 or
+                       box.y0 < 12 or box.y1 > page.rect.height - 12
+                       for box in boxes)
+
     def assess(block):
         boxes = label_boxes(block)
-        if any(box.x0 < 12 or box.x1 > page.rect.width - 12 or
-               box.y0 < 12 or box.y1 > page.rect.height - 12
-               for box in boxes):
+        if not on_page(boxes):
             return None
         for box in boxes:
             for cell in cells(box):
@@ -233,9 +236,13 @@ def layout_page_records(page_records, font_size, measure_font, margin_pt, page):
                     break
 
         if best is None:
-            raise ValueError(
-                f"No label placement fits on page {rec['page']}, "
-                f"measure {rec.get('measure')}, x={rec['anchor_x_pt']:.1f}")
+            # Nothing clears the noteheads and the names already placed - a
+            # bar packed tighter than any label fits. A name over a symbol
+            # still reads; failing the whole sheet over one does not. The
+            # nearest spot on the page, else the nearest at all.
+            sweep = [candidate for _, candidate in neighbourhood(rec, fs, widths, line_h)]
+            best = next((c for c in sweep if on_page(label_boxes(c))), sweep[0])
+            best_ink = 1
         if best_ink:
             warnings.warn(
                 f"No completely clear label space on page {rec['page']}, "

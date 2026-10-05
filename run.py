@@ -17,7 +17,7 @@ import page_size
 import scan
 from config import MAX_JOB_SECONDS
 from audiveris_heads import (
-    _parse_sheet, load_sheet_heads, load_staff_lines, load_system_staff_groups,
+    _parse_sheet, has_sheet, load_sheet_heads, load_staff_lines, load_system_staff_groups,
 )
 
 AUDIVERIS_DIR = Path(__file__).parent / "tools" / "Audiveris" / "Audiveris"
@@ -204,19 +204,21 @@ class SplitIntoMovements(RuntimeError):
     exported one file per movement, which nothing downstream reads."""
 
 
+def _audiveris_log(work_dir, stem):
+    """The text of Audiveris's own log for the latest run, or "" if none."""
+    logs = sorted(work_dir.glob(f"{stem}-*.log"))
+    try:
+        return logs[-1].read_text(encoding="utf-8", errors="replace") if logs else ""
+    except OSError:
+        return ""
+
+
 def _no_system_found(work_dir, stem):
     """Whether Audiveris's own log for this run shows it aborted with
     'No system found' - it fails outright (not just an empty result) when a
     page has nothing staff-like on it at all, which happens before any of our
     own detection code even runs."""
-    logs = sorted(work_dir.glob(f"{stem}-*.log"))
-    if not logs:
-        return False
-    try:
-        text = logs[-1].read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return False
-    return "No system found" in text
+    return "No system found" in _audiveris_log(work_dir, stem)
 
 
 # Audiveris sometimes throws while cleaning up one page ("no such edge in
@@ -233,16 +235,34 @@ CRASH_RERUN_BUDGET_SECONDS = MAX_JOB_SECONDS / 3
 def _a_sheet_crashed(work_dir, stem):
     """Whether Audiveris's log for this run shows one of its sheets threw - as
     opposed to failing for a reason a fresh run would only repeat."""
-    logs = sorted(work_dir.glob(f"{stem}-*.log"))
-    try:
-        return bool(logs) and _STUB_CRASH.search(logs[-1].read_text(encoding="utf-8", errors="replace")) is not None
-    except OSError:
-        return False
+    return _STUB_CRASH.search(_audiveris_log(work_dir, stem)) is not None
 
 
-# A sheet Audiveris drops as unreadable ends up in the same log line as a
-# crash, but a fresh run at the same resolution only drops it again.
-_STUB_CRASH = re.compile(r"Error processing stub (?!\S*StepException: Sheet removed)")
+# A page Audiveris drops as holding no music is logged like a crash, but a
+# fresh run only drops it again.
+_NO_MUSIC = r"\S*StepException: (Sheet removed|No system found|No regularly spaced lines found)"
+_STUB_CRASH = re.compile(rf"Error processing stub (?!{_NO_MUSIC})")
+# Every page that failed: "[input#3] Book.java:2044 | Error processing stub
+# <cause>" ("[input]" in a one-page book) - a page with no music on it, such
+# as a cover picture or a blank page, or one that crashed - and "Error
+# visiting System#6 in {Page#1.2}" for one whose export threw. Any one of
+# them fails the whole book.
+_FAILED_SHEET = re.compile(r"\[[^\]\s#]*(?:#(\d+))?\][^|\n]*\|\s*Error processing stub (.*)")
+_FAILED_EXPORT = re.compile(r"Error visiting System#\d+ in \{Page#(\d+)\.")
+
+
+def _failed_sheets(work_dir, stem):
+    """{page: whether it simply holds no music} for each page that failed."""
+    text = _audiveris_log(work_dir, stem)
+    failed = {}
+    for number, cause in _FAILED_SHEET.findall(text):
+        page = int(number or 1)
+        failed[page] = failed.get(page, True) and re.match(_NO_MUSIC, cause) is not None
+    for number in _FAILED_EXPORT.findall(text):
+        failed[int(number)] = False
+    return failed
+
+
 # "With a too low interline value of 7 pixels, either this sheet contains no
 # multi-line staves, or the picture resolution is too low". A phone screenshot
 # saved as a PDF: its staff lines are there, just too few pixels apart.
@@ -257,11 +277,7 @@ MAX_UPSCALE_DPI = 800
 def _upscaled_dpi(work_dir, stem, dpi):
     """The DPI that gives the staves Audiveris dropped as too fine a usable
     interline, or None if there are none or it would not read them finer."""
-    logs = sorted(work_dir.glob(f"{stem}-*.log"))
-    try:
-        found = _LOW_INTERLINE.findall(logs[-1].read_text(encoding="utf-8", errors="replace")) if logs else []
-    except OSError:
-        return None
+    found = _LOW_INTERLINE.findall(_audiveris_log(work_dir, stem))
     if not found:
         return None
     current = dpi or DEFAULT_DPI
@@ -279,36 +295,82 @@ NO_MOVEMENTS = {"org.audiveris.omr.sheet.SystemManager.minIndentation": 1000}
 def recognize_book(pdf_path, work_dir, dpi=None, log=print):
     """The whole-book Audiveris pass, read again where a fresh run does
     better: at once if a page crashed, finer if its staves were too coarse to
-    find, and as one piece if it came back split into movements. Returns the
-    .mxl, the .omr, and the DPI they were read at."""
+    find, as one piece if it came back split into movements, and without any
+    page it cannot read - a cover picture, a blank page, one that keeps
+    crashing - so one such page never costs the rest. Only a book with no
+    readable page at all fails. Returns the .mxl, the .omr, and the DPI they
+    were read at."""
     started = time.monotonic()
-    constants, runs, crashes = None, 0, 0
+    constants, runs, crashes, sheets = None, 0, 0, None
     while True:
         runs += 1
         try:
-            mxl, omr = run_audiveris(pdf_path, work_dir, dpi=dpi, constants=constants)
+            mxl, omr = run_audiveris(pdf_path, work_dir, dpi=dpi, sheets=sheets, constants=constants)
+            if sheets:
+                number_pages(mxl, sheets)
             return mxl, omr, dpi
         except SplitIntoMovements:
             if constants:
                 raise
             log("[1/3] Audiveris split the sheet into movements; reading it again as one piece ...")
             constants = NO_MOVEMENTS
-        except subprocess.CalledProcessError:
-            if _no_system_found(work_dir, pdf_path.stem):
-                raise NotMusic(NOT_MUSIC_MESSAGE)
-            finer = _upscaled_dpi(work_dir, pdf_path.stem, dpi)
+        except (subprocess.CalledProcessError, RuntimeError):
+            stem = pdf_path.stem
+            finer = _upscaled_dpi(work_dir, stem, dpi)
+            # One more run costs about what the runs so far averaged.
+            spent = time.monotonic() - started
+            within_budget = spent * (runs + 1) / runs <= CRASH_RERUN_BUDGET_SECONDS
             if finer:
                 log(f"[1/3] The pages are too low-resolution to read; reading them again at {finer} DPI ...")
                 dpi = finer
-            else:
+            elif _a_sheet_crashed(work_dir, stem) and crashes < CRASH_RERUNS and within_budget:
                 crashes += 1
-                # One more run costs about what the runs so far averaged.
-                spent = time.monotonic() - started
-                if (crashes > CRASH_RERUNS or spent * (runs + 1) / runs > CRASH_RERUN_BUDGET_SECONDS
-                        or not _a_sheet_crashed(work_dir, pdf_path.stem)):
-                    raise
                 log(f"[1/3] Audiveris crashed on a page; reading the sheet again ({crashes} of {CRASH_RERUNS}) ...")
+            else:
+                pages = sheets or list(range(1, count_pages(pdf_path) + 1))
+                failed = {page: no_music for page, no_music in _failed_sheets(work_dir, stem).items()
+                          if page in pages}
+                kept = [page for page in pages if page not in failed]
+                if failed and kept and within_budget:
+                    left_out = ", ".join(str(page) for page in sorted(failed))
+                    log(f"[1/3] No music could be read on page {left_out}; reading the other pages ...")
+                    sheets = kept
+                elif failed and not kept and all(failed.values()):
+                    raise NotMusic(NOT_MUSIC_MESSAGE)
+                else:
+                    raise
         _clear_audiveris_output(work_dir, pdf_path.stem)
+
+
+def number_pages(mxl_path, pages):
+    """Stamp each page of an export with the PDF page it was read from, as
+    MusicXML's print page-number. An export numbers only the pages it read, so
+    with a cover left out the music's first page would claim to be page 1."""
+    import xml.etree.ElementTree as ET
+    import zipfile
+    with zipfile.ZipFile(mxl_path) as z:
+        entries = {info: z.read(info.filename) for info in z.infolist()}
+    score = next(info for info in entries if info.filename.endswith(".xml")
+                 and not info.filename.startswith("META-INF/"))
+    root = ET.fromstring(entries[score])
+    for part in root.iter("part"):
+        index = 0
+        for position, measure in enumerate(part.iter("measure")):
+            pr = measure.find("print")
+            if position == 0:
+                if pr is None:
+                    pr = ET.Element("print")
+                    measure.insert(0, pr)
+            elif pr is None or pr.get("new-page") != "yes":
+                continue
+            else:
+                index += 1
+            if index < len(pages):
+                pr.set("page-number", str(pages[index]))
+    entries[score] = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    with zipfile.ZipFile(mxl_path, "w", zipfile.ZIP_DEFLATED) as z:
+        for info, data in entries.items():
+            z.writestr(info, data)
 
 
 def _clear_audiveris_output(work_dir, stem):
@@ -470,6 +532,14 @@ def missing_staves(omr_path, num_pages):
     return sum(max(sizes) - size for size in sizes) if sizes else 0
 
 
+def lone_staves(omr_path, num_pages):
+    """Systems recognized with a single staff. A page that lost the same staff
+    from every system looks complete to missing_staves - a phone screenshot of
+    a piano score came back as one staff - though a melody line genuinely has
+    one, and the black-and-white re-read then simply finds no more."""
+    return sum(size == 1 for size in system_sizes(omr_path, num_pages))
+
+
 def reread_binarized(pdf_path, work_dir, omr_path, num_pages, dpi=None, log=print):
     """Re-read a scan that lost staves from a black-and-white copy of it.
 
@@ -489,7 +559,7 @@ def reread_binarized(pdf_path, work_dir, omr_path, num_pages, dpi=None, log=prin
     source = scan.prepare_for_recognition(pdf_path, target / "input", dpi)
     if source == Path(pdf_path):
         return None
-    log(f"[1b/3] {missing_staves(omr_path, num_pages)} staves were not recognized; re-reading "
+    log(f"[1b/3] Some staves look unrecognized; re-reading "
         f"the scan should take {describe_duration(estimated_seconds(pdf_path, dpi or DEFAULT_DPI))}:")
     try:
         mxl, omr = run_audiveris(source, target, dpi=dpi)
@@ -668,10 +738,13 @@ def find_sparse_pages(omr_path, num_pages, mxl_path=None, pdf_path=None):
     # Deliberately left as a plain count comparison, with no staff condition:
     # this is the pre-existing test and a page whose staves went undetected
     # entirely is one of the cases it already covers.
-    if len(counts) >= 2:
-        median = statistics.median(counts.values())
+    # A page the book left out as holding no music has nothing to re-read.
+    read = {page for page in counts if has_sheet(str(omr_path), page)}
+    if len(read) >= 2:
+        median = statistics.median(counts[page] for page in read)
         if median >= SPARSE_MIN_MEDIAN:
-            sparse.update(p for p, c in counts.items() if c < SPARSE_RATIO * median)
+            sparse.update(p for p in read if counts[p] < SPARSE_RATIO * median)
+    sparse &= read
 
     def severity(page):
         # Noteheads per staff, so a short final page isn't ranked as worse than
@@ -999,7 +1072,7 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
     page_overrides = {}
     binarized = False
     if auto_retry:
-        if missing_staves(omr, num_pages):
+        if missing_staves(omr, num_pages) or lone_staves(omr, num_pages):
             reread = reread_binarized(pdf_path, work_dir, omr, num_pages, dpi, log)
             if reread:
                 mxl, omr = reread

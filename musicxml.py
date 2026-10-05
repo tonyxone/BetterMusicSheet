@@ -134,8 +134,13 @@ def _parse_part(part, part_ordinal, default_staff):
         identity = (label, occurrence)
         pr = measure.find('{*}print')
         if pr is not None:
+            # A book read without some of its pages says which page each of
+            # its own came from (run.number_pages).
+            number = pr.get('page-number', '')
+            if not measures and number.isdigit():
+                page = int(number)
             if pr.get('new-page') == 'yes':
-                page += 1
+                page = int(number) if number.isdigit() else page + 1
                 system, system_measure = 0, 0
                 # Each page is recognized on its own, so a line still open
                 # here lost its stop; one that does run on is restarted.

@@ -617,6 +617,16 @@ class AccuracyTests(unittest.TestCase):
                            + measure('<print new-page="yes"/>' + note('E', duration=4), 3))
         self.assertEqual([n['octave_shift'] for n in ns], [1, 1, 0])
 
+    def test_a_book_read_without_its_cover_keeps_its_page_numbers(self):
+        # Read with "-sheets 2 3", the export numbers its own pages 1 and 2.
+        path = mxl(self.path / 'score.mxl', measure(ATTR + note(duration=4))
+                   + measure('<print new-system="yes"/>' + note('D', duration=4), 2)
+                   + measure('<print new-page="yes"/>' + note('E', duration=4), 3))
+        run.number_pages(path, [2, 3])
+        _, ms = musicxml.load_score_notes(path)
+        self.assertEqual([m['page'] for m in ms], [2, 2, 3])
+        self.assertEqual([m['system'] for m in ms], [0, 1, 0])
+
     def test_implicit_final_measure_is_not_padded(self):
         _, ms = self.parse(measure(ATTR + note(duration=4)) + measure(note(duration=1), 2, 'implicit="yes"'))
         self.assertEqual([m['length_beats'] for m in ms], [4, 1])

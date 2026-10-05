@@ -175,9 +175,14 @@ class CrashRerunTests(unittest.TestCase):
     again at once, rather than costing a whole job attempt and its wait."""
 
     def setUp(self):
+        import pymupdf
         self.tmp = tempfile.TemporaryDirectory()
         self.work = Path(self.tmp.name)
         self.pdf = self.work / "input.pdf"
+        with pymupdf.open() as doc:
+            for _ in range(3):
+                doc.new_page()
+            doc.save(self.pdf)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -186,10 +191,11 @@ class CrashRerunTests(unittest.TestCase):
         """A run_audiveris stand-in: each call writes its own log, then
         crashes with that log line, splits into movements, or succeeds."""
         calls = iter(outcomes)
-        self.runs = []
+        self.runs, self.sheets = [], []
 
-        def fake(pdf_path, out_dir, dpi=None, constants=None):
+        def fake(pdf_path, out_dir, dpi=None, sheets=None, constants=None):
             self.runs.append((dpi, constants))
+            self.sheets.append(sheets)
             outcome = next(calls)
             (out_dir / "input.omr").write_text("partial book")
             if outcome == "ok":
@@ -203,7 +209,7 @@ class CrashRerunTests(unittest.TestCase):
 
     def recognize(self, *outcomes):
         log = []
-        with patch.object(run, "run_audiveris", side_effect=self.audiveris(*outcomes)) as calls:
+        with patch.object(run, "run_audiveris", side_effect=self.audiveris(*outcomes)) as calls,                 patch.object(run, "number_pages") as self.numbered:
             try:
                 return run.recognize_book(self.pdf, self.work, log=log.append), calls.call_count, log
             except (subprocess.CalledProcessError, run.SplitIntoMovements):
@@ -215,8 +221,17 @@ class CrashRerunTests(unittest.TestCase):
         self.assertEqual(calls, 3)
         self.assertIn("reading the sheet again (2 of 2)", log[-1])
 
-    def test_reruns_are_bounded(self):
-        result, calls, _ = self.recognize(STUB_CRASH, STUB_CRASH, STUB_CRASH, "ok")
+    def test_a_page_that_keeps_crashing_is_left_out(self):
+        result, calls, log = self.recognize(STUB_CRASH, STUB_CRASH, STUB_CRASH, "ok")
+        self.assertEqual(calls, 2 + run.CRASH_RERUNS)
+        self.assertEqual(self.sheets, [None, None, None, [1, 3]])
+        self.assertIn("No music could be read on page 2", log[-1])
+        self.numbered.assert_called_once_with(self.work / "input.mxl", [1, 3])
+        self.assertIsNotNone(result)
+
+    def test_a_crash_on_every_page_is_still_a_crash(self):
+        everywhere = "\n".join(STUB_CRASH.replace("input#2", f"input#{page}") for page in (1, 2, 3))
+        result, calls, _ = self.recognize(everywhere, everywhere, everywhere)
         self.assertIsNone(result)
         self.assertEqual(calls, 1 + run.CRASH_RERUNS)
 
@@ -231,10 +246,18 @@ class CrashRerunTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(calls, 1)
 
-    def test_a_removed_sheet_is_not_a_crash(self):
-        result, calls, _ = self.recognize(SHEET_REMOVED.replace("too low interline", "unreadable"), "ok")
-        self.assertIsNone(result)
-        self.assertEqual(calls, 1)
+    def test_a_page_with_no_music_is_left_out_not_rerun(self):
+        # A cover picture: Audiveris drops it, then refuses to export the book.
+        result, calls, _ = self.recognize(SHEET_REMOVED.replace("too low interline", "too high interline"), "ok")
+        self.assertEqual(calls, 2)
+        self.assertEqual(self.sheets, [None, [2, 3]])
+        self.assertIsNotNone(result)
+
+    def test_a_book_with_no_page_of_music_is_not_music(self):
+        nothing = "\n".join(SHEET_REMOVED.replace("too low interline", "too high interline")
+                            .replace("input#1", f"input#{page}") for page in (1, 2, 3))
+        with self.assertRaises(run.NotMusic):
+            self.recognize(nothing)
 
     def test_too_coarse_a_page_is_read_again_finer(self):
         result, calls, log = self.recognize(SHEET_REMOVED, "ok")
@@ -242,11 +265,12 @@ class CrashRerunTests(unittest.TestCase):
         self.assertEqual([dpi for dpi, _ in self.runs], [None, 700])
         self.assertIn("700 DPI", log[-1])
 
-    def test_a_page_still_too_coarse_at_the_limit_is_not_read_again(self):
+    def test_a_page_still_too_coarse_at_the_limit_is_left_out(self):
         result, calls, _ = self.recognize(SHEET_REMOVED.replace("of 7 pixels", "of 3 pixels"),
                                           SHEET_REMOVED.replace("of 7 pixels", "of 5 pixels"), "ok")
-        self.assertIsNone(result)
-        self.assertEqual([dpi for dpi, _ in self.runs], [None, run.MAX_UPSCALE_DPI])
+        self.assertEqual([dpi for dpi, _ in self.runs], [None, run.MAX_UPSCALE_DPI, run.MAX_UPSCALE_DPI])
+        self.assertEqual(self.sheets[-1], [2, 3])
+        self.assertIsNotNone(result)
 
     def test_a_book_split_into_movements_is_read_as_one_piece(self):
         result, calls, _ = self.recognize("movements", "ok")
