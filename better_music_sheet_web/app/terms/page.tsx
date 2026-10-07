@@ -13,7 +13,7 @@ export default function TermsPage() {
         <BackButton />
         <h1 className="serif">Terms of use</h1>
       </div>
-      <div className="sub">Last updated 28 September 2026</div>
+      <div className="sub">Last updated 6 October 2026</div>
 
       <p>
         By using BetterMusicSheet you accept these terms. They are short on
@@ -34,8 +34,15 @@ export default function TermsPage() {
         right to do so — because you own it, because it is out of copyright,
         because it is licensed to you, or because your use is otherwise
         permitted. You keep whatever rights you already held; uploading grants
-        this site no ownership, and the only use made of your file is producing
-        your annotated copy.
+        this site no ownership, and your file is used only to produce your
+        annotated copy.
+      </p>
+      <p>
+        What the site works out from a file — its note names and playback — is
+        also used when someone uploads exactly the same file, so theirs is
+        ready straight away instead of being read again. They get only what
+        they would have got from their own file. Once every sheet made from a
+        file has been deleted, nothing made from it is used again.
       </p>
       <p>
         Please do not upload material you have no right to, and do not use this

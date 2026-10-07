@@ -146,6 +146,16 @@ def job_failed(job, error, crash=None):
         traceback.print_exc()
 
 
+def job_reused(job, source_job_id, how):
+    """Log a sheet finished from an earlier one made from the same file (see
+    processed_sheets.py) - ``how`` is "copied" or "redrawn". No email: the
+    earlier sheet already reported how its reading went."""
+    try:
+        _log("job_reused", job, source_job_id=source_job_id, how=how)
+    except Exception:
+        traceback.print_exc()
+
+
 def job_done(job, quality, output_key=None):
     """Log every finished sheet; alert when its recognition looks rough."""
     try:

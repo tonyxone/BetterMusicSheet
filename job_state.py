@@ -143,13 +143,30 @@ def release(job):
         pass
 
 
-def ready(job_id, version):
+def ready(job_id, version, **fields):
+    """Queue an upload that has arrived. ``fields`` are stored with it: the
+    upload's hash, and what to draw the names from when its music was
+    already read (see worker.accept_input)."""
     job = db.get_annotation_job(job_id)
     if job and job["status"] == "uploading":
         now = int(time.time())
         change(job_id, {"status": "uploading"}, status="queued", input_version=version, queued_at=now,
-               stage="Waiting for a recognition worker", next_check_at=now + 300)
+               stage="Waiting for a recognition worker", next_check_at=now + 300, **fields)
     return db.get_annotation_job(job_id)
+
+
+def reused(job, version, **fields):
+    """Finish an upload straight away, with results copied from an earlier
+    sheet made from the same file - it is never queued. False if the upload
+    stopped waiting meanwhile (another caller got here first, or a delete)."""
+    now = int(time.time())
+    # next_check_at: the controller frees the upload slot again should the
+    # release below not happen, exactly as for a job a worker finished.
+    if not change(job["job_id"], {"status": "uploading"}, status="done", input_version=version,
+                  queued_at=now, stage="Complete", error=None, next_check_at=now, **fields):
+        return False
+    release(job)
+    return True
 
 
 def can_retry(job):

@@ -53,6 +53,8 @@ variable "master_users_table" { type = string }
 variable "admin_table" { type = string }
 variable "sheets_table" { type = string }
 variable "jobs_table" { type = string }
+# Finished sheets by upload hash, for reusing them (see ../../../processed_sheets.py).
+variable "processed_sheet_table" { type = string }
 variable "secret_parameter" { type = string }
 variable "cognito_pool" { type = string }
 variable "cognito_client" { type = string }
@@ -100,6 +102,7 @@ locals {
     STRIPE_PRICE_YEARLY   = var.stripe_price_yearly
     MUSIC_SHEET_TABLE     = var.sheets_table
     ANNOTATION_JOB_TABLE  = var.jobs_table
+    PROCESSED_SHEET_TABLE = var.processed_sheet_table
     JOB_CONTROL_TABLE     = aws_dynamodb_table.control.name
     JOB_QUEUE_URL         = aws_sqs_queue.jobs.url
     JOB_DLQ_URL           = aws_sqs_queue.failed.url
@@ -112,7 +115,7 @@ locals {
     # Per-sheet failure and needs-review emails (../../../alerts.py).
     ALERTS_TOPIC_ARN = aws_sns_topic.alerts.arn
   }
-  table_arns = [for name in [var.users_table, var.subscriptions_table, var.sheets_table, var.jobs_table, aws_dynamodb_table.control.name] :
+  table_arns = [for name in [var.users_table, var.subscriptions_table, var.sheets_table, var.jobs_table, var.processed_sheet_table, aws_dynamodb_table.control.name] :
   "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${name}"]
 }
 

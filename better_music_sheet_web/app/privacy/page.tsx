@@ -16,7 +16,7 @@ export default function PrivacyPage() {
         <BackButton />
         <h1 className="serif">Privacy</h1>
       </div>
-      <div className="sub">Last updated 28 September 2026</div>
+      <div className="sub">Last updated 6 October 2026</div>
 
       <p>
         This page explains what BetterMusicSheet keeps about you, why, and how
@@ -63,6 +63,12 @@ export default function PrivacyPage() {
         We don&apos;t sell, share or publish your sheet music, or use it to train
         AI. We read it ourselves; it isn&apos;t sent to anyone else to process.
       </p>
+      <p>
+        When someone else uploads exactly the same file, their copy is made
+        from the note names and playback already worked out for it, instead of
+        being read again. Nothing about you goes with it, and they get only
+        what their own file would have given them.
+      </p>
 
       <h2>Keeping and removing your data</h2>
       <p>
@@ -71,6 +77,11 @@ export default function PrivacyPage() {
         account from the menu under your name at the top of the page. Delete your
         sheets first if you want them gone too, and cancel any subscription
         first: deleting your account doesn&apos;t cancel it.
+      </p>
+      <p>
+        Deleting a sheet means nothing made from it is offered for anyone
+        else&apos;s uploads any more. A copy someone already received from their
+        own upload of the same file is theirs, and stays with them.
       </p>
       <p>
         To ask what we hold about you, or to have anything removed, email{" "}
