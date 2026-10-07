@@ -47,6 +47,25 @@ h1, h2, .serif {
   font-family: 'Spectral', serif;
 }
 
+/* Neither Work Sans nor Spectral has Chinese, Japanese or Korean, so each
+   language names the system fonts that do, in its own forms: the same
+   character is drawn differently in Simplified, Traditional and Japanese,
+   and a browser left to guess can pick the wrong one. The headings prefer a
+   serif to match Spectral where the system has one, and fall back to the
+   sans rather than to a generic serif (SimSun and MS Mincho on Windows read
+   poorly at heading weights). */
+html:lang(zh-Hans) body { font-family: 'Work Sans', "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", "Noto Sans CJK SC", sans-serif; }
+html:lang(zh-Hans) :is(h1, h2, .serif, .history-title, .legal h3) { font-family: 'Spectral', "Songti SC", "Noto Serif SC", "Noto Serif CJK SC", "PingFang SC", "Microsoft YaHei", serif; }
+html:lang(zh-Hant) body { font-family: 'Work Sans', "PingFang TC", "Microsoft JhengHei", "Noto Sans TC", "Noto Sans CJK TC", sans-serif; }
+html:lang(zh-Hant) :is(h1, h2, .serif, .history-title, .legal h3) { font-family: 'Spectral', "Songti TC", "Noto Serif TC", "Noto Serif CJK TC", "PingFang TC", "Microsoft JhengHei", serif; }
+html:lang(ja) body { font-family: 'Work Sans', "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", "YuGothic", Meiryo, "Noto Sans JP", "Noto Sans CJK JP", sans-serif; }
+html:lang(ja) :is(h1, h2, .serif, .history-title, .legal h3) { font-family: 'Spectral', "Hiragino Mincho ProN", "Yu Mincho", "YuMincho", "Noto Serif JP", "Noto Serif CJK JP", "Hiragino Sans", "Yu Gothic", Meiryo, serif; }
+html:lang(ko) body { font-family: 'Work Sans', "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", "Noto Sans CJK KR", sans-serif; }
+html:lang(ko) :is(h1, h2, .serif, .history-title, .legal h3) { font-family: 'Spectral', "AppleMyungjo", "Noto Serif KR", "Noto Serif CJK KR", "Apple SD Gothic Neo", "Malgun Gothic", serif; }
+/* Korean breaks lines between words, like English, not between any two
+   characters as Chinese and Japanese do. */
+html:lang(ko) body { word-break: keep-all; }
+
 main {
   position: relative;
   z-index: 1;
@@ -841,6 +860,13 @@ button.history-row { width: 100%; font-family: inherit; cursor: pointer; text-al
   border-bottom: 1px solid transparent;
 }
 .footer-links a:hover { color: var(--ink); border-bottom-color: var(--ink-soft); }
+.language-picker { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-soft); font-size: 0.85rem; }
+.language-picker svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6; }
+.language-picker select {
+  font: inherit; color: inherit; background: transparent; border: 1px solid rgba(122, 103, 83, 0.3);
+  border-radius: 999px; padding: 3px 10px; cursor: pointer;
+}
+.language-picker select:hover, .language-picker select:focus-visible { color: var(--ink); border-color: var(--ink-soft); }
 .footer-note {
   color: var(--ink-soft);
   font-size: 0.8rem;
@@ -884,6 +910,10 @@ button.history-row { width: 100%; font-family: inherit; cursor: pointer; text-al
   font-family: 'Spectral', serif;
 }
 .legal p, .legal li { color: var(--ink); line-height: 1.7; margin-bottom: 12px; }
+.english-only {
+  margin: 0 0 20px; padding: 10px 14px; border-radius: 10px; font-size: 0.9rem; line-height: 1.6;
+  background: rgba(217, 164, 65, 0.12); color: var(--ink-soft);
+}
 .legal ul { margin: 0 0 12px 1.1rem; list-style: disc; }
 .legal li { margin-bottom: 8px; }
 .legal code {
@@ -1107,7 +1137,8 @@ textarea.sheet-inline-input { font-family: system-ui, -apple-system, "Segoe UI",
    list as it goes, leaving a hidden placeholder behind, which isn't a page. */
 .photo-pages { counter-reset: page; }
 .photo-pages li:not([data-dnd-placeholder]) { counter-increment: page; }
-.photo-page-number::before { content: "Page " counter(page); }
+/* The words around the number come from the page's language (upload-form.tsx). */
+.photo-page-number::before { content: var(--page-before, "Page ") counter(page) var(--page-after, ""); }
 .photo-pages li {
   display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 6px;
   background: var(--card); border: 1px solid var(--paper-deep); border-radius: 12px;

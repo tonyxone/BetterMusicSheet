@@ -193,7 +193,17 @@ const HISTORY_LIMIT = 100;
 /** The editor's copy of the edits: undo/redo, and saving shortly after each
  * change (and on leaving the page). A save refused because another window
  * saved first adopts that window's copy rather than overwriting it. */
-export function useSheetEdits(jobId: string) {
+/** What the hook says to the reader, in the page's language (en.editor). */
+export type EditsText = { loadEditsFailed: string; changedElsewhere: string };
+
+const ENGLISH: EditsText = {
+  loadEditsFailed: "Couldn't load your saved changes. Reload the page to try again.",
+  changedElsewhere: "These edits were changed in another window, so that version is shown now.",
+};
+
+export function useSheetEdits(jobId: string, text: EditsText = ENGLISH) {
+  const textRef = useRef(text);
+  useEffect(() => { textRef.current = text; });
   const [doc, setDoc] = useState<SheetEdits | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("saved");
@@ -220,7 +230,7 @@ export function useSheetEdits(jobId: string) {
       }
     }).catch((err) => {
       console.error(err);
-      if (!cancelled) setLoadError("Couldn't load your saved changes. Reload the page to try again.");
+      if (!cancelled) setLoadError(textRef.current.loadEditsFailed);
     });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -244,7 +254,7 @@ export function useSheetEdits(jobId: string) {
         docRef.current = theirs;
         setDoc(theirs);
         history.current = { past: [], future: [] };
-        setNotice("These edits were changed in another window, so that version is shown now.");
+        setNotice(textRef.current.changedElsewhere);
         setSaveState("saved");
       } else if (!res.ok) {
         const body = await res.json().catch(() => null) as { detail?: string } | null;

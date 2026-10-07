@@ -1,6 +1,7 @@
 import type { MetadataRoute } from "next";
 
 import { SITE_URL } from "./site";
+import { LOCALES, localePath } from "@/lib/i18n/config";
 
 // Emitted as a real /robots.txt file by the static export, which had none at
 // all - the deployed site answered 404 for it.
@@ -21,7 +22,11 @@ export default function robots(): MetadataRoute.Robots {
       // Per-sheet routes are one person's own uploads behind a query string,
       // and /auth/callback is a redirect target. Neither is a page anyone
       // should reach from a search result.
-      disallow: ["/sheets/", "/play/", "/history/", "/auth/"],
+      // The same in every language.
+      disallow: [
+        ...LOCALES.flatMap((l) => ["/sheets/", "/play/", "/history/"].map((p) => localePath(l, p))),
+        "/auth/",
+      ],
     },
     sitemap: `${SITE_URL}/sitemap.xml`,
   };

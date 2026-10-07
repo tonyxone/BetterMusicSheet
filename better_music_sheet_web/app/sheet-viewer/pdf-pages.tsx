@@ -15,6 +15,7 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { isMissingBrowserFeature } from "@/lib/browser-support";
 import { openPdf, type PdfDoc } from "@/lib/pdfjs";
+import { useI18n } from "@/lib/i18n/client";
 
 // Rasterize above CSS size so the sheet stays sharp; callers that zoom pass
 // a higher scale for the zoomed size.
@@ -52,6 +53,7 @@ export function PdfPages({
   /** Device pixels per PDF point to rasterize at. */
   renderScale?: number;
 }) {
+  const { m } = useI18n();
   const [pages, setPages] = useState<PageInfo[]>([]);
   const [error, setError] = useState<ViewerError | null>(null);
   const canvasRefs = useRef<Map<number, HTMLCanvasElement>>(new Map());
@@ -146,24 +148,19 @@ export function PdfPages({
     if (error.unsupported) {
       return (
         <div className="play-error">
-          <strong>This browser is too old to show the sheet.</strong>
-          <p>
-            The viewer needs features your browser does not have yet. Updating it
-            usually fixes this — on an iPhone or iPad that means updating iOS or
-            iPadOS itself, since Safari comes with the system. Recent Chrome,
-            Edge and Firefox work too.
-          </p>
+          <strong>{m.viewer.tooOld}</strong>
+          <p>{m.viewer.tooOldBody}</p>
         </div>
       );
     }
     return (
       <p className="play-error">
-        Couldn&apos;t show the sheet. Reloading the page usually fixes it.
+        {m.viewer.showFailed}
       </p>
     );
   }
   if (!pages.length) {
-    return <p className="play-hint">Loading the sheet…</p>;
+    return <p className="play-hint">{m.common.loadingSheet}</p>;
   }
 
   return (

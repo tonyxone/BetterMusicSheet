@@ -13,12 +13,17 @@ export type NoteCounts = {
   notes_printed?: number | null;
 };
 
-export function noteCountLabel(job: NoteCounts): string | null {
+/** The wording, in the page's language (en.library); English by default. */
+export type NoteCountText = { notesLabeled: string; notesLabeledOf: string };
+
+const ENGLISH: NoteCountText = { notesLabeled: "{named} notes labeled", notesLabeledOf: "{shown}/{total} notes labeled" };
+
+export function noteCountLabel(job: NoteCounts, text: NoteCountText = ENGLISH, tag = "en-US"): string | null {
   if (job.status !== "done" || job.notes_named == null) return null;
-  const named = job.notes_named.toLocaleString("en-US");
-  if (!job.notes_printed) return `${named} notes labeled`;
+  const named = job.notes_named.toLocaleString(tag);
+  if (!job.notes_printed) return text.notesLabeled.replace("{named}", named);
   // Never more than the page prints: an extra head the reader imagined is
   // not an extra note labeled.
-  const shown = Math.min(job.notes_named, job.notes_printed).toLocaleString("en-US");
-  return `${shown}/${job.notes_printed.toLocaleString("en-US")} notes labeled`;
+  const shown = Math.min(job.notes_named, job.notes_printed).toLocaleString(tag);
+  return text.notesLabeledOf.replace("{shown}", shown).replace("{total}", job.notes_printed.toLocaleString(tag));
 }

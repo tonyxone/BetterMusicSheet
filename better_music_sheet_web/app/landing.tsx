@@ -1,6 +1,10 @@
+"use client";
+
 import Link from "next/link";
 import { UploadForm } from "./upload-form";
 import { DemoSampleCard } from "./demo-sample-card";
+import { useI18n } from "@/lib/i18n/client";
+import { rich } from "@/lib/i18n/format";
 
 // What a first-time visitor - and a crawler, which is always a first-time
 // visitor - gets at "/". It has to be real content in the served HTML rather
@@ -14,91 +18,55 @@ import { DemoSampleCard } from "./demo-sample-card";
 // recognition works, where it fails, what the labels mean. This is the short
 // one, and the two should not read as the same text twice.
 export function Landing() {
+  const { m, path } = useI18n();
+  const t = m.landing;
   return (
     <div className="wrap medium landing">
-      <h1 className="serif landing-title">
-        Every note on your sheet music, labelled
-      </h1>
-      <p className="landing-lead">
-        Upload a PDF or a photo of piano music and get the same score back with
-        the letter name printed above every note. Then practise with it, played
-        back on an on-screen keyboard with the notes lighting up as they sound.
-      </p>
+      <h1 className="serif landing-title">{t.title}</h1>
+      <p className="landing-lead">{t.lead}</p>
 
       <UploadForm heading={false} />
 
       <section className="landing-section">
-        <h2>Or try it first</h2>
-        <p>No file to hand? Play a sample sheet right away - no upload, no account.</p>
+        <h2>{t.tryHeading}</h2>
+        <p>{t.tryBody}</p>
         <DemoSampleCard />
       </section>
 
       <section className="landing-section">
-        <h2>How it works</h2>
+        <h2>{t.howHeading}</h2>
         <ol className="landing-steps">
-          <li>
-            <strong>Upload your music.</strong> A PDF works best. A photo of a
-            page works too, if it is flat and evenly lit.
-          </li>
-          <li>
-            <strong>It gets read.</strong> Optical music recognition finds the
-            staves, clefs, key signatures and noteheads, and works out what each
-            note is. Pages that come back badly read are automatically read
-            again.
-          </li>
-          <li>
-            <strong>You get it back annotated.</strong> The same engraving, same
-            layout, with a letter name over each note — and a practice mode that
-            plays it.
-          </li>
+          {t.steps.map((step) => (
+            <li key={step.title}>
+              <strong>{step.title}</strong>{t.stepSeparator}{step.body}
+            </li>
+          ))}
         </ol>
       </section>
 
       <section className="landing-section">
-        <h2>What you get</h2>
+        <h2>{t.getHeading}</h2>
         <ul className="landing-list">
-          <li>
-            <strong>Note names where you are already looking</strong> — printed
-            over the noteheads, close enough to read at playing distance without
-            burying the notation.
-          </li>
-          <li>
-            <strong>Spelling and size you choose</strong> — sharps or flats,
-            octave numbers if you are still learning where middle C sits, and
-            label size to suit how far away the music sits.
-          </li>
-          <li>
-            <strong>A practice mode</strong> — the annotated sheet above an
-            88-key keyboard, playing back with each hand in its own colour and a
-            playhead following the music. Click any bar to start there.
-          </li>
-          <li>
-            <strong>Your original, untouched</strong> — the labels are drawn on
-            a copy. You can switch back to the unannotated sheet at any time.
-          </li>
+          {t.gets.map((item) => (
+            <li key={item.title}>
+              <strong>{item.title}</strong>{t.getSeparator}{item.body}
+            </li>
+          ))}
         </ul>
       </section>
 
       <section className="landing-section">
-        <h2>Before you rely on it</h2>
-        <p>
-          Optical music recognition is genuinely hard, and this is a reading aid
-          rather than a proofreader. Handwritten music is mostly beyond it, and
-          dense passages — fast runs, heavy ornamentation — lose notes more
-          often than plain writing does. Check the result against your original.{" "}
-          <Link href="/about">What it struggles with, in full</Link>.
-        </p>
+        <h2>{t.relyHeading}</h2>
+        <p>{rich(t.relyBody, { about: (text) => <Link href={path("/about")}>{text}</Link> })}</p>
       </section>
 
       <section className="landing-section">
-        <h2>Cost</h2>
+        <h2>{t.costHeading}</h2>
         <p>
-          Trying the sample above is free, with no account needed. Uploading your
-          own sheet music needs an account: a free one keeps one sheet at a time
-          and plays its first two lines in practice mode, and Premium removes
-          both limits — see{" "}
-          <Link href="/subscription/plans">plans</Link>, and the{" "}
-          <Link href="/privacy">privacy policy</Link> for what is stored.
+          {rich(t.costBody, {
+            plans: (text) => <Link href={path("/subscription/plans")}>{text}</Link>,
+            privacy: (text) => <Link href={path("/privacy")}>{text}</Link>,
+          })}
         </p>
       </section>
     </div>
