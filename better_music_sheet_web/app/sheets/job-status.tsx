@@ -11,6 +11,7 @@ import { KeyboardIcon } from "../keyboard-icon";
 import { BackButton } from "../back-button";
 import { isActive, type AnnotationJob } from "@/lib/api";
 import { usePreference } from "@/lib/preferences";
+import { namesProgress, namesStage } from "@/lib/names-progress";
 import type { CustomizedExport } from "../sheet-viewer/sheet-editor";
 
 // pdf.js and the editor stay out of every other route's bundle, and out of
@@ -234,6 +235,41 @@ function NamesBanner({ job, jobId, cancellingRef, onRetried }: {
         <div className="names-banner-sub">Read and mark up the sheet meanwhile - the names appear here when they&apos;re ready.</div>
       </div>
       <CancelAnnotation jobId={jobId} sheetName={job.sheet_name} cancellingRef={cancellingRef} inline />
+      <NamesProgressBar stage={job.stage} />
+    </div>
+  );
+}
+
+/** How far adding the names has got, worked out from the stage the job
+ * reports (lib/names-progress.ts). Ticks between polls so the bar keeps
+ * creeping, and only moves back when the job itself starts over. */
+function NamesProgressBar({ stage }: { stage: string | null }) {
+  const { key, start, end } = namesStage(stage);
+  const [shown, setShown] = useState(start);
+  // The previous stage's start, to tell a retry starting over from progress.
+  const previousStart = useRef(start);
+
+  useEffect(() => {
+    const reachedAt = Date.now();
+    let restarted = start < previousStart.current;
+    previousStart.current = start;
+    function update() {
+      const progress = namesProgress({ key, start, end }, (Date.now() - reachedAt) / 1000);
+      setShown((before) => (restarted ? progress : Math.max(before, progress)));
+      restarted = false;
+    }
+    const first = setTimeout(update, 0);
+    const timer = setInterval(update, 1000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(timer);
+    };
+  }, [key, start, end]);
+
+  return (
+    <div className="names-progress" role="progressbar" aria-label="Adding note names"
+      aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(shown * 100)}>
+      <div className="names-progress-fill" style={{ width: `${shown * 100}%` }} />
     </div>
   );
 }
