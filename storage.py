@@ -15,6 +15,7 @@ becomes a storage key prefix and so is never trusted verbatim. A visitor who
 signs in mid-session therefore starts writing under a different prefix;
 sheets they uploaded as a guest stay where they are.
 """
+import hashlib
 import re
 import shutil
 import os
@@ -114,6 +115,57 @@ def download_input(job, destination):
         _s3_for(job).download_file(job_bucket(job), key, str(destination), ExtraArgs=extra)
     else:
         shutil.copyfile(_local_path(key), destination)
+
+
+def content_sha256(job, version):
+    """SHA-256 of the upload exactly as stored - the version the worker will
+    read, not whatever is newest under the key - as 64 hex characters. What
+    processed_sheets.py recognises the same file by, whatever it is called."""
+    digest = hashlib.sha256()
+    if IS_PRODUCTION:
+        extra = {"VersionId": version} if version and version != "local" else {}
+        body = _s3_for(job).get_object(Bucket=job_bucket(job), Key=job["input_key"], **extra)["Body"]
+        for chunk in body.iter_chunks(1024 * 1024):
+            digest.update(chunk)
+    else:
+        with _local_path(job["input_key"]).open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
+# What a finished job keeps, and so what reusing one copies.
+REUSABLE = ("output", "timeline", "labels", "notes")
+
+
+def copy_reused(job, source):
+    """Copy an earlier finished job's results into ``job``'s own files, and
+    return their keys as ``{kind}_key``. Copies rather than pointing at
+    them, so each sheet stays self-contained: deleting either one never
+    takes the other's files. Raises if the source's files are gone."""
+    keys = {}
+    for kind in REUSABLE:
+        source_key = source.get(f"{kind}_key")
+        if not source_key:
+            continue
+        key = f"jobs/{job['user_id']}/{job['job_id']}/attempts/reused/{kind}"
+        if IS_PRODUCTION:
+            _s3_for(job).copy_object(Bucket=job_bucket(job), Key=key,
+                                     CopySource={"Bucket": job_bucket(source), "Key": source_key})
+        else:
+            shutil.copyfile(_LOCAL_DIR / source_key, _local_path(key))
+        keys[f"{kind}_key"] = key
+    return keys
+
+
+def download_reused(job, kind, destination):
+    """One of an earlier sheet's files, for drawing its names again. Only
+    sheets in this region are reused (processed_sheets.find), so the files
+    are in this worker's own bucket."""
+    if IS_PRODUCTION:
+        _s3_for(job).download_file(job_bucket(job), job[f"{kind}_key"], str(destination))
+    else:
+        shutil.copyfile(_LOCAL_DIR / job[f"{kind}_key"], destination)
 
 
 def publish(job, kind, path):

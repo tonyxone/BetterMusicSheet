@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -16,6 +17,7 @@ from urllib.parse import unquote_plus
 import alerts
 import db
 import job_state
+import processed_sheets
 import storage
 from config import IS_PRODUCTION, LEASE_SECONDS, MAX_ATTEMPTS, MAX_JOB_SECONDS, MAX_UPLOAD_BYTES
 
@@ -95,7 +97,106 @@ def accept_input(job_id, version=None):
     if info["ContentLength"] != job["size"] or info["ContentLength"] > MAX_UPLOAD_BYTES:
         job_state.fail(job, {"status": "uploading"}, "Uploaded file size does not match the selected file.")
         return db.get_annotation_job(job_id)
-    return job_state.ready(job_id, info.get("VersionId", "local"))
+    version = info.get("VersionId", "local")
+    # Reusing an earlier sheet is only ever a shortcut. Whatever goes wrong
+    # in it, the upload is queued and read exactly as it was before reuse
+    # existed.
+    try:
+        found = reuse_earlier(job, version)
+    except Exception:
+        traceback.print_exc()
+        found = {}
+    if found is None:
+        return db.get_annotation_job(job_id)
+    if found:
+        try:
+            return job_state.ready(job_id, version, **found)
+        except Exception:
+            traceback.print_exc()
+    return job_state.ready(job_id, version)
+
+
+def reuse_earlier(job, version):
+    """Look for an earlier sheet made from the same file (processed_sheets.
+    py). None when ``job`` was finished with a copy of it; otherwise what to
+    queue the upload with - its hash and, when only the names need drawing
+    again, the sheet to draw them from. May raise: accept_input then reads
+    the upload as usual."""
+    digest = storage.content_sha256(job, version)
+    match = processed_sheets.find(digest, job)
+    if match and match[1] and reuse(job, version, digest, match[0]):
+        return None
+    if match and not match[1]:
+        # Just the job id: rows reach the browser, and that sheet's keys
+        # carry its owner's id. The worker looks its files up itself.
+        return {"content_sha256": digest, "redraw_from": match[0]["job_id"]}
+    return {"content_sha256": digest}
+
+
+def reuse(job, version, digest, source):
+    """Finish ``job`` with a copy of an earlier sheet's results, made from the
+    same file with the same settings. False if that couldn't be done - the
+    earlier sheet was deleted meanwhile, say - and the upload is then read
+    as usual."""
+    try:
+        keys = storage.copy_reused(job, source)
+        fields = {key: source[key] for key in ("labeled_groups", "notes_named", "notes_printed", "review_reasons")
+                  if source.get(key) is not None}
+        if not job_state.reused(job, version, content_sha256=digest, reused_from=source["job_id"], **keys, **fields):
+            return False
+    except Exception:
+        traceback.print_exc()
+        return False
+    # Done. What follows only logs it and offers it to later uploads.
+    try:
+        finished = db.get_annotation_job(job["job_id"])
+        alerts.job_reused(finished, source["job_id"], "copied")
+        processed_sheets.add(finished)
+    except Exception:
+        traceback.print_exc()
+    return True
+
+
+def fetch_redraw_sources(job, directory):
+    """Put the notes (and timeline) of the earlier sheet ``job`` is drawn
+    from in ``directory``, where processor.py looks for them. Anything
+    missing or failing leaves the directory out, and the sheet is read from
+    scratch."""
+    if not job.get("redraw_from"):
+        return
+    try:
+        source = db.get_annotation_job(job["redraw_from"])
+        if not source or source["status"] != "done" or not source.get("notes_key"):
+            return
+        directory.mkdir()
+        storage.download_reused(source, "notes", directory / "notes.json")
+        if source.get("timeline_key"):
+            storage.download_reused(source, "timeline", directory / "timeline.json")
+    except Exception:
+        traceback.print_exc()
+        shutil.rmtree(directory, ignore_errors=True)
+
+
+def publish_notes(job, path):
+    """Keep the notes read, for drawing this file again with other settings
+    (processed_sheets.py). Optional: a sheet whose notes can't be kept is
+    finished all the same, and is only copied, never redrawn, later."""
+    if not path.exists():
+        return None
+    try:
+        return storage.publish(job, "notes", path)
+    except Exception:
+        traceback.print_exc()
+        return None
+
+
+def offer_for_reuse(job_id):
+    """Let later uploads of the same file reuse this finished sheet. After
+    the sheet is done, so a failure here never touches it."""
+    try:
+        processed_sheets.add(db.get_annotation_job(job_id))
+    except Exception:
+        traceback.print_exc()
 
 
 def stop_process(process):
@@ -205,6 +306,11 @@ def process_job(job_id, extend=lambda: None, runner=run_processor):
             directory = Path(temporary)
             workdir.append(directory)
             storage.download_input(job, directory / "source")
+            if job["attempt_count"] <= 1:
+                # Only the first attempt: should drawing from the earlier
+                # sheet's notes ever take the processor down with it, the
+                # retry reads the sheet from scratch instead.
+                fetch_redraw_sources(job, directory / "reuse")
             check()
             result = runner(job, directory, check)
             # A plain count, or processor.py's result with the note counts
@@ -214,18 +320,28 @@ def process_job(job_id, extend=lambda: None, runner=run_processor):
                 notes = {key: result.get(key) for key in ("notes_named", "notes_printed")}
             else:
                 count, notes = result, {}
+            # Drawn from an earlier sheet's notes (processed_sheets.py), not read.
+            redrawn = bool(isinstance(result, dict) and result.get("redrawn") and job.get("redraw_from"))
+            source = {"reused_from": job["redraw_from"]} if redrawn else {}
             check()
             output_key = storage.publish(job, "output", directory / "annotated.pdf")
             timeline = directory / "timeline.json"
             timeline_key = storage.publish(job, "timeline", timeline) if timeline.exists() else None
             labels = directory / "labels.json"
             labels_key = storage.publish(job, "labels", labels) if labels.exists() else None
+            notes_key = publish_notes(job, directory / "notes.json")
             check()
             quality = alerts.assess(timeline)
             job_state.finish(job, status="done", labeled_groups=count, output_key=output_key, **notes,
-                             timeline_key=timeline_key, labels_key=labels_key, stage="Complete", error=None)
+                             timeline_key=timeline_key, labels_key=labels_key, notes_key=notes_key,
+                             **source, stage="Complete", error=None)
         record_review(job, quality)
-        alerts.job_done(job, quality, output_key)
+        if redrawn:
+            # The earlier sheet already reported how its reading went.
+            alerts.job_reused(job, job["redraw_from"], "redrawn")
+        else:
+            alerts.job_done(job, quality, output_key)
+        offer_for_reuse(job_id)
         return True
     except job_state.LeaseLost:
         return False

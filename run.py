@@ -1037,7 +1037,7 @@ def recognition_quality(omr_path, mxl_path, page, single_page=False):
 
 def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font_size=6.5,
                   dpi=None, auto_retry=True, log=print, timeline_path=None, color="#000000",
-                  labels_path=None, notation="letters", stats=None):
+                  labels_path=None, notation="letters", stats=None, notes_path=None):
     """Run the full PDF -> Audiveris OMR -> annotated PDF pipeline. Shared by the
     CLI (main(), below) and the web API (server.py) so the two stay in sync.
 
@@ -1048,6 +1048,10 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
     ``labels_path``: optional path to also write the placed labels as JSON
     (see label_export.py), for the web viewer's editable label layer. Also
     best-effort, for the same reason.
+
+    ``notes_path``: optional path to also save the notes read (save_notes),
+    so the same file can later be drawn with other settings by redraw_pdf.
+    Best-effort too.
 
     ``stats``: optional dict, filled in with ``notes_named`` - how many
     noteheads the reader identified, each given a name. (A chord repeated
@@ -1095,7 +1099,6 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
                                                 binarize=binarized)
 
     log("[2/3] Matching pitches to notehead positions ...")
-    from annotate import build_records, render
     from score_notes import resolve_score_notes
     resolved = resolve_score_notes(str(pdf_path), str(omr), num_pages, page_overrides)
     prepared = None
@@ -1105,9 +1108,6 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
                                  page_overrides, resolved_notes=resolved)
     except Exception as e:
         log(f"Rhythm alignment unavailable; using resolved OMR labels: {e}")
-    records = build_records(str(pdf_path), str(omr), num_pages, style=style, octave=octave,
-                             page_omr_overrides=page_overrides, resolved_notes=resolved,
-                             notation=notation)
     if stats is not None:
         stats["notes_named"] = len(resolved["notes"])
     unnamed = []
@@ -1137,6 +1137,29 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
         except Exception as e:
             log(f"[2b/3] Timeline build failed, Play mode unavailable for this sheet: {e}")
 
+    if notes_path is not None:
+        try:
+            save_notes(notes_path, resolved, unnamed, tl if scales else None)
+        except Exception as e:
+            log(f"Saving the read notes failed, this sheet can't be redrawn: {e}")
+    return draw_names(pdf_path, upload, scales, output, resolved, tl, unnamed, style=style, octave=octave,
+                      font_size=font_size, color=color, notation=notation, labels_path=labels_path, log=log)
+
+
+def draw_names(pdf_path, upload, scales, output, resolved, tl, unnamed, style="unicode", octave=False,
+               font_size=6.5, color="#000000", notation="letters", labels_path=None, log=print):
+    """Everything the settings decide, from notes already read: the names'
+    text, the annotated PDF, and the labels for the viewer. Shared by
+    annotate_pdf and redraw_pdf, so a sheet drawn again from saved notes
+    comes out exactly as reading it afresh would.
+
+    ``pdf_path`` is the copy recognition read (shrunk, when ``scales``), and
+    ``resolved``, ``tl`` and ``unnamed`` are in its points; ``upload`` is
+    the file as uploaded, which the output is scaled back to.
+    """
+    from annotate import records_from_resolved, render
+    records = records_from_resolved(resolved, style, octave, notation=notation)
+    log(f"Resolved {len(resolved['notes'])} noteheads into {len(records)} label groups.")
     log(f"[3/3] Rendering {output} ...")
     placed = render(str(pdf_path), str(output), records, font_size=font_size, color=color)
     if scales:
@@ -1157,6 +1180,57 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
             log(f"Label export failed, label editing unavailable for this sheet: {e}")
     log(f"Done: {output} ({len(records)} labeled beat-groups)")
     return len(records)
+
+
+# The notes a reading found, saved so that the same file uploaded again with
+# other settings is only drawn again (redraw_pdf), not read again. Bump when
+# what is saved changes shape; an older file is then read from scratch.
+NOTES_VERSION = 1
+
+
+def save_notes(path, resolved, unnamed, shrunk_timeline=None):
+    """``shrunk_timeline``: the timeline in the shrunk copy's points, for an
+    oversized upload only - otherwise the published timeline already is."""
+    import json
+    Path(path).write_text(json.dumps({"version": NOTES_VERSION, "resolved": resolved, "unnamed": unnamed,
+                                      "timeline": shrunk_timeline}, ensure_ascii=False), encoding="utf-8")
+
+
+def _number_keys(mapping):
+    """JSON keeps only string keys; page and staff numbers were ints."""
+    return {int(k) if isinstance(k, str) and k.lstrip("-").isdigit() else k: v for k, v in mapping.items()}
+
+
+def load_notes(path):
+    """What save_notes wrote, with its page and staff numbers ints again."""
+    import json
+    saved = json.loads(Path(path).read_text(encoding="utf-8"))
+    if saved.get("version") != NOTES_VERSION:
+        raise ValueError(f"saved notes are version {saved.get('version')}, not {NOTES_VERSION}")
+    resolved = saved["resolved"]
+    resolved["pages"] = {page: {**data, "staff_lines_pt": _number_keys(data.get("staff_lines_pt") or {})}
+                         for page, data in _number_keys(resolved.get("pages") or {}).items()}
+    return saved
+
+
+def redraw_pdf(pdf_path, output, work_dir, notes_path, timeline_path=None, style="unicode", octave=False,
+               font_size=6.5, color="#000000", notation="letters", labels_path=None, log=print, stats=None):
+    """annotate_pdf for a file whose notes were already read (save_notes):
+    the names are drawn with these settings, and nothing is read again.
+    ``timeline_path``: the reading's published timeline, if it has one."""
+    import json
+    upload = Path(pdf_path)
+    pdf_path, scales = page_size.shrink_oversized(upload, Path(work_dir) / "page-size")
+    saved = load_notes(notes_path)
+    tl = saved.get("timeline")
+    if tl is None and timeline_path is not None and Path(timeline_path).exists():
+        tl = json.loads(Path(timeline_path).read_text(encoding="utf-8"))
+    resolved = saved["resolved"]
+    if stats is not None:
+        stats["notes_named"] = len(resolved["notes"])
+    return draw_names(pdf_path, upload, scales, output, resolved, tl, saved.get("unnamed") or [], style=style,
+                      octave=octave, font_size=font_size, color=color, notation=notation,
+                      labels_path=labels_path, log=log)
 
 
 def main():

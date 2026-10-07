@@ -109,6 +109,10 @@ def generate(raw, directory, options):
 
     timeline = directory / "timeline.json"
     stats = {}
+    redrawn = redraw(pdf, directory, options, log, stats)
+    if redrawn is not None:
+        return {"count": redrawn, "notes_named": stats.get("notes_named"), "notes_printed": expected,
+                "redrawn": True}
     count = annotate_pdf(pdf, directory / "annotated.pdf", directory / "work",
                          style=options["style"], octave=options["octave"], font_size=options["font_size"],
                          dpi=options["dpi"], auto_retry=options["auto_retry"], timeline_path=timeline,
@@ -116,10 +120,47 @@ def generate(raw, directory, options):
                          # .get, not [...]: jobs queued before this option existed
                          # have no colour in their options.json and must still run.
                          color=options.get("color", "#000000"),
-                         notation=options.get("notation", "letters"), log=log, stats=stats)
+                         notation=options.get("notation", "letters"), log=log, stats=stats,
+                         notes_path=directory / "notes.json")
     # For the library's "606/634": notes named, out of the notes the sheet
     # prints - the latter only known for a vector PDF (None for a scan).
     return {"count": count, "notes_named": stats.get("notes_named"), "notes_printed": expected}
+
+
+def redraw(pdf, directory, options, log, stats):
+    """Draw the names from an earlier reading of this same file, which
+    worker.py put in ``reuse/`` - the count of labeled groups, or None to
+    read the sheet from scratch: there was nothing to redraw from, or it
+    failed, which must never cost the reader their sheet."""
+    import shutil
+    from run import redraw_pdf
+
+    reuse = directory / "reuse"
+    if not (reuse / "notes.json").exists():
+        return None
+    timeline = directory / "timeline.json"
+    try:
+        if (reuse / "timeline.json").exists():
+            shutil.copyfile(reuse / "timeline.json", timeline)
+        count = redraw_pdf(pdf, directory / "annotated.pdf", directory / "work", reuse / "notes.json",
+                           timeline_path=timeline, style=options["style"], octave=options["octave"],
+                           font_size=options["font_size"], color=options.get("color", "#000000"),
+                           notation=options.get("notation", "letters"), labels_path=directory / "labels.json",
+                           log=log, stats=stats)
+    except Exception as exc:
+        log(f"Redrawing from the earlier reading failed, reading the sheet instead: {exc}")
+        # Nothing of the attempt may leak into the reading that follows.
+        for name in ("annotated.pdf", "timeline.json", "labels.json"):
+            (directory / name).unlink(missing_ok=True)
+        shutil.rmtree(directory / "work", ignore_errors=True)
+        stats.clear()
+        return None
+    try:
+        # Kept with this sheet too, so it can be drawn again from here.
+        shutil.copyfile(reuse / "notes.json", directory / "notes.json")
+    except Exception as exc:
+        log(f"Keeping the notes for later failed, this sheet won't be redrawn from: {exc}")
+    return count
 
 
 def main(directory):

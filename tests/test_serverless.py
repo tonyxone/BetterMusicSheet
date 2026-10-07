@@ -19,6 +19,7 @@ import auth
 import config
 import db
 import job_state
+import processed_sheets
 import processor
 import server
 import storage
@@ -45,6 +46,7 @@ class ServerlessTests(unittest.TestCase):
             "ANNOTATION_JOB_TABLE": "test-jobs", "JOB_CONTROL_TABLE": "test-control",
             "SUBSCRIPTIONS_TABLE": "test-subscriptions", "MASTER_USERS_TABLE": "test-master-users",
             "ADMIN_TABLE": "test-admins", "JOB_QUEUE_URL": "", "JOB_DLQ_URL": "",
+            "PROCESSED_SHEET_TABLE": "test-processed",
             "JOB_FILES_BUCKET": "legacy-files", "NEW_JOB_FILES_BUCKET": "new-files",
             "BACKEND_JWT_SECRET": "test-only", "COGNITO_USER_POOL_ID": "us-west-1_test",
             "COGNITO_APP_CLIENT_ID": "test-client",
@@ -76,6 +78,12 @@ class ServerlessTests(unittest.TestCase):
                     {"AttributeName": "next_check_at", "KeyType": "RANGE"}], "Projection": {"ProjectionType": "ALL"}})
             self.ddb.create_table(TableName=name, BillingMode="PAY_PER_REQUEST", AttributeDefinitions=attrs,
                 KeySchema=[{"AttributeName": key, "KeyType": "HASH"}], **({"GlobalSecondaryIndexes": indexes} if indexes else {}))
+        self.ddb.create_table(TableName="test-processed", BillingMode="PAY_PER_REQUEST",
+            AttributeDefinitions=[{"AttributeName": "content_sha256", "AttributeType": "S"},
+                                  {"AttributeName": "sort", "AttributeType": "S"}],
+            KeySchema=[{"AttributeName": "content_sha256", "KeyType": "HASH"},
+                       {"AttributeName": "sort", "KeyType": "RANGE"}])
+        processed_sheets._tables.clear()
         self.s3 = boto3.client("s3")
         for bucket in ("legacy-files", "new-files"):
             self.s3.create_bucket(Bucket=bucket, CreateBucketConfiguration={"LocationConstraint": "us-west-1"})
@@ -136,6 +144,64 @@ class ServerlessTests(unittest.TestCase):
         self.assertEqual(auth.get_entitlement(USER)["tier"], "premium")
         db.remove_master_user(USER)
         self.assertFalse(db.is_master_user(USER))
+
+    def processed_rows(self):
+        return self.ddb.scan(TableName="test-processed")["Items"]
+
+    def test_the_same_file_is_reused_through_dynamodb_and_s3(self):
+        def runner(job, directory, tick):
+            fake_runner(job, directory, tick)
+            (directory / "notes.json").write_text('{"version": 1}')
+            return {"count": 7, "notes_named": 30, "notes_printed": None,
+                    "redrawn": (directory / "reuse" / "notes.json").exists()}
+
+        self.upload("a", data=b"same sheet")
+        self.assertTrue(worker.process_job("a", runner=runner))
+        first = db.get_annotation_job("a")
+        [row] = self.processed_rows()
+        self.assertEqual(row["content_sha256"]["S"], first["content_sha256"])
+        self.assertEqual(row["sort"]["S"], f"{first['created_at']:012d}#a")
+        self.assertEqual((row["job_id"]["S"], row["files_region"]["S"]), ("a", "us-west-1"))
+
+        other = "22222222-2222-4222-8222-222222222222"
+        copied = self.upload("b", user=other, data=b"same sheet")
+        self.assertEqual((copied["status"], copied["reused_from"]), ("done", "a"))
+        self.assertEqual(copied["output_key"], f"jobs/{other}/b/attempts/reused/output")
+        body = self.s3.get_object(Bucket="new-files", Key=copied["output_key"])
+        self.assertEqual(body["Body"].read(), b"%PDF-test")
+        self.assertEqual(body["ContentType"], "application/pdf")
+        # Never queued, and its upload slot is free again.
+        self.assertEqual(self.sqs.receive_message(QueueUrl=self.queue).get("Messages"), None)
+        job_state.create("b2", other, "Next.pdf", OPTIONS, 1)
+        self.assertEqual(len(self.processed_rows()), 2)
+
+        # Other settings: queued, to be drawn again from the first's notes.
+        third = "33333333-3333-4333-8333-333333333333"
+        redraw = job_state.create("c", third, "Summer.pdf", {**OPTIONS, "notation": "numbers"}, 10)
+        version = self.s3.put_object(Bucket="new-files", Key=redraw["input_key"], Body=b"same sheet")["VersionId"]
+        queued = worker.accept_input("c", version)
+        self.assertEqual(queued["status"], "queued")
+        # The newest sheet made from the file: the copy is as good as the first.
+        self.assertEqual(queued["redraw_from"], "b")
+        self.assertTrue(worker.process_job("c", runner=runner))
+        self.assertEqual(db.get_annotation_job("c")["reused_from"], "b")
+
+        # Deleting a sheet takes its row with it, before its files.
+        self.assertEqual(self.client.delete("/api/sheets/b", headers=self.signed_in(other)).status_code, 204)
+        self.assertNotIn("b", {r["job_id"]["S"] for r in self.processed_rows()})
+
+    def test_without_the_reuse_table_every_upload_is_read_as_before(self):
+        # Named but missing - code shipped before its table, or the table lost.
+        self.ddb.delete_table(TableName="test-processed")
+        self.upload("a", data=b"same sheet")
+        self.assertTrue(worker.process_job("a", runner=fake_runner))
+        self.assertEqual(db.get_annotation_job("a")["status"], "done")
+        other = "22222222-2222-4222-8222-222222222222"
+        second = self.upload("b", user=other, data=b"same sheet")
+        self.assertEqual(second["status"], "queued")
+        self.assertTrue(worker.process_job("b", runner=fake_runner))
+        self.assertEqual(db.get_annotation_job("b")["status"], "done")
+        self.assertEqual(self.client.delete("/api/sheets/a", headers=self.signed_in()).status_code, 204)
 
     def test_a_failed_sheet_is_retried_through_dynamodb_and_sqs(self):
         self.upload()
@@ -393,7 +459,8 @@ class ServerlessTests(unittest.TestCase):
                 {"warnings": [warning] if i < 6 else []} for i in range(10)]}))
             return 7
 
-        self.upload("b", user="22222222")
+        # Another file: the same one would be copied, not read (processed_sheets.py).
+        self.upload("b", user="22222222", data=b"another sheet")
         self.assertTrue(worker.process_job("b", runner=rough))
         [alert] = read()
         self.assertEqual(alert["Subject"], "Sheet needs review: Summer.pdf")

@@ -239,3 +239,40 @@ resource "aws_dynamodb_table" "annotation_job" {
     }
   }
 }
+
+# Finished sheets by the SHA-256 of the file uploaded, so the same file
+# uploaded again - by anyone, under any name - reuses what was made from it
+# instead of reading the music again (see ../processed_sheets.py). One row per
+# finished job: `sort` is "{created_at}#{job_id}", so a hash has a row for
+# every sheet still made from it, newest first. A row is removed when its
+# sheet is deleted, before the sheet's files are.
+resource "aws_dynamodb_table" "processed_sheet" {
+  name         = "${var.project}-processed-sheet"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "content_sha256"
+  range_key    = "sort"
+
+  attribute {
+    name = "content_sha256"
+    type = "S"
+  }
+
+  attribute {
+    name = "sort"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  stream_enabled   = local.us_east_1_enabled
+  stream_view_type = local.us_east_1_enabled ? "NEW_AND_OLD_IMAGES" : null
+  dynamic "replica" {
+    for_each = local.us_east_1_enabled ? [local.us_east_1] : []
+    content {
+      region_name            = replica.value
+      point_in_time_recovery = true
+    }
+  }
+}
