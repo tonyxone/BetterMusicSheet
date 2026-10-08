@@ -127,8 +127,8 @@ export const zhHans: Messages = {
 
   upload: {
     heading: "上传您的乐谱",
-    sub: "我们会读取乐谱上的每一个音符，并标上音名，让您练琴时不用再猜。",
-    accountNote: "上传需要账号。免费账号一次保留一份乐谱；高级版不限数量——<plans>查看套餐</plans>。",
+    sub: "我们会读取乐谱上的每一个音符，并标上音名，让您练琴变得简单。",
+    accountNote: "上传需要登录。免费账号一次保留一份乐谱；高级版不限数量——<plans>查看套餐</plans>。",
     dropPrompt: "把 PDF 或照片拖到这里，或点击选择文件",
     photosOneSheet: "{count} 张照片 · 一份乐谱",
     formats: "PDF、JPG 或 PNG · 最大 {mb} MB",

@@ -128,8 +128,8 @@ export const zhHant: Messages = {
 
   upload: {
     heading: "上傳您的樂譜",
-    sub: "我們會讀取樂譜上的每一個音符，並標上音名，讓您練琴時不用再猜。",
-    accountNote: "上傳需要帳號。免費帳號一次保留一份樂譜；進階版不限數量——<plans>查看方案</plans>。",
+    sub: "我們會讀取樂譜上的每一個音符，並標上音名，讓您練琴變得簡單。",
+    accountNote: "上傳需要登入。免費帳號一次保留一份樂譜；進階版不限數量——<plans>查看方案</plans>。",
     dropPrompt: "將 PDF 或照片拖曳到這裡，或點選以選擇檔案",
     photosOneSheet: "{count} 張照片 · 一份樂譜",
     formats: "PDF、JPG 或 PNG · 最大 {mb} MB",

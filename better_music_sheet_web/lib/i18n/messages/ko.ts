@@ -129,8 +129,8 @@ export const ko: Messages = {
 
   upload: {
     heading: "악보 업로드",
-    sub: "악보의 모든 음표를 읽고 음이름을 적어 드립니다. 이제 짐작하지 않고 연습할 수 있습니다.",
-    accountNote: "업로드하려면 계정이 필요합니다. 무료 계정은 한 번에 악보 1개를, 프리미엄은 개수 제한이 없습니다. <plans>요금제 보기</plans>",
+    sub: "악보의 모든 음표를 읽고 음이름을 적어 드립니다. 연습이 한결 쉬워집니다.",
+    accountNote: "업로드하려면 로그인이 필요합니다. 무료 계정은 한 번에 악보 1개를, 프리미엄은 개수 제한이 없습니다. <plans>요금제 보기</plans>",
     dropPrompt: "PDF나 사진을 여기에 끌어다 놓거나 클릭해서 선택하세요",
     photosOneSheet: "사진 {count}장 · 악보 1개",
     formats: "PDF, JPG, PNG · 최대 {mb}MB",
