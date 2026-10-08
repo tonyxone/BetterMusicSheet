@@ -123,6 +123,27 @@ test('server and upload errors are recognised, values carried through', () => {
   assert.equal(translateKnown('Couldn\'t read IMG_0001.jpg.', MESSAGES.ko), 'IMG_0001.jpg을(를) 읽지 못했습니다.');
 });
 
+test('the daily upload limit is shown in the page language, with what to upgrade to', () => {
+  const started = "You've started 5 sheets today, the most your plan allows in a day.";
+  assert.equal(
+    translateKnown(`${started} You can start another in about 17 hours. Premium allows 20 a day, or 30 on the yearly plan.`,
+      MESSAGES['zh-hans']),
+    '今天您已上传 5 份乐谱，已达到您的方案每天的上限。大约 17 小时后可以再上传。高级版每天可上传 20 份，年付方案每天 30 份。',
+  );
+  assert.equal(
+    translateKnown("You've started 20 sheets today, the most your plan allows in a day. You can start another in about 1 hour. " +
+      'The yearly plan allows 30 a day.', MESSAGES.ja),
+    '今日はすでに20件の楽譜をアップロードしました。ご利用のプランの1日の上限です。約1時間後にまたアップロードできます。' +
+      '年額プランなら1日30件までアップロードできます。',
+  );
+  // The yearly plan's has nothing after when it resets.
+  assert.equal(
+    translateKnown("You've started 30 sheets today, the most your plan allows in a day. You can start another within the hour.",
+      MESSAGES.ko),
+    '오늘 이미 악보 30개를 업로드해 요금제의 하루 한도에 도달했습니다. 1시간 이내에 다시 업로드할 수 있습니다.',
+  );
+});
+
 test('unrecognised text, and English, come back as they were', () => {
   assert.equal(translateKnown('Something new from the server.', MESSAGES.ja), 'Something new from the server.');
   assert.equal(translateKnown('Reading sheet music', en), 'Reading sheet music');

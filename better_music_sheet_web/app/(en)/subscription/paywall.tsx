@@ -8,6 +8,7 @@ import { useSubscription } from "@/lib/subscription";
 import { useI18n } from "@/lib/i18n/client";
 import { fmt } from "@/lib/i18n/format";
 import { translateKnown } from "@/lib/i18n/known-text";
+import { DAILY_SHEETS } from "@/lib/plan-limits";
 
 function planFromQuery(value: string | null): "monthly" | "yearly" | null {
   return value === "monthly" || value === "yearly" ? value : null;
@@ -17,7 +18,7 @@ function planFromQuery(value: string | null): "monthly" | "yearly" | null {
  * the choices: it's outside the plans' radio group.
  *
  * What an account has without subscribing - the limits server.py
- * (FREE_SHEET_LIMIT) and play-view.tsx (FREE_LINES) enforce. Not a choice
+ * (FREE_SHEET_LIMIT, DAILY_SHEET_LIMITS) and play-view.tsx (FREE_LINES) enforce. Not a choice
  * on this page: it's the plan everyone starts on, shown beside Premium's for
  * comparison, as the iOS app's paywall does. */
 export function FreePlanCard() {
@@ -27,6 +28,7 @@ export function FreePlanCard() {
     { included: true, text: t.freePoints.labelled },
     { included: true, text: t.freePoints.edit },
     { included: false, text: t.freePoints.oneSheet },
+    { included: false, text: fmt(t.dailySheets, { count: DAILY_SHEETS.free }) },
     { included: false, text: t.freePoints.twoLines },
   ];
   return (
@@ -46,11 +48,12 @@ export function FreePlanCard() {
   );
 }
 
-// The same on both plans - they differ only in how they're billed.
-function Benefits() {
+// The same on both plans but for how many sheets each may upload a day.
+function Benefits({ daily }: { daily: number }) {
   const { m } = useI18n();
   return (
     <ul className="subscription-benefits">
+      <li>{fmt(m.paywall.dailySheets, { count: daily })}</li>
       {m.paywall.benefits.map((benefit) => <li key={benefit}>{benefit}</li>)}
     </ul>
   );
@@ -197,7 +200,7 @@ export function Paywall({ previewOnly = false }: { previewOnly?: boolean } = {})
           <h2>{t.monthly}</h2>
           <p className="subscription-price">{t.amountMonthly} <small>{t.perMonth}</small></p>
           <p>{t.monthlyBody}</p>
-          <Benefits />
+          <Benefits daily={DAILY_SHEETS.monthly} />
         </article>
         <article className={`subscription-card${plan === "yearly" ? " selected" : ""}`} {...choice("yearly")}>
           <h2>
@@ -205,7 +208,7 @@ export function Paywall({ previewOnly = false }: { previewOnly?: boolean } = {})
           </h2>
           <p className="subscription-price">{t.amountYearly} <small>{t.perYear}</small></p>
           <p>{t.yearlyBody}</p>
-          <Benefits />
+          <Benefits daily={DAILY_SHEETS.yearly} />
         </article>
       </div>
       </div>

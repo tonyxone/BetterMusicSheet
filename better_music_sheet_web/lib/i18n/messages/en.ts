@@ -620,6 +620,8 @@ export const en = {
     perYear: "/ year",
     monthlyBody: "Flexible access, billed monthly.",
     yearlyBody: "Best value for a full year of practice.",
+    /** On a plan card: how many sheets the plan may upload a day (lib/plan-limits.ts). */
+    dailySheets: "Upload up to {count} sheets daily",
     signInToSubscribe:
       "Sign in to subscribe. Your subscription belongs to your account, so it works in the iOS app too.",
     startTrial: "Start 7-day free trial",
@@ -676,7 +678,8 @@ export const en = {
       "Access on any device, synced to your account",
       "Cancel anytime, no long-term commitment",
     ],
-    plansFree: "On the free plan you keep one sheet at a time, and practice mode plays its first two lines.",
+    plansFree:
+      "On the free plan you keep one sheet at a time, can upload up to {count} sheets daily, and practice mode plays its first two lines.",
     confirming: "Confirming your subscription…",
     almostThere: "Almost there",
     trialStarted: "Your trial has started",
@@ -734,6 +737,16 @@ export const en = {
       retryNoUpload: "This upload didn't finish, so there is nothing to read again. Please upload the file again.",
       unsupportedType: "Only PDF, JPG and PNG files are supported.",
       alreadyProcessing: "You already have a sheet processing. Wait for it to finish.",
+      // The daily limit (server.py's DAILY_SHEET_LIMITS). The second is the
+      // first with nothing to upgrade to; "when" and "upgrade" are the ones below.
+      dailyLimit:
+        "You've started {count} sheets today, the most your plan allows in a day. You can start another {when}. {upgrade}",
+      dailyLimitTop: "You've started {count} sheets today, the most your plan allows in a day. You can start another {when}.",
+      inAboutHours: "in about {count} hours",
+      inAboutHour: "in about 1 hour",
+      withinHour: "within the hour",
+      dailyUpgradeFree: "Premium allows {monthly} a day, or {yearly} on the yearly plan.",
+      dailyUpgradeMonthly: "The yearly plan allows {count} a day.",
       signInToUpload: "Sign in to upload a sheet.",
       fileTooLarge: "File must be at most {mb} MB.",
       invalidOptions: "Invalid file or annotation options.",
