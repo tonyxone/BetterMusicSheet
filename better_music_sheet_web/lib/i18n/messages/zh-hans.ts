@@ -560,7 +560,7 @@ export const zhHans: Messages = {
     monthlyBody: "灵活使用，按月计费。",
     yearlyBody: "最划算，练满一整年。",
     dailySheets: "每天最多上传 {count} 份乐谱",
-    signInToSubscribe: "登录后即可订阅。订阅属于您的账号，因此在 iOS 应用中同样有效。",
+    signInToSubscribe: "登录后即可订阅。",
     startTrial: "开始 7 天免费试用",
     subscribe: "订阅",
     choosePlanTrial: "选择月付或年付，开始 7 天免费试用。",

@@ -561,7 +561,7 @@ export const zhHant: Messages = {
     monthlyBody: "彈性使用，按月計費。",
     yearlyBody: "最划算，練滿一整年。",
     dailySheets: "每天最多上傳 {count} 份樂譜",
-    signInToSubscribe: "登入後即可訂閱。訂閱屬於您的帳號，因此在 iOS 應用程式中同樣有效。",
+    signInToSubscribe: "登入後即可訂閱。",
     startTrial: "開始 7 天免費試用",
     subscribe: "訂閱",
     choosePlanTrial: "選擇月繳或年繳，開始 7 天免費試用。",

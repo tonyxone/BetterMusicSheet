@@ -563,7 +563,7 @@ export const ko: Messages = {
     monthlyBody: "부담 없이 매달 결제.",
     yearlyBody: "1년 동안 꾸준히 연습한다면 가장 저렴합니다.",
     dailySheets: "하루 최대 {count}개 악보 업로드",
-    signInToSubscribe: "구독하려면 로그인하세요. 구독은 계정에 속하므로 iOS 앱에서도 쓸 수 있습니다.",
+    signInToSubscribe: "구독하려면 로그인하세요.",
     startTrial: "7일 무료 체험 시작",
     subscribe: "구독하기",
     choosePlanTrial: "월간 또는 연간을 골라 7일 무료 체험을 시작하세요.",

@@ -565,7 +565,7 @@ export const ja: Messages = {
     monthlyBody: "気軽に始められる月ごとのお支払い。",
     yearlyBody: "1年間しっかり練習するならいちばんお得。",
     dailySheets: "楽譜のアップロードは1日{count}件まで",
-    signInToSubscribe: "登録するにはログインしてください。サブスクリプションはアカウントに紐づくので、iOS アプリでも使えます。",
+    signInToSubscribe: "登録するにはログインしてください。",
     startTrial: "7日間の無料トライアルを始める",
     subscribe: "登録する",
     choosePlanTrial: "月額か年額を選んで、7日間の無料トライアルを始めましょう。",

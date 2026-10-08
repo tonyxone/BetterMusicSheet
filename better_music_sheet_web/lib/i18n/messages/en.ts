@@ -622,8 +622,7 @@ export const en = {
     yearlyBody: "Best value for a full year of practice.",
     /** On a plan card: how many sheets the plan may upload a day (lib/plan-limits.ts). */
     dailySheets: "Upload up to {count} sheets daily",
-    signInToSubscribe:
-      "Sign in to subscribe. Your subscription belongs to your account, so it works in the iOS app too.",
+    signInToSubscribe: "Sign in to subscribe.",
     startTrial: "Start 7-day free trial",
     subscribe: "Subscribe",
     choosePlanTrial: "Choose monthly or yearly to start your 7-day free trial.",
