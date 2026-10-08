@@ -3,6 +3,7 @@ a new job now requires a valid signed-in token - a guest id (or no identity
 at all) authenticates reads of a job a guest already owns, never a new
 upload. Runs in local (non-serverless) mode, like test_delete_sheet.py.
 """
+import time
 import unittest
 from unittest.mock import patch
 
@@ -118,6 +119,78 @@ class UploadRequiresSignInTests(unittest.TestCase):
                 response = self.upload(premium)
                 self.assertEqual(response.status_code, 202, response.text)
                 self.finish(response.json()["job_id"])
+
+    def started(self, user_id, count, status="failed"):
+        """Start ``count`` sheets that end ``status``, each freeing the slot."""
+        for _ in range(count):
+            response = self.upload(user_id)
+            self.assertEqual(response.status_code, 202, response.text)
+            self.finish(response.json()["job_id"], status=status)
+
+    def test_a_free_account_starts_five_sheets_a_day_however_they_end(self):
+        free = "d1d1d1d1-d1d1-4d1d-8d1d-d1d1d1d1d1d1"
+        # Failed sheets free the one-sheet slot; they still count today.
+        self.started(free, 5)
+        refused = self.upload(free)
+        self.assertEqual(refused.status_code, 429)
+        self.assertIn("started 5 sheets today", refused.json()["detail"])
+        self.assertIn("Premium allows 20 a day, or 30 on the yearly plan", refused.json()["detail"])
+        self.assertGreater(int(refused.headers["Retry-After"]), 0)
+
+    def test_deleting_a_sheet_does_not_give_back_a_days_sheet(self):
+        free = "d2d2d2d2-d2d2-4d2d-8d2d-d2d2d2d2d2d2"
+        for _ in range(5):
+            response = self.upload(free)
+            self.finish(response.json()["job_id"])
+            self.assertEqual(self.client.delete(f"/api/sheets/{response.json()['job_id']}",
+                                                headers=self.signed_in(free)).status_code, 204)
+        self.assertEqual(self.upload(free).status_code, 429)
+
+    def test_a_monthly_account_starts_twenty_sheets_a_day(self):
+        monthly = "d3d3d3d3-d3d3-4d3d-8d3d-d3d3d3d3d3d3"
+        with patch.object(server, "get_entitlement", return_value={"tier": "premium", "plan": "monthly"}):
+            self.started(monthly, 20, status="done")
+            refused = self.upload(monthly)
+        self.assertEqual(refused.status_code, 429)
+        self.assertIn("started 20 sheets today", refused.json()["detail"])
+        self.assertIn("The yearly plan allows 30 a day", refused.json()["detail"])
+
+    def test_a_yearly_account_starts_thirty_sheets_a_day(self):
+        yearly = "d7d7d7d7-d7d7-4d7d-8d7d-d7d7d7d7d7d7"
+        with patch.object(server, "get_entitlement", return_value={"tier": "premium", "plan": "yearly"}):
+            self.started(yearly, 30, status="done")
+            refused = self.upload(yearly)
+        self.assertEqual(refused.status_code, 429)
+        self.assertIn("started 30 sheets today", refused.json()["detail"])
+        # The most there is: nothing to upgrade to after when it resets.
+        self.assertRegex(refused.json()["detail"], r"another (in about \d+ hours?|within the hour)\.$")
+
+    def test_a_master_account_without_a_subscription_gets_the_yearly_limit(self):
+        master = "d8d8d8d8-d8d8-4d8d-8d8d-d8d8d8d8d8d8"
+        with patch.object(server, "get_entitlement", return_value={"tier": "premium", "plan": None, "master": True}):
+            self.assertEqual(server._daily_sheet_limit(master), 30)
+
+    def test_reading_a_failed_sheet_again_counts_as_a_sheet_started(self):
+        free = "d4d4d4d4-d4d4-4d4d-8d4d-d4d4d4d4d4d4"
+        self.started(free, 4)
+        last = self.upload(free).json()["job_id"]
+        self.finish(last, status="failed")
+        db.update_annotation_job(last, storage_version=2, input_version="v1")
+        self.assertEqual(self.client.post(f"/api/sheets/{last}/retry", headers=self.signed_in(free)).status_code, 429)
+        self.assertEqual(db.get_annotation_job(last)["status"], "failed")
+
+    def test_the_days_count_starts_over_at_midnight_utc(self):
+        free = "d5d5d5d5-d5d5-4d5d-8d5d-d5d5d5d5d5d5"
+        self.started(free, 5)
+        tomorrow = job_state.next_daily_reset(time.time()) + 60
+        with patch.object(job_state.time, "time", return_value=tomorrow):
+            self.assertEqual(self.upload(free).status_code, 202)
+
+    def test_an_admin_has_no_daily_limit(self):
+        admin = "d6d6d6d6-d6d6-4d6d-8d6d-d6d6d6d6d6d6"
+        db.add_admin(admin)
+        self.addCleanup(db._admins.discard, admin)
+        self.started(admin, 6)
 
     def test_a_guests_previously_uploaded_job_still_reads_and_lists(self):
         """Fallout check: gating new uploads must not touch reads of content

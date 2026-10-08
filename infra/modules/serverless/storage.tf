@@ -98,6 +98,12 @@ resource "aws_dynamodb_table" "control" {
     name = "user_id"
     type = "S"
   }
+  # Removes the per-day sheet counters (job_state.py's "daily#" rows) once
+  # their day is over. Upload slot rows have no expires_at and never expire.
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
+  }
   point_in_time_recovery { enabled = true }
   lifecycle { prevent_destroy = true }
 }
