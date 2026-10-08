@@ -621,7 +621,7 @@ export const en = {
     monthlyBody: "Flexible access, billed monthly.",
     yearlyBody: "Best value for a full year of practice.",
     /** On a plan card: how many sheets the plan may upload a day (lib/plan-limits.ts). */
-    dailySheets: "Upload up to {count} sheets a day",
+    dailySheets: "Upload up to {count} sheets daily",
     signInToSubscribe:
       "Sign in to subscribe. Your subscription belongs to your account, so it works in the iOS app too.",
     startTrial: "Start 7-day free trial",
@@ -679,7 +679,7 @@ export const en = {
       "Cancel anytime, no long-term commitment",
     ],
     plansFree:
-      "On the free plan you keep one sheet at a time, can upload up to {count} sheets a day, and practice mode plays its first two lines.",
+      "On the free plan you keep one sheet at a time, can upload up to {count} sheets daily, and practice mode plays its first two lines.",
     confirming: "Confirming your subscription…",
     almostThere: "Almost there",
     trialStarted: "Your trial has started",
