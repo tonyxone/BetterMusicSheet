@@ -467,6 +467,36 @@ class ServerlessTests(unittest.TestCase):
         self.assertIn("6 of 10 measures have recognition warnings", alert["Message"])
         self.assertIn("Annotated:  s3://new-files/jobs/22222222/b/attempts/", alert["Message"])
 
+    def test_a_hand_republish_is_recorded_on_the_row_and_in_the_worker_log(self):
+        import republish
+        importlib.reload(republish)
+        self.addCleanup(importlib.reload, republish)  # after tearDown has left production
+        logs = boto3.client("logs")
+        logs.create_log_group(logGroupName=republish.LOG_GROUP)
+        self.upload()
+        self.assertTrue(worker.process_job("a", runner=fake_runner))
+        before = db.get_annotation_job("a")
+        self.assertGreaterEqual(before["finished_at"], before["queued_at"])
+
+        def runner(job, directory):
+            return {"count": fake_runner(job, directory, lambda: None)}
+
+        storage.write_edits(before, USER, b"{}")
+        with self.assertRaises(republish.Refused):
+            republish.republish("a", runner=runner)
+        with contextlib.redirect_stdout(io.StringIO()):
+            job = republish.republish("a", runner=runner, allow_edits=True, reason="a pipeline fix")
+        self.assertEqual((job["republished_from"], job["finished_at"], job["review_reasons"]),
+                         (before["output_key"], before["finished_at"], []))
+        self.assertNotEqual(job["output_key"], before["output_key"])
+        self.s3.head_object(Bucket="new-files", Key=job["output_key"])
+        self.s3.head_object(Bucket="new-files", Key=before["output_key"])
+        [stream] = logs.describe_log_streams(logGroupName=republish.LOG_GROUP)["logStreams"]
+        [event] = logs.get_log_events(logGroupName=republish.LOG_GROUP,
+                                      logStreamName=stream["logStreamName"])["events"]
+        self.assertEqual({k: v for k, v in json.loads(event["message"]).items() if k in ("event", "job_id", "reason")},
+                         {"event": "job_republished", "job_id": "a", "reason": "a pipeline fix"})
+
     def test_an_alert_that_cannot_be_sent_does_not_change_the_outcome(self):
         os.environ["ALERTS_TOPIC_ARN"] = "arn:aws:sns:us-west-1:123456789012:missing"
         self.upload()
