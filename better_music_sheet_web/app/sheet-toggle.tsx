@@ -4,6 +4,8 @@
 // visitor handed it. Shared by the result page and the Play page so the two
 // read as the same control, and because "which copy am I looking at" is the
 // same question in both places.
+
+import { useI18n } from "@/lib/i18n/client";
 //
 // Geometry is identical between the two: the annotated PDF is the uploaded
 // one with names drawn on top (see annotate.py), so Play keeps highlighting
@@ -29,14 +31,16 @@ export function SheetToggle({
   annotatedUnavailable?: string | null;
   dark?: boolean;
 }) {
+  const { m } = useI18n();
+  const t = m.toggles;
   const options: { id: SheetVariant; label: string; title: string; blocked: boolean }[] = [
-    { id: "annotated", label: "Annotated", title: annotatedUnavailable ?? "Show the sheet with note names",
+    { id: "annotated", label: t.annotated, title: annotatedUnavailable ?? t.showAnnotated,
       blocked: !!annotatedUnavailable },
-    { id: "original", label: "Original", title: unavailable ?? "Show the sheet as you uploaded it", blocked: !!unavailable },
+    { id: "original", label: t.original, title: unavailable ?? t.showOriginal, blocked: !!unavailable },
   ];
 
   return (
-    <div className={`sheet-toggle${dark ? " dark" : ""}`} role="group" aria-label="Sheet version">
+    <div className={`sheet-toggle${dark ? " dark" : ""}`} role="group" aria-label={t.sheetVersion}>
       {options.map((option) => {
         const blocked = option.blocked;
         return (

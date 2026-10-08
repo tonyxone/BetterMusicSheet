@@ -1,0 +1,1256 @@
+"use client";
+
+// The Play page: annotated sheet on top, 88-key keyboard below.
+//
+// Play runs the whole piece; clicking a measure repeats just that measure
+// until you stop it. Either way the keyboard shows only what is sounding at
+// this instant, and the measure being played is outlined on the sheet.
+//
+// three.js and pdf.js are only imported from here, dynamically, so neither
+// reaches any other route's bundle.
+
+import dynamic from "next/dynamic";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { clientApiFetch } from "@/lib/client-api";
+import { fetchSheetAssets, fetchSheetFile } from "@/lib/sheet-files";
+import { SheetToggle, type SheetVariant } from "../../sheet-toggle";
+import { NotationToggle } from "../../notation-toggle";
+import { SubscribePrompt } from "../subscription/subscribe-prompt";
+import { DemoSampleCard } from "../../demo-sample-card";
+import { useSubscription } from "@/lib/subscription";
+import { BackButton } from "../../back-button";
+import { DEMO_JOB_ID, type AnnotationJob } from "@/lib/api";
+import type { Timeline, TimelineNote } from "@/lib/timeline";
+import { notesAtBeat, measureIndexAt } from "@/lib/timeline";
+import { applyCorrections, validCorrection } from "@/lib/corrections";
+import type { Corrections } from "@/lib/corrections";
+import { EMPTY_EDITS, fetchEdits, type SheetEdits } from "@/lib/edits";
+import { loadLabels, type LabelSet } from "@/lib/labels";
+import { useNotation } from "@/lib/notation";
+import { usePreference } from "@/lib/preferences";
+import { AnnotationLayer } from "../../sheet-viewer/annotation-layer";
+import { tempoClock, tempoControl } from "./tempo";
+import { GRACE_SECONDS, SynthEngine, INSTRUMENTS, isInstrumentId, type InstrumentId } from "./synth";
+import { Playback } from "./playback";
+import { PracticeGate } from "./practice-gate";
+import { PageLoading } from "../../page-loading";
+import { useI18n } from "@/lib/i18n/client";
+import { fmt, rich } from "@/lib/i18n/format";
+import type { Messages } from "@/lib/i18n/messages/en";
+
+// ssr:false is required, not just an optimization: both touch WebGL/Worker
+// APIs that don't exist during the static export's prerender pass.
+const Keyboard3D = dynamic(() => import("./keyboard-3d"), {
+  ssr: false,
+  loading: () => <div className="keyboard-3d" />,
+});
+const SheetCanvas = dynamic(() => import("./sheet-canvas"), {
+  ssr: false,
+  loading: () => <SheetLoading />,
+});
+
+function SheetLoading() {
+  const { m } = useI18n();
+  return <p className="play-hint">{m.common.loadingSheet}</p>;
+}
+const NoteRoll = dynamic(() => import("./note-roll"), {
+  ssr: false,
+  loading: () => <div className="note-roll" />,
+});
+
+function PlayIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true">
+      <path d="M8 5.5a1 1 0 0 1 1.53-.85l9 6.5a1 1 0 0 1 0 1.7l-9 6.5A1 1 0 0 1 8 18.5z" />
+    </svg>
+  );
+}
+
+/** Step forward: the play triangle stopped against a bar. */
+function StepForwardIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true">
+      <path d="M6.5 5.8 15.6 12 6.5 18.2z" />
+      <rect x="16.6" y="5.6" width="2.5" height="12.8" rx="1.1" />
+    </svg>
+  );
+}
+
+/** Its mirror image, so the pair reads as one control. */
+function StepBackIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true">
+      <path d="M17.5 5.8 8.4 12 17.5 18.2z" />
+      <rect x="4.9" y="5.6" width="2.5" height="12.8" rx="1.1" />
+    </svg>
+  );
+}
+
+/** A disclosure triangle; rotated by CSS when its panel is open. */
+function ChevronIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true">
+      <path d="M9 5.5 16.5 12 9 18.5z" />
+    </svg>
+  );
+}
+
+/** One collapsible section of the page.
+ *
+ * Both sections share the space left over by the transport and keyboard, in
+ * proportion to `grow`. Collapsing one gives its room to the other rather
+ * than leaving a hole, which is the whole point: the sheet and the falling
+ * notes are two ways of reading the same thing, and how much of each you want
+ * changes as you practise.
+ *
+ * The two `grow` values must sum to at least 1: flexbox hands out only that
+ * fraction of the free space when they sum to less, so a lone panel left
+ * holding the split's 0.5 would fill half its room and leave a hole. */
+function Panel({
+  title,
+  label,
+  open,
+  onToggle,
+  grow,
+  nodeRef,
+  flush = false,
+  dark = false,
+  actions,
+  children,
+}: {
+  /** Shown in the header. Omit for a panel whose content speaks for itself -
+   * the chevron alone is then the whole header. */
+  title?: string;
+  /** Accessible name when there is no visible title. */
+  label?: string;
+  open: boolean;
+  onToggle: () => void;
+  grow: number;
+  /** The section element itself, so a resize can measure the panel. */
+  nodeRef?: React.Ref<HTMLElement>;
+  /** Skip the inner padding, for a child that paints to its own edges. */
+  flush?: boolean;
+  /** Dark surface, for the note roll. */
+  dark?: boolean;
+  /** Controls shown beside the header, only while the panel is open - they
+   * act on content a collapsed panel isn't showing. */
+  actions?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const { m } = useI18n();
+  return (
+    <section
+      ref={nodeRef}
+      className={`play-panel${open ? " open" : ""}${dark ? " dark" : ""}`}
+      // Only a growing panel needs a basis of 0; a closed one is sized by its
+      // header alone, so it must not grow at all.
+      style={open ? { flex: `${grow} 1 0` } : { flex: "none" }}
+    >
+      <div className="play-panel-bar">
+        <button
+          type="button"
+          className="play-panel-head"
+          onClick={onToggle}
+          title={fmt(open ? m.play.collapse : m.play.expand, { name: title ?? label ?? "" })}
+          aria-expanded={open}
+          aria-label={title ?? label}
+        >
+          <ChevronIcon />
+          {title && <span>{title}</span>}
+        </button>
+        {open && actions && <div className="play-panel-actions">{actions}</div>}
+      </div>
+      {/* Unmounted rather than hidden when closed: the roll runs an animation
+          frame loop and the sheet holds a pdf.js document, and neither should
+          keep working behind a collapsed header. */}
+      {open && <div className={`play-panel-body${flush ? " flush" : ""}`}>{children}</div>}
+    </section>
+  );
+}
+
+/** A keyboard key with a letter on it - the thing the toggle turns on. */
+/** A falling bar with a name on it. */
+function NoteNamesIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
+      <rect
+        x="7" y="2.5" width="10" height="19" rx="3"
+        fill="none" stroke="currentColor" strokeWidth="1.6"
+      />
+      <text
+        x="12" y="15.3" textAnchor="middle"
+        fontSize="8.5" fontWeight="700" fill="currentColor"
+        fontFamily="inherit"
+      >
+        A
+      </text>
+    </svg>
+  );
+}
+
+function KeyNamesIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
+      <rect
+        x="4.5" y="4.5" width="15" height="15" rx="3.5"
+        fill="none" stroke="currentColor" strokeWidth="1.6"
+      />
+      <text
+        x="12" y="16.2" textAnchor="middle"
+        fontSize="10.5" fontWeight="700" fill="currentColor"
+        fontFamily="inherit"
+      >
+        A
+      </text>
+    </svg>
+  );
+}
+
+function SpeakerOnIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
+      <path d="M4 9.5h3.1L12 5.6v12.8L7.1 14.5H4z" fill="currentColor" />
+      <path
+        d="M15.4 9.4a3.7 3.7 0 0 1 0 5.2M17.9 6.9a7.2 7.2 0 0 1 0 10.2"
+        fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function SpeakerOffIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
+      <path d="M4 9.5h3.1L12 5.6v12.8L7.1 14.5H4z" fill="currentColor" />
+      <path
+        d="M15.6 9.8l4.6 4.6M20.2 9.8l-4.6 4.6"
+        fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function PauseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true">
+      <rect x="7" y="5" width="3.6" height="14" rx="1.2" />
+      <rect x="13.4" y="5" width="3.6" height="14" rx="1.2" />
+    </svg>
+  );
+}
+
+/** Three dots: the universal "more" glyph, for the options disclosure that
+ * only appears once a narrow viewport can't fit the full transport. */
+function MoreIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true">
+      <circle cx="5" cy="12" r="1.9" />
+      <circle cx="12" cy="12" r="1.9" />
+      <circle cx="19" cy="12" r="1.9" />
+    </svg>
+  );
+}
+
+/** How many printed lines (systems) a non-subscriber can play before playback
+ * stops and the subscribe prompt appears. Lines rather than measures because
+ * that is the unit someone reading the sheet actually sees. The same on every
+ * try: the free plan plays the first two lines of a sheet, as the plans page
+ * says. */
+const FREE_LINES = 2;
+
+/** The score's beat unit in the page's language, and the BPM box's label. */
+function tempoLabel(t: Messages["play"], quarters: number) {
+  const named = t.units[String(quarters)];
+  const unit = named ?? fmt(t.unitQuarters, { count: quarters });
+  return { unit, perMinute: fmt(named ? t.baseTempo : t.baseTempoPlain, { unit }) };
+}
+
+export function PlayView() {
+  const router = useRouter();
+  const jobId = useSearchParams().get("job");
+  const { subscription, loading } = useSubscription();
+  const { m, path } = useI18n();
+  if (loading) return <PageLoading text={m.common.loadingSubscription} />;
+  const isPremium = subscription?.tier === "premium";
+  // The gate shows the upload while its note names are still being added,
+  // and swaps the player in once they're ready.
+  return jobId
+    ? <PracticeGate jobId={jobId}><Player jobId={jobId} isPremium={isPremium} /></PracticeGate>
+    : <SheetPicker onPick={(id) => router.push(path(`/play?job=${id}`))} />;
+}
+
+/** Landing state: which of your annotated sheets do you want to play? */
+function SheetPicker({ onPick }: { onPick: (jobId: string) => void }) {
+  const [jobs, setJobs] = useState<AnnotationJob[] | null>(null);
+  const { m, tag, path } = useI18n();
+
+  useEffect(() => {
+    clientApiFetch("/api/sheets")
+      .then((res) => (res.ok ? res.json() : []))
+      .then((all: AnnotationJob[]) => setJobs(all.filter((j) => j.status === "done")))
+      .catch(() => setJobs([]));
+  }, []);
+
+  return (
+    <div className="wrap medium history-page">
+      <div className="page-title-row">
+        <BackButton />
+        <h1 className="serif">{m.play.practice}</h1>
+      </div>
+      <div className="sub" style={{ marginBottom: 30 }}>{m.play.pickerSub}</div>
+      {jobs === null ? (
+        <p style={{ color: "var(--ink-soft)" }}>{m.common.loading}</p>
+      ) : jobs.length === 0 ? (
+        <div className="history-empty">
+          {rich(m.play.noSheets, {
+            upload: (text) => <Link href={path("/upload")} style={{ color: "var(--accent)" }}>{text}</Link>,
+          })}
+        </div>
+      ) : (
+        <div>
+          {jobs.map((job) => (
+            <button
+              key={job.job_id}
+              className="history-row"
+              title={fmt(m.play.practiceNamed, { name: job.sheet_name || m.common.thisSheet })}
+              onClick={() => onPick(job.job_id)}
+            >
+              <div className="history-icon">🎹</div>
+              <div className="history-info">
+                <div className="history-title">{job.sheet_name}</div>
+                <div className="history-meta">{new Date(job.created_at * 1000).toLocaleString(tag)}</div>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Not part of the sheets fetch above - it's the bundled sample, not
+          user content, so it always renders after whatever that returned
+          (or alone, once loaded, if there was nothing). */}
+      {jobs !== null && <DemoSampleCard />}
+
+      {/* Same floating button as the Library: a sheet has to be annotated
+          before it can be practised, so the way to add one belongs on the
+          page that tells you there is nothing to play yet. */}
+      <Link href={path("/upload")} className="upload-fab" title={m.common.uploadASheet} aria-label={m.common.uploadASheet}>
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 5v14M5 12h14" />
+        </svg>
+        {m.common.upload}
+      </Link>
+    </div>
+  );
+}
+
+/** Turn a wanted sheet height into the sheet's share of the space the two
+ * panels divide, keeping each one big enough to show its header and a usable
+ * sliver of content. Without the floor, one drag to the edge would hide a
+ * panel with no obvious way to bring it back. */
+function clampSplit(wantedSheetPx: number, totalPx: number) {
+  const min = Math.min(96, totalPx / 2);
+  return Math.max(min, Math.min(wantedSheetPx, totalPx - min)) / totalPx;
+}
+
+/** What is sounding at a beat, straight from the timeline. Mirrors
+ * Playback.notesAt for the case where nothing has been played yet and so no
+ * audio graph exists to ask - scrubbing has to work before the first play. */
+function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
+  // The bundled demo sheet plays in full for everyone, subscribed or not -
+  // that's the point of it (see app/demo-sample-card.tsx and server.py's
+  // read carve-out for the same job id).
+  const isDemo = jobId === DEMO_JOB_ID;
+  const unlimited = isPremium || isDemo;
+  const { m, path } = useI18n();
+  const t = m.play;
+  // Read by the loaders below, which run once per sheet rather than again
+  // whenever the messages object changes identity.
+  const tRef = useRef(t);
+  useEffect(() => { tRef.current = t; });
+
+  const [timeline, setTimeline] = useState<Timeline | null>(null);
+  const [baseBpm, setBaseBpm] = useState<number | null>(null);
+  const [pdfData, setPdfData] = useState<ArrayBuffer | null>(null);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+  // The uploaded copy, fetched only if the visitor asks for it - most never
+  // do, and it is a second PDF over the wire.
+  // The practice page's settings are the reader's own, the same on every
+  // sheet and, signed in, on every device (lib/preferences.ts).
+  const [savedView, setSavedView] = usePreference("sheet_view", "annotated");
+  const [originalData, setOriginalData] = useState<ArrayBuffer | null>(null);
+  const [originalBlocked, setOriginalBlocked] = useState<string | null>(null);
+  // Shown with the names while the original can't be, without changing the
+  // reader's choice for the next sheet.
+  const variant: SheetVariant = originalBlocked ? "annotated" : savedView;
+  // The reader's own changes (lib/edits.ts), made in the sheet preview:
+  // retyped names correct playback, and the names and marks are drawn over
+  // the original here too. `overlayReady` holds the sheet back until it is
+  // known which copy to show, rather than flashing the annotated one first.
+  const [sheetEdits, setSheetEdits] = useState<SheetEdits>(EMPTY_EDITS);
+  const [labelSet, setLabelSet] = useState<LabelSet | null>(null);
+  const [overlayReady, setOverlayReady] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const [playing, setPlaying] = useState(false);
+  // Full speed by default; the slider still goes down to 0.1x for picking a
+  // passage apart.
+  const [speed, setSpeed] = usePreference("speed", 1);
+  // What the speed slider actually achieves, after tempoClock's own
+  // MAX_EFFECTIVE_BPM clamp - can read lower than `speed` when a BPM
+  // override near the ceiling leaves no headroom for it. Falls back to the
+  // raw request before the timeline has loaded, when there's nothing to
+  // clamp against yet.
+  const effectiveSpeed = useMemo(
+    () => (timeline ? tempoClock(timeline, speed, baseBpm).rate : speed),
+    [timeline, speed, baseBpm],
+  );
+  const [showKeyNames, setShowKeyNames] = usePreference("show_key_names", false);
+  const [showNoteNames, setShowNoteNames] = usePreference("show_note_names", true);
+  const [soundOn, setSoundOn] = usePreference("sound_on", true);
+  const [savedInstrument, setSavedInstrument] = usePreference("instrument", "grand");
+  // Stands in for the chosen instrument while it can't be loaded, without
+  // changing the choice: the next sheet tries the reader's own again.
+  const [instrumentFallback, setInstrumentFallback] = useState<InstrumentId | null>(null);
+  const instrument: InstrumentId = instrumentFallback
+    ?? (isInstrumentId(savedInstrument) ? savedInstrument : "grand");
+  const [audioLoading, setAudioLoading] = useState(false);
+  const [audioError, setAudioError] = useState("");
+  const audioRequest = useRef(0);
+  const [activeNotes, setActiveNotes] = useState<TimelineNote[]>([]);
+  const [beat, setBeat] = useState(0);
+  // A ref, not state: the progress callback is created once and must see the
+  // current value without being rebuilt on every drag.
+  const scrubbingRef = useRef(false);
+  /** The measure sounding right now, from the playback clock. */
+  const [playingMeasure, setPlayingMeasure] = useState<number | null>(null);
+
+  const ctxRef = useRef<AudioContext | null>(null);
+  const synthRef = useRef<SynthEngine | null>(null);
+  const playbackRef = useRef<Playback | null>(null);
+  /** Set when the current run is a non-subscriber's preview, so reaching the
+   * end pops the subscribe prompt rather than just stopping. */
+  const previewRef = useRef(false);
+
+  /** Whether the subscribe prompt is open right now. */
+  const [subscribePromptOpen, setSubscribePromptOpen] = useState(false);
+  const openSubscribePrompt = useCallback(() => setSubscribePromptOpen(true), []);
+  const closeSubscribePrompt = useCallback(() => setSubscribePromptOpen(false), []);
+
+  /** Index of the first measure past the free lines, or null when a visitor
+   * can play everything.
+   *
+   * A "line" is a printed system. Measures on one carry the same page and the
+   * same vertical extent, so grouping on that recovers the lines without the
+   * backend having to label them. */
+  const lockedFrom = useMemo(() => {
+    if (unlimited || !timeline) return null;
+    const seen: string[] = [];
+    for (const m of timeline.measures) {
+      if (!m.bbox_pt || m.page === null) continue;
+      const line = `${m.page}:${Math.round(m.bbox_pt[1])}`;
+      if (!seen.includes(line)) {
+        seen.push(line);
+        if (seen.length > FREE_LINES) return m.index;
+      }
+    }
+    return null;
+  }, [unlimited, timeline]);
+
+  /** A non-subscriber can play up to here and no further. */
+  const freeEndBeat = useMemo(() => {
+    if (!timeline) return 0;
+    if (lockedFrom === null) return timeline.total_beats;
+    const m = timeline.measures.find((x) => x.index === lockedFrom);
+    return m ? m.start_beat : timeline.total_beats;
+  }, [timeline, lockedFrom]);
+
+  const playableMeasureCount = useMemo(
+    () => (timeline ? timeline.measures.filter((m) => m.length_beats > 0).length : 0),
+    [timeline],
+  );
+
+  // Names as letters or as jianpu numbers, 1 = C (lib/notation.ts).
+  const [notation, setNotation] = useNotation(labelSet?.notation);
+
+  const isLocked = useCallback(
+    (index: number) => lockedFrom !== null && index >= lockedFrom,
+    [lockedFrom],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const tlRes = await fetchSheetFile(jobId, "timeline");
+        if (tlRes.status === 404) throw new Error(tRef.current.unavailable);
+        if (!tlRes.ok) throw new Error(`couldn't load playback data (${tlRes.status})`);
+        const tl = await tlRes.json();
+        if (cancelled) return;
+        let saved: Corrections = {};
+        try {
+          const { doc } = await fetchEdits(jobId);
+          if (cancelled) return;
+          setSheetEdits(doc);
+          saved = doc.corrections;
+        } catch (err) {
+          // Playback still works without them; fall back to corrections kept
+          // in this browser before edits were saved on the server.
+          console.error("Loading saved edits failed:", err);
+          try {
+            const raw = JSON.parse(localStorage.getItem(`sheet-corrections:${jobId}`) ?? "{}");
+            saved = Object.fromEntries(Object.entries(raw).filter(([, value]) => validCorrection(value))) as Corrections;
+          } catch { /* Browser storage may be unavailable. */ }
+        }
+        setTimeline(applyCorrections(tl, saved));
+      } catch (err) {
+        console.error("Loading the sheet for playback failed:", err);
+        if (!cancelled) setError(tRef.current.openFailed);
+      }
+    })();
+
+    // The sheet is a visual aid. Playback is driven entirely by the timeline
+    // and remains usable when the preview request or renderer fails.
+    void (async () => {
+      let pdf: ArrayBuffer | null = null;
+      try {
+        const pdfRes = await fetchSheetFile(jobId, "pdf");
+        if (!pdfRes.ok) throw new Error(`request failed (${pdfRes.status})`);
+        pdf = await pdfRes.arrayBuffer();
+        if (!cancelled) setPdfData(pdf);
+      } catch (err) {
+        // Read as a flag only - playback carries on without the preview.
+        console.error("Loading the sheet preview failed:", err);
+        if (!cancelled) setPdfError("unavailable");
+      }
+
+      // Whether the uploaded copy can be shown at all. Play draws through
+      // pdf.js, so a photo upload is ruled out here rather than failing later
+      // with a broken viewer.
+      let originalUsable = false;
+      try {
+        const assets = await fetchSheetAssets(jobId);
+        if (cancelled) return;
+        if (assets && "original" in assets && !assets.original) {
+          setOriginalBlocked(tRef.current.originalNotStored);
+        } else if (assets?.original_type && assets.original_type !== "application/pdf") {
+          setOriginalBlocked(tRef.current.photoUpload);
+        } else {
+          originalUsable = !!assets;
+        }
+      } catch {
+        // Leave it offered; the fetch below reports a real failure.
+      }
+
+      // With the original and the names as data, the names are drawn over
+      // the original - so moved and retyped ones show here as they do in
+      // the preview. Otherwise the annotated copy is shown as it was made.
+      if (originalUsable) {
+        try {
+          const res = await fetchSheetFile(jobId, "original");
+          const buffer = res.ok ? await res.arrayBuffer() : null;
+          const header = buffer && new TextDecoder().decode(new Uint8Array(buffer.slice(0, 5)));
+          if (buffer && header === "%PDF-") {
+            const labels = await loadLabels(jobId, pdf, null);
+            if (cancelled) return;
+            setOriginalData(buffer);
+            setLabelSet(labels);
+          }
+        } catch (err) {
+          console.error("Loading the note names failed; showing the annotated copy:", err);
+        }
+      }
+      if (!cancelled) setOverlayReady(true);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [jobId]);
+
+  // Fetched on first request and kept, so switching back and forth is free.
+  useEffect(() => {
+    if (variant !== "original" || originalData || originalBlocked) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetchSheetFile(jobId, "original");
+        if (!res.ok) throw new Error(`request failed (${res.status})`);
+        const buffer = await res.arrayBuffer();
+        // pdf.js would fail obscurely on anything else; say so plainly and
+        // fall back rather than leaving an empty panel.
+        const header = new TextDecoder().decode(new Uint8Array(buffer.slice(0, 5)));
+        if (header !== "%PDF-") throw new Error("not a PDF");
+        if (!cancelled) setOriginalData(buffer);
+      } catch (err) {
+        console.error("Loading the original sheet failed:", err);
+        if (!cancelled) setOriginalBlocked(tRef.current.originalFailed);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [jobId, variant, originalData, originalBlocked]);
+
+  // Tear down audio and timers on unmount - otherwise an AudioContext and a
+  // rAF loop keep running after navigating away.
+  useEffect(() => {
+    const request = audioRequest;
+    return () => {
+      playbackRef.current?.dispose();
+      request.current++;
+      synthRef.current?.dispose();
+      ctxRef.current?.close().catch(() => {});
+      playbackRef.current = null;
+      synthRef.current = null;
+      ctxRef.current = null;
+    };
+  }, []);
+
+  /** Lazily build the audio graph. Must happen inside a click: browsers only
+   * let an AudioContext start from a user gesture. */
+  const ensurePlayback = useCallback(
+    async (tl: Timeline, chosen: InstrumentId = instrument) => {
+      const request = ++audioRequest.current;
+      if (!ctxRef.current) {
+        const Ctor =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        ctxRef.current = new Ctor();
+        synthRef.current = new SynthEngine(ctxRef.current);
+        synthRef.current.setMuted(!soundOn);
+        // Best-effort: ask the browser not to evict the cached sample files
+        // under storage pressure. Unsupported (e.g. Safari) or refused is fine.
+        navigator.storage?.persist?.().catch(() => {});
+      }
+      ctxRef.current.resume().catch(() => {});
+      setAudioError("");
+      setAudioLoading(true);
+      if (synthRef.current!.instrumentId !== chosen) {
+        playbackRef.current?.pause();
+        setPlaying(false);
+      }
+      try {
+        await synthRef.current!.load(chosen, [...tl.notes, ...(tl.audio_notes ?? [])].map((n) => n.midi));
+      } catch {
+        if (request !== audioRequest.current) return null;
+        // The sampled instruments need a network fetch; the basic synth is
+        // pure oscillators and always available. Fall back rather than
+        // leaving playback broken because of a flaky connection.
+        if (chosen === "basic") {
+          setAudioError(tRef.current.synthFailed);
+          setAudioLoading(false);
+          return null;
+        }
+        try {
+          await synthRef.current!.load("basic", []);
+        } catch {
+          setAudioError(tRef.current.instrumentFailed);
+          setAudioLoading(false);
+          return null;
+        }
+        if (request !== audioRequest.current || !ctxRef.current) return null;
+        setInstrumentFallback("basic");
+        setAudioError(fmt(tRef.current.instrumentFallback, {
+          name: tRef.current.instruments[chosen] ?? tRef.current.selectedInstrument,
+        }));
+      }
+      if (request !== audioRequest.current || !ctxRef.current) return null;
+      setAudioLoading(false);
+      if (!playbackRef.current) {
+        playbackRef.current = new Playback(tl, synthRef.current!, ctxRef.current, {
+          onHighlight: setActiveNotes,
+          onProgress: (b) => {
+            // Ignore the clock while the thumb is held, or it fights the drag.
+            if (!scrubbingRef.current) setBeat(b);
+          },
+          onMeasure: setPlayingMeasure,
+          onEnded: () => {
+            setPlaying(false);
+            // Reaching the end of the preview is the natural moment to ask.
+            if (previewRef.current) {
+              previewRef.current = false;
+              openSubscribePrompt();
+            }
+          },
+        });
+      }
+      playbackRef.current.setTempo(baseBpm);
+      return playbackRef.current;
+    },
+    [openSubscribePrompt, soundOn, baseBpm, instrument],
+  );
+
+  // Warm the sampler as soon as the sheet and instrument choice are known,
+  // so pressing Play doesn't wait on a fetch+decode that could already have
+  // happened while the page was just sitting there. Only sound *output*
+  // needs a user gesture (see ensurePlayback's docstring); decoding doesn't.
+  // Read through a ref so a tempo/mute change (which also changes
+  // ensurePlayback's identity) doesn't retrigger this and flash the loading
+  // hint - only an actual sheet or instrument change should.
+  const ensurePlaybackRef = useRef(ensurePlayback);
+  useEffect(() => { ensurePlaybackRef.current = ensurePlayback; }, [ensurePlayback]);
+  useEffect(() => {
+    if (timeline) void ensurePlaybackRef.current(timeline, instrument);
+  }, [timeline, instrument]);
+
+  // Applies mid-playback too, not just at the next press.
+  useEffect(() => {
+    synthRef.current?.setMuted(!soundOn);
+  }, [soundOn]);
+
+  const playWholePiece = useCallback(
+    async (fromBeat?: number) => {
+      if (!timeline) return;
+      const pb = await ensurePlayback(timeline);
+      if (!pb) return;
+      // Bound the window rather than stopping once it overruns: notes past
+      // the limit are then never scheduled, so nothing audible leaks out.
+      previewRef.current = !unlimited;
+      pb.play(speed, {
+        ...(fromBeat === undefined ? {} : { fromBeat }),
+        ...(unlimited ? {} : { untilBeat: freeEndBeat }),
+      });
+      setPlaying(true);
+    },
+    [timeline, ensurePlayback, speed, unlimited, freeEndBeat],
+  );
+
+  /** Jump to a measure and carry on from there. */
+  const playFromMeasure = useCallback(
+    (index: number) => {
+      if (!timeline) return;
+      const m = timeline.measures[index];
+      if (!m || m.length_beats <= 0) return;
+      if (isLocked(index)) {
+        openSubscribePrompt();
+        return;
+      }
+      playWholePiece(m.start_beat);
+    },
+    [timeline, isLocked, openSubscribePrompt, playWholePiece],
+  );
+
+  const handlePlayPause = useCallback(() => {
+    if (!timeline) return;
+    if (audioLoading) {
+      audioRequest.current++;
+      setAudioLoading(false);
+      return;
+    }
+    if (playbackRef.current?.isPlaying) {
+      playbackRef.current.pause();
+      setPlaying(false);
+      return;
+    }
+    // No argument: playback picks up from the beat it was paused at, rather
+    // than restarting the measure that was underway.
+    playWholePiece();
+  }, [timeline, playWholePiece, audioLoading]);
+
+  const [sheetOpen, setSheetOpen] = usePreference("sheet_open", true);
+  const [rollOpen, setRollOpen] = usePreference("roll_open", true);
+  /** Only consulted on a narrow viewport - see the .play-options CSS, which
+   * shows that group unconditionally once the window is wide enough to fit
+   * it inline. */
+  const [optionsOpen, setOptionsOpen] = useState(false);
+
+  /** How the space the controls and keyboard leave over is divided between the
+   * sheet and the roll: the sheet's share, 0 to 1. Storing a ratio rather than
+   * a pixel height means the division survives a window resize or a phone
+   * turning sideways, instead of pinning one panel and letting the other take
+   * the damage. */
+  const [split, setSplit] = usePreference("split", 0.5);
+  const sheetRef = useRef<HTMLElement | null>(null);
+  const rollRef = useRef<HTMLElement | null>(null);
+  const dragRef = useRef<{ startY: number; sheetPx: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
+
+  /** Both panels as they are on screen right now. The drag works in pixels so
+   * the separator stays under the pointer, and converts back to a ratio only
+   * once it has a number. */
+  const panelHeights = useCallback(() => {
+    const sheetPx = sheetRef.current?.getBoundingClientRect().height ?? 0;
+    const rollPx = rollRef.current?.getBoundingClientRect().height ?? 0;
+    return { sheetPx, totalPx: sheetPx + rollPx };
+  }, []);
+
+  const startDrag = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    dragRef.current = { startY: e.clientY, sheetPx: panelHeights().sheetPx };
+    setDragging(true);
+    // Capture, so a fast drag that outruns the 14px strip keeps resizing
+    // instead of dropping the gesture over whatever it passed.
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }, [panelHeights]);
+
+  const onDrag = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    // Measured fresh: the total is fixed during a drag, but reading it here
+    // keeps the maths right if a scrollbar or hint line appears mid-gesture.
+    const { totalPx } = panelHeights();
+    if (totalPx <= 0) return;
+    setSplit(clampSplit(drag.sheetPx + (e.clientY - drag.startY), totalPx));
+  }, [panelHeights, setSplit]);
+
+  const endDrag = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    dragRef.current = null;
+    setDragging(false);
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  }, []);
+
+  /** Arrow keys move the boundary as well, so the split is reachable without a
+   * pointer - and on a trackpad where a 14px target is a fiddly grab. */
+  const nudgeSplit = useCallback((deltaPx: number) => {
+    const { sheetPx, totalPx } = panelHeights();
+    if (totalPx > 0) setSplit(clampSplit(sheetPx + deltaPx, totalPx));
+  }, [panelHeights, setSplit]);
+
+  /** Whether a step has placed the playhead yet - see step(). */
+  const steppedRef = useRef(false);
+
+  // The roll reads the position every animation frame, so it can't go through
+  // React state - and a plain closure over `beat` would go stale. A ref keeps
+  // one stable callback pointing at the current value.
+  const beatRef = useRef(beat);
+  useEffect(() => {
+    beatRef.current = beat;
+  }, [beat]);
+  /** Live position for the roll: the audio clock while playing, and the
+   * paused/scrubbed position otherwise (Playback.seek keeps that current).
+   * leadBeat, not currentBeat: during the count-in at the start of the piece
+   * it keeps counting up from below zero instead of pinning at it, which is
+   * what lets the first notes fall into place rather than appearing already
+   * at the keys. Nothing else reads leadBeat - the sheet, keyboard and
+   * scrubber all come from Playback's onProgress/onHighlight/onMeasure
+   * callbacks instead, which correctly report nothing until the count-in
+   * ends and the piece actually starts sounding.
+   *
+   * Before the very first Play/Step press, though, no Playback exists yet
+   * to run that count-in at all - so without this, the roll would just
+   * render its static beat-0..4 window the instant the page loads, notes
+   * already sitting there having never fallen. Reporting -Infinity for that
+   * one pristine moment keeps it empty until something real has happened.
+   * Scoped to `playbackRef.current === null` rather than "paused at 0", so
+   * stepping back to the first note later still shows it - that object is
+   * created (see ensurePlayback) the first time Play or a step is pressed,
+   * and stays alive for the rest of the session from then on. */
+  const getBeat = useCallback(() => {
+    const pb = playbackRef.current;
+    if (!pb) return beatRef.current <= 1e-9 ? Number.NEGATIVE_INFINITY : beatRef.current;
+    return pb.leadBeat;
+  }, []);
+
+  /** Every distinct onset in the piece, in order - the stops the step buttons
+   * walk between. Onsets rather than metrical beats: what you want to land
+   * on is the next thing that is actually struck, which in a run of 16ths is
+   * four times a beat and during a held chord is not on the next beat at all. */
+  const onsetBeats = useMemo(() => {
+    if (!timeline) return [];
+    return [...new Set(timeline.notes.map((n) => n.start_beat))].sort((a, b) => a - b);
+  }, [timeline]);
+
+  /** Move one onset and stop there. Nothing runs on afterwards - this is for
+   * walking a passage a note at a time. */
+  const step = useCallback(async (direction: 1 | -1) => {
+    if (!timeline) return;
+    // Must happen inside the click: this may be the first gesture on the
+    // page, and the AudioContext can only start from one.
+    const pb = await ensurePlayback(timeline);
+    if (!pb) return;
+    // Stepping is a deliberate stop-and-look, so a running playback gives way
+    // rather than the two fighting over the position.
+    if (pb.isPlaying) {
+      pb.pause();
+      setPlaying(false);
+    }
+
+    let next: number | undefined;
+    if (direction > 0) {
+      // The first press lands *on* the opening onset instead of past it: the
+      // playhead starts at beat 0 and so does the first note, so "the next
+      // onset after here" would skip it. Wraps to the start once past the
+      // last onset, so the button never goes dead.
+      next =
+        !steppedRef.current && beat <= (onsetBeats[0] ?? 0) + 1e-6
+          ? onsetBeats[0]
+          : onsetBeats.find((b) => b > beat + 1e-6) ?? onsetBeats[0];
+    } else {
+      // Strictly before the current position, so pausing part-way through a
+      // note steps back to the onset you are inside rather than past it to
+      // the one before. Clamps at the first onset instead of wrapping round
+      // to the end - back at the start of a piece is a mis-click far more
+      // often than it is a request to jump to the last bar.
+      for (let i = onsetBeats.length - 1; i >= 0; i--) {
+        if (onsetBeats[i] < beat - 1e-6) {
+          next = onsetBeats[i];
+          break;
+        }
+      }
+      next = next ?? onsetBeats[0];
+    }
+    if (next === undefined) return;
+    steppedRef.current = true;
+
+    const measure = measureIndexAt(timeline, next);
+    if (measure !== null && isLocked(measure)) {
+      openSubscribePrompt();
+      return;
+    }
+
+    // seek() sets the paused position and pushes the highlight/measure for
+    // it, so a later Play carries on from where the stepping left off.
+    pb.seek(next);
+
+    const synth = synthRef.current;
+    const ctx = ctxRef.current;
+    if (synth && ctx) {
+      // Only what is *struck* here sounds. Notes still ringing from an
+      // earlier onset stay lit on the keyboard but aren't re-hammered.
+      const struck = timeline.notes.filter((n) => n.attack !== false && Math.abs(n.start_beat - next) < 1e-6);
+      const clock = tempoClock(timeline, speed, baseBpm);
+      const at = ctx.currentTime + 0.02;
+      synth.allOff(); // stepping quickly shouldn't pile voices up
+      for (const n of struck) {
+        const beats = n.key_duration_beats ?? n.duration_beats;
+        // Capped: a whole note held for its full written length just drones
+        // while you're reading the next one.
+        const seconds = beats > 0 ? Math.min(1.5, clock.secondsAt(n.start_beat + beats) - clock.secondsAt(n.start_beat)) : GRACE_SECONDS;
+        synth.noteOn(n.midi, at, at + Math.max(.02, seconds), n.velocity);
+      }
+    }
+  }, [timeline, ensurePlayback, onsetBeats, beat, isLocked, openSubscribePrompt, speed, baseBpm]);
+
+  const handleStepBack = useCallback(() => step(-1), [step]);
+  const handleStepForward = useCallback(() => step(1), [step]);
+
+  /** Drag the playhead. Locked regions clamp back to the free part and pop
+   * the subscribe prompt, so scrubbing can't be used to walk past the preview. */
+  const handleScrub = useCallback(
+    (value: number) => {
+      if (!timeline) return;
+      let target = value;
+      if (lockedFrom !== null && target >= freeEndBeat) {
+        target = Math.max(0, freeEndBeat - 0.001);
+        setBeat(target);
+        if (playbackRef.current) playbackRef.current.seek(target);
+        else {
+          setActiveNotes(notesAtBeat(timeline, target));
+          setPlayingMeasure(measureIndexAt(timeline, target));
+        }
+        openSubscribePrompt();
+        return;
+      }
+      setBeat(target);
+      const pb = playbackRef.current;
+      if (pb) {
+        pb.seek(target);
+      } else {
+        setActiveNotes(notesAtBeat(timeline, target));
+        setPlayingMeasure(measureIndexAt(timeline, target));
+      }
+    },
+    [timeline, lockedFrom, freeEndBeat, openSubscribePrompt],
+  );
+
+  const handleMeasureClick = useCallback(
+    (index: number) => playFromMeasure(index),
+    [playFromMeasure],
+  );
+
+  if (error) {
+    return (
+      <div className="wrap" style={{ textAlign: "center" }}>
+        <div className="page-title-row" style={{ justifyContent: "center" }}>
+          <BackButton />
+          <p style={{ color: "var(--danger)", margin: 0 }}>{error}</p>
+        </div>
+        <Link href={path("/play")} style={{ marginTop: 20, display: "inline-block", color: "var(--accent)" }}>
+          {t.pickAnother}
+        </Link>
+      </div>
+    );
+  }
+  if (!timeline) {
+    return <PageLoading />;
+  }
+
+  // Null while the original is still on its way, which renders the same
+  // "Loading the sheet preview" hint the annotated copy uses - rather than
+  // leaving the annotated pages up under a toggle that says Original.
+  const labelsLive = !!labelSet && !!originalData;
+  const shownPdf = variant === "original" ? originalData
+    : !overlayReady ? null : labelsLive ? originalData : pdfData;
+
+  return (
+    <div className="play-view">
+      <BackButton />
+      <Panel
+        title={t.sheet}
+        nodeRef={sheetRef}
+        open={sheetOpen}
+        onToggle={() => setSheetOpen(!sheetOpen)}
+        grow={rollOpen ? split : 1}
+        actions={
+          <div className="play-panel-toggles">
+            {((labelsLive && variant === "annotated") || showKeyNames || showNoteNames) && <NotationToggle value={notation} onChange={setNotation} />}
+            <SheetToggle value={variant} onChange={setSavedView} unavailable={originalBlocked} />
+          </div>
+        }
+      >
+        {shownPdf ? (
+          <SheetCanvas
+            pdfData={shownPdf}
+            measures={timeline.measures}
+            playingIndex={playingMeasure}
+            lockedFromIndex={lockedFrom}
+            notes={timeline.notes}
+            beat={beat}
+            onMeasureClick={handleMeasureClick}
+            overlay={(page) => (
+              // On the Original view: the reader's own marks, without names.
+              <AnnotationLayer
+                page={page}
+                labels={labelsLive && variant === "annotated" ? labelSet!.items.filter((l) => l.page === page.pageNumber) : []}
+                labelColor={labelSet?.color ?? "#000000"}
+                showLabels={labelsLive && variant === "annotated"}
+                notation={notation}
+                edits={sheetEdits}
+              />
+            )}
+          />
+        ) : (
+          <p className="play-hint">
+            {pdfError ? t.previewUnavailable : t.loadingPreview}
+          </p>
+        )}
+      </Panel>
+
+      {/* Only meaningful with both panels open: collapse either one and a
+          single panel takes the space, leaving no boundary to move. */}
+      {sheetOpen && rollOpen && (
+        <div
+          className={`play-split${dragging ? " dragging" : ""}`}
+          role="separator"
+          tabIndex={0}
+          aria-label={t.resizePanels}
+          aria-orientation="horizontal"
+          aria-valuenow={Math.round(split * 100)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          onPointerDown={startDrag}
+          onPointerMove={onDrag}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+          onDoubleClick={() => setSplit(0.5)}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowUp") { e.preventDefault(); nudgeSplit(-24); }
+            else if (e.key === "ArrowDown") { e.preventDefault(); nudgeSplit(24); }
+            else if (e.key === "Home") { e.preventDefault(); setSplit(0.5); }
+          }}
+        />
+      )}
+
+      <div className="play-scrub">
+        <input
+          type="range"
+          min={0}
+          max={Math.max(1, timeline.total_beats)}
+          step={0.05}
+          value={Math.max(0, Math.min(beat, timeline.total_beats))}
+          aria-label={t.position}
+          // While the pointer is down the input owns the value; letting the
+          // playback clock write back mid-drag would fight the thumb.
+          onPointerDown={() => { scrubbingRef.current = true; }}
+          onPointerUp={() => { scrubbingRef.current = false; }}
+          onPointerCancel={() => { scrubbingRef.current = false; }}
+          onChange={(e) => handleScrub(Number(e.target.value))}
+        />
+        <span className="play-time">
+          {/* A printed measure label plus performed occurrence count. Repeats
+              can make the two differ, which is useful information. */}
+          {fmt(t.measure, {
+            label: timeline.measures[measureIndexAt(timeline, beat) ?? 0]?.label ?? "",
+            index: Math.min((measureIndexAt(timeline, beat) ?? 0) + 1, playableMeasureCount),
+            count: playableMeasureCount,
+          })}
+        </span>
+      </div>
+
+      <div className="play-transport">
+        <button
+          className="btn-pill icon"
+          onClick={handlePlayPause}
+          title={audioLoading ? t.cancelLoading : playing ? t.pause : t.play}
+          aria-label={audioLoading ? t.cancelLoading : playing ? t.pause : t.play}
+        >
+          {playing || audioLoading ? <PauseIcon /> : <PlayIcon />}
+        </button>
+        <button
+          className="btn-pill icon"
+          onClick={handleStepBack}
+          title={t.previousNote}
+          aria-label={t.previousNoteLabel}
+        >
+          <StepBackIcon />
+        </button>
+        <button
+          className="btn-pill icon"
+          onClick={handleStepForward}
+          title={t.nextNote}
+          aria-label={t.nextNoteLabel}
+        >
+          <StepForwardIcon />
+        </button>
+
+        {/* Only shown once .play-options can no longer fit inline - see the
+            CSS. On a wide window that group is already visible, so this
+            button would toggle nothing and stays hidden. */}
+        <button
+          type="button"
+          className="icon-toggle play-options-toggle"
+          aria-expanded={optionsOpen}
+          aria-controls="play-options"
+          title={optionsOpen ? t.hideOptions : t.moreOptions}
+          aria-label={optionsOpen ? t.hideOptions : t.moreOptions}
+          onClick={() => setOptionsOpen((v) => !v)}
+        >
+          <MoreIcon />
+        </button>
+
+        <div id="play-options" className={`play-options${optionsOpen ? " open" : ""}`}>
+          <label className="play-speed">
+            {t.speed}
+            <input
+              type="range"
+              min={0.1}
+              max={2}
+              step={0.1}
+              value={speed}
+              onChange={(e) => {
+                const value = Number(e.target.value);
+                setSpeed(value);
+                playbackRef.current?.setSpeed(value);
+              }}
+            />
+            {/* The true rate, not just an echo of the slider - a BPM override
+                near the ceiling can pull this below what's requested (see
+                MAX_EFFECTIVE_BPM in tempo.ts), and showing "2.0x" while it's
+                actually playing at 1.0x would read as broken, not capped. */}
+            <span title={effectiveSpeed < speed - 1e-6 ? fmt(t.speedCapped, { speed: speed.toFixed(1) }) : undefined}>
+              {effectiveSpeed.toFixed(1)}x
+            </span>
+          </label>
+          <button
+            type="button"
+            className={`icon-toggle${showKeyNames ? " on" : ""}`}
+            aria-pressed={showKeyNames}
+            title={showKeyNames ? t.hideKeyNames : t.showKeyNames}
+            aria-label={showKeyNames ? t.hideKeyNames : t.showKeyNames}
+            onClick={() => setShowKeyNames(!showKeyNames)}
+          >
+            <KeyNamesIcon />
+          </button>
+          <button
+            type="button"
+            className={`icon-toggle${showNoteNames ? " on" : ""}`}
+            aria-pressed={showNoteNames}
+            title={showNoteNames ? t.hideNoteNames : t.showNoteNames}
+            aria-label={showNoteNames ? t.hideNoteNames : t.showNoteNames}
+            onClick={() => setShowNoteNames(!showNoteNames)}
+          >
+            <NoteNamesIcon />
+          </button>
+
+          <button
+            type="button"
+            className={`icon-toggle${soundOn ? " on" : ""}`}
+            aria-pressed={soundOn}
+            title={soundOn ? t.mute : t.unmute}
+            aria-label={soundOn ? t.mute : t.unmute}
+            onClick={() => setSoundOn(!soundOn)}
+          >
+            {/* The glyph itself carries the state, so it stays readable even
+                where the pressed styling is subtle. */}
+            {soundOn ? <SpeakerOnIcon /> : <SpeakerOffIcon />}
+          </button>
+
+          <label className="play-speed">
+            {t.bpm}
+            <input
+              type="number"
+              min={20}
+              max={300}
+              className="play-tempo-input"
+              value={tempoControl(timeline, baseBpm).bpm}
+              aria-label={tempoLabel(t, tempoControl(timeline).quarters).perMinute}
+              // The score/assumed distinction still matters - it just doesn't need
+              // to live in the label text anymore, so it's a hover title instead.
+              title={
+                timeline.tempo_source === "score"
+                  ? fmt(t.tempoFromScore, { unit: tempoLabel(t, tempoControl(timeline).quarters).unit })
+                  : t.tempoDefault
+              }
+              onChange={(e) => {
+                const value = Number(e.target.value);
+                if (value >= 20 && value <= 300) {
+                  const quarterBpm = tempoControl(timeline).toQuarterBpm(value);
+                  setBaseBpm(quarterBpm);
+                  playbackRef.current?.setTempo(quarterBpm);
+                }
+              }}
+            />
+          </label>
+
+          <div className="play-instrument">
+            <label>{t.instrument} <select value={instrument} onChange={(e) => {
+              const value = e.target.value;
+              if (!isInstrumentId(value)) return;
+              setInstrumentFallback(null);
+              setSavedInstrument(value);
+              void ensurePlayback(timeline, value);
+            }}>{INSTRUMENTS.map((i) => <option key={i.id} value={i.id}>{t.instruments[i.id]}</option>)}</select></label>
+          </div>
+        </div>
+      </div>
+
+      {audioError && <p className="play-hint" role="alert">{audioError}</p>}
+
+      <Panel
+        label={t.fallingNotes}
+        nodeRef={rollRef}
+        open={rollOpen}
+        onToggle={() => setRollOpen(!rollOpen)}
+        grow={sheetOpen ? 1 - split : 1}
+        flush
+        dark
+      >
+        <NoteRoll
+          timeline={timeline}
+          getBeat={getBeat}
+          lockedFromBeat={lockedFrom === null ? null : freeEndBeat}
+          showNames={showNoteNames}
+          notation={notation}
+        />
+      </Panel>
+
+      <div className="play-keyboard">
+        <Keyboard3D
+          activeKeys={activeNotes.map((n) => ({ midi: n.midi, role: n.role }))}
+          showKeyNames={showKeyNames}
+          notation={notation}
+        />
+        {audioLoading && (
+          <div className="play-keyboard-loading" role="status" aria-label={t.loadingInstrument}>
+            <span className="keyboard-spinner" />
+          </div>
+        )}
+      </div>
+
+      {subscribePromptOpen && <SubscribePrompt onClose={closeSubscribePrompt} />}
+    </div>
+  );
+}
+
+export default PlayView;

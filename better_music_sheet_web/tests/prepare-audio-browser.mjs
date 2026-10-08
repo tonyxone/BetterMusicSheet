@@ -4,7 +4,7 @@ import ts from 'typescript';
 const dest = 'public/__audio-qa';
 fs.mkdirSync(dest, {recursive:true});
 for (const name of ['synth','basic-synth']) {
- const source = fs.readFileSync(`app/play/${name}.ts`, 'utf8');
+ const source = fs.readFileSync(`app/(en)/play/${name}.ts`, 'utf8');
  const js = ts.transpileModule(source, {compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2020}}).outputText
    .replaceAll('"./basic-synth"','"./basic-synth.mjs"').replaceAll('"smplr"','"./smplr.mjs"');
  fs.writeFileSync(`${dest}/${name}.mjs`,js);

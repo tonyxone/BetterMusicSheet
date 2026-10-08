@@ -26,6 +26,8 @@ import type { SheetVariant } from "../sheet-toggle";
 import { NotationToggle } from "../notation-toggle";
 import { PdfPages, type PageInfo } from "./pdf-pages";
 import { AnnotationLayer, itemKey, moveItems, unnamedKey, type EditorHooks, type InlineTarget, type SelectedItem, type Tool } from "./annotation-layer";
+import { useI18n } from "@/lib/i18n/client";
+import { fmt, plural, rich } from "@/lib/i18n/format";
 
 const PEN_COLORS = ["#2e2117", "#c0392b", "#1f5fbf", "#2f7d32"];
 const HIGHLIGHT_COLORS = ["#ffd84d", "#8ee07a", "#ff9ec7", "#7cc8ff"];
@@ -74,13 +76,6 @@ function savedZoom() {
   }
 }
 
-const SAVE_TEXT: Record<SaveState, string> = {
-  saved: "All changes saved",
-  saving: "Saving…",
-  unsaved: "Saving…",
-  offline: "Offline — changes will save when you reconnect",
-  error: "Couldn't save yet — retrying",
-};
 
 export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
   jobId: string;
@@ -93,7 +88,12 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
 }) {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const edits = useSheetEdits(jobId);
+  const { m, locale } = useI18n();
+  const t = m.editor;
+  const edits = useSheetEdits(jobId, t);
+  const saveText: Record<SaveState, string> = {
+    saved: t.save.saved, saving: t.save.saving, unsaved: t.save.saving, offline: t.save.offline, error: t.save.error,
+  };
   const { doc, update, undo, redo, current } = edits;
 
   const [editing, setEditing] = useState(false);
@@ -153,10 +153,11 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
         if (!cancelled) setLoaded({ original, annotated, timeline, labels });
       } catch (err) {
         console.error("Loading the sheet preview failed:", err);
-        if (!cancelled) setLoadError("Couldn't show the preview here. The Download button still gives you the file.");
+        if (!cancelled) setLoadError(t.previewFailed);
       }
     })();
     return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the message is read once, when loading fails
   }, [jobId]);
 
   const labelsLive = !!loaded?.labels && !!loaded.original;
@@ -364,7 +365,7 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
     const edit: LabelEdit = { ...(now.labels[id] ?? {}) };
     if (!text) {
       update((d) => ({ ...d, labels: withLabelEdit(d.labels, id, { ...edit, hidden: true }) }));
-      edits.setNotice("Name hidden. Undo brings it back.");
+      edits.setNotice(t.nameHidden);
       return;
     }
     if (text === (edit.text ?? item.text)) return;
@@ -373,21 +374,21 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
     let corrections = now.corrections;
     let message: string;
     if (!loaded?.timeline) {
-      message = "Playback isn't available for this sheet, so only the page changes.";
+      message = t.noPlayback;
     } else {
       const result = correctionsForRetype(item, text, loaded.timeline, now.corrections);
-      if (result === null) message = `"${text}" isn't a note name, so playback stays the same.`;
-      else if (!result.linked) message = "This name isn't linked to a note, so only the page changes.";
+      if (result === null) message = fmt(t.notANoteName, { text });
+      else if (!result.linked) message = t.notLinked;
       else {
         corrections = result.corrections;
         message = text === item.text
-          ? "Back to the printed name; playback restored."
-          : `Playback now plays ${typed}${result.changed > 1 ? ` for ${result.changed} notes` : ""}.`;
+          ? t.restored
+          : fmt(result.changed > 1 ? t.nowPlaysMany : t.nowPlays, { text: typed, count: result.changed });
       }
     }
     update((d) => ({ ...d, labels: withLabelEdit(d.labels, id, edit), corrections }));
     edits.setNotice(message);
-  }, [labelsById, current, update, loaded, edits, notation]);
+  }, [labelsById, current, update, loaded, edits, notation, t]);
 
   /** Names back where and as they were printed, with their playback. */
   const resetLabels = useCallback((ids: string[]) => {
@@ -481,12 +482,10 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
     setResetOpen(false);
     update((d) => (scope === "all" ? EMPTY_EDITS : { ...d, labels: {}, corrections: {} }));
     setSelection([]);
-    const message = scope === "all"
-      ? "Reset to the annotated version: your names, playback fixes, drawings and notes are removed."
-      : "Note names and playback reset to the annotated version. Your drawings and notes are kept.";
+    const message = scope === "all" ? t.resetAll : t.resetNames;
     setResetNotice(message);
     edits.setNotice(message);
-  }, [update, edits]);
+  }, [update, edits, t]);
 
   // ---- keyboard --------------------------------------------------------------
 
@@ -538,14 +537,14 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
   }
   if (!loaded || !doc) {
     if (edits.loadError) return <p style={{ color: "var(--danger)", textAlign: "center", padding: 24 }}>{edits.loadError}</p>;
-    return <p className="play-hint" style={{ padding: 24 }}>Loading the sheet…</p>;
+    return <p className="play-hint" style={{ padding: 24 }}>{m.common.loadingSheet}</p>;
   }
   if (!base) {
     // The switch stays, so the reader can go back to the copy that works.
     return (
       <div style={{ textAlign: "center", padding: 24 }}>
         {variantToggle}
-        <p style={{ color: "var(--danger)", marginTop: 12 }}>Couldn&apos;t show the uploaded file here.</p>
+        <p style={{ color: "var(--danger)", marginTop: 12 }}>{t.uploadFailed}</p>
       </div>
     );
   }
@@ -578,7 +577,7 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
           defaultValue={l.text}
           autoFocus
           onFocus={(e) => e.currentTarget.select()}
-          aria-label="Note name"
+          aria-label={t.noteName}
           style={{
             left: `${(l.x / page.widthPt) * 100}%`, top: `${(l.y / page.heightPt) * 100}%`,
             fontSize: fontPx, transform: "translate(-50%, -85%)", width: `${Math.max(4, l.text.length + 2)}em`,
@@ -601,8 +600,8 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
         defaultValue={note.text}
         autoFocus
         rows={Math.max(1, note.text.split("\n").length)}
-        placeholder="Type a note"
-        aria-label="Text note"
+        placeholder={t.typeANote}
+        aria-label={t.textNote}
         style={{
           left: `${(note.x / page.widthPt) * 100}%`, top: `${((note.y - note.size) / page.heightPt) * 100}%`,
           fontSize: fontPx, color: note.color, minWidth: "10em",
@@ -622,24 +621,24 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
   }
 
   const tools: { id: Tool; label: string; title: string; icon: React.ReactNode }[] = [
-    { id: "select", label: "Select", title: "Select and move: drag a name or note; Shift- or Ctrl-click, or drag a box over empty space, to select several and move them together. Double-click a name to retype it.", icon: <path d="M5 3l14 8-6 1.5L10 19z" /> },
-    { id: "pen", label: "Pen", title: "Draw on the sheet", icon: <path d="M4 20l1-4L16 5l3 3L8 19zM14 7l3 3" /> },
-    { id: "highlighter", label: "Highlight", title: "Highlight part of the sheet", icon: <path d="M4 20h6M7 17l-2-2 9-9 4 4-9 9zM12 8l4 4" /> },
-    { id: "text", label: "Text", title: "Click anywhere to add a text note", icon: <path d="M5 5h14M12 5v14M9 19h6" /> },
-    { id: "eraser", label: "Erase", title: "Erase drawings and text notes (note names are hidden with Delete instead)", icon: <path d="M8 20h12M5 15l8-9 6 6-7 8H9z" /> },
+    { id: "select", label: t.tools.select, title: t.tools.selectTitle, icon: <path d="M5 3l14 8-6 1.5L10 19z" /> },
+    { id: "pen", label: t.tools.pen, title: t.tools.penTitle, icon: <path d="M4 20l1-4L16 5l3 3L8 19zM14 7l3 3" /> },
+    { id: "highlighter", label: t.tools.highlighter, title: t.tools.highlighterTitle, icon: <path d="M4 20h6M7 17l-2-2 9-9 4 4-9 9zM12 8l4 4" /> },
+    { id: "text", label: t.tools.text, title: t.tools.textTitle, icon: <path d="M5 5h14M12 5v14M9 19h6" /> },
+    { id: "eraser", label: t.tools.eraser, title: t.tools.eraserTitle, icon: <path d="M8 20h12M5 15l8-9 6 6-7 8H9z" /> },
   ];
 
   const zoomControls = (
-    <div className="zoom-controls" role="group" aria-label="Zoom">
+    <div className="zoom-controls" role="group" aria-label={t.zoom}>
       <button type="button" className="editor-btn icon" onClick={() => stepZoom(-1)} disabled={zoom <= MIN_ZOOM}
-        title="Zoom out (Ctrl + scroll also zooms)" aria-label="Zoom out">
+        title={t.zoomOutTitle} aria-label={t.zoomOut}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14" /></svg>
       </button>
-      <button type="button" className="editor-btn zoom-level" onClick={() => zoomTo(1)} title="Fit the page to the width">
+      <button type="button" className="editor-btn zoom-level" onClick={() => zoomTo(1)} title={t.fitWidth}>
         {Math.round(zoom * 100)}%
       </button>
       <button type="button" className="editor-btn icon" onClick={() => stepZoom(1)} disabled={zoom >= MAX_ZOOM}
-        title="Zoom in (Ctrl + scroll also zooms)" aria-label="Zoom in">
+        title={t.zoomInTitle} aria-label={t.zoomIn}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14" /></svg>
       </button>
     </div>
@@ -648,21 +647,21 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
   const resetControl = (
     <div className="reset-menu">
       <button type="button" className="editor-btn" disabled={isEmptyEdits(doc)} aria-haspopup="menu" aria-expanded={resetOpen}
-        title="Go back to the annotated version as it was generated" onClick={() => setResetOpen((v) => !v)}>
+        title={t.resetTitle} onClick={() => setResetOpen((v) => !v)}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4v6h6M4.5 10A8 8 0 1 1 6 17" /></svg>
-        <span>Reset</span>
+        <span>{t.reset}</span>
       </button>
       {resetOpen && (
         <div className="download-menu-list reset-menu-list" role="menu">
           <button type="button" role="menuitem" disabled={!hasNameChanges} onClick={() => reset("names")}>
-            Note names only
-            <small>Undo moved, retyped and hidden names, and the playback fixes they made. Keeps your drawings and notes.</small>
+            {t.resetNamesOnly}
+            <small>{t.resetNamesOnlyDetail}</small>
           </button>
           <button type="button" role="menuitem" onClick={() => reset("all")}>
-            Everything
-            <small>Back to the annotated version exactly as generated{hasMarks ? ", removing your drawings and notes too" : ""}.</small>
+            {t.resetEverything}
+            <small>{hasMarks ? t.resetEverythingDetailMarks : t.resetEverythingDetail}</small>
           </button>
-          <button type="button" role="menuitem" onClick={() => setResetOpen(false)}>Cancel</button>
+          <button type="button" role="menuitem" onClick={() => setResetOpen(false)}>{m.common.cancel}</button>
         </div>
       )}
     </div>
@@ -680,12 +679,12 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
           {!editing ? (
             <>
               <button type="button" className="editor-btn primary" onClick={() => setEditing(true)}
-                title={showNames ? "Move or retype note names, draw, highlight and add notes" : "Draw, highlight and add notes"}>
+                title={showNames ? t.editSheetTitle : t.editSheetTitleNoNames}>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l1-4L16 5l3 3L8 19z" /></svg>
-                Edit sheet
+                {t.editSheet}
               </button>
-              {!isEmptyEdits(doc) && <span className="editor-status">Showing your changes</span>}
-              {variant === "annotated" && !labelsLive && <span className="editor-status">Names on this sheet can&apos;t be moved; you can still draw and add notes.</span>}
+              {!isEmptyEdits(doc) && <span className="editor-status">{t.showingChanges}</span>}
+              {variant === "annotated" && !labelsLive && <span className="editor-status">{t.namesFixed}</span>}
               <div className="bar-end">
                 {showNames && <NotationToggle value={notation} onChange={setNotation} />}
                 {variantToggle}
@@ -704,7 +703,7 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
         </div>
         {editing && (
           <div className="sheet-editor-bar">
-            <div className="editor-tools" role="toolbar" aria-label="Editing tools">
+            <div className="editor-tools" role="toolbar" aria-label={t.editingTools}>
               {tools.map((t) => (
                 <button key={t.id} type="button" title={t.title} aria-pressed={tool === t.id}
                   className={`editor-btn${tool === t.id ? " active" : ""}`} onClick={() => setTool(t.id)}>
@@ -714,35 +713,35 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
               ))}
             </div>
             {(tool === "pen" || tool === "text") && (
-              <div className="editor-swatches" role="group" aria-label="Colour">
+              <div className="editor-swatches" role="group" aria-label={t.colour}>
                 {PEN_COLORS.map((c) => (
                   <button key={c} type="button" className={`swatch${penColor === c ? " active" : ""}`} style={{ background: c }}
-                    aria-label={`Colour ${c}`} aria-pressed={penColor === c} onClick={() => setPenColor(c)} />
+                    aria-label={fmt(t.colourValue, { value: c })} aria-pressed={penColor === c} onClick={() => setPenColor(c)} />
                 ))}
               </div>
             )}
             {tool === "highlighter" && (
-              <div className="editor-swatches" role="group" aria-label="Highlighter colour">
+              <div className="editor-swatches" role="group" aria-label={t.highlighterColour}>
                 {HIGHLIGHT_COLORS.map((c) => (
                   <button key={c} type="button" className={`swatch${highlightColor === c ? " active" : ""}`} style={{ background: c }}
-                    aria-label={`Highlighter ${c}`} aria-pressed={highlightColor === c} onClick={() => setHighlightColor(c)} />
+                    aria-label={fmt(t.highlighterValue, { value: c })} aria-pressed={highlightColor === c} onClick={() => setHighlightColor(c)} />
                 ))}
               </div>
             )}
             <div className="editor-tools">
-              <button type="button" className="editor-btn" onClick={undo} disabled={!edits.canUndo} title="Undo (Ctrl+Z)">
+              <button type="button" className="editor-btn" onClick={undo} disabled={!edits.canUndo} title={t.undoTitle}>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7L4 12l5 5M4 12h11a5 5 0 010 10h-2" /></svg>
-                <span>Undo</span>
+                <span>{t.undo}</span>
               </button>
-              <button type="button" className="editor-btn" onClick={redo} disabled={!edits.canRedo} title="Redo (Ctrl+Shift+Z)">
+              <button type="button" className="editor-btn" onClick={redo} disabled={!edits.canRedo} title={t.redoTitle}>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 7l5 5-5 5M20 12H9a5 5 0 000 10h2" /></svg>
-                <span>Redo</span>
+                <span>{t.redo}</span>
               </button>
               {resetControl}
             </div>
-            <span className="editor-status" aria-live="polite">{SAVE_TEXT[edits.saveState]}</span>
+            <span className="editor-status" aria-live="polite">{saveText[edits.saveState]}</span>
             <div className="bar-end">
-              <button type="button" className="editor-btn primary" onClick={stopEditing}>Done</button>
+              <button type="button" className="editor-btn primary" onClick={stopEditing}>{t.done}</button>
             </div>
           </div>
         )}
@@ -750,11 +749,11 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
         {unnamed.length > 0 && (
           <div className="sheet-editor-sub unnamed-notice" role="status">
             <span>
-              <strong>{unnamed.length}</strong> printed {unnamed.length === 1 ? "note wasn't" : "notes weren't"} recognized,
-              so {unnamed.length === 1 ? "it has" : "they have"} no name{editing ? ". Click a ringed note to add its name." : "."}
+              {rich(plural(locale, unnamed.length, editing ? t.unnamedEditing : t.unnamed, { count: "{n}" }), {},
+                { n: <strong>{unnamed.length}</strong> })}
             </span>
-            <button type="button" className="editor-link" onClick={showNextUnnamed}>Show next</button>
-            {!editing && <button type="button" className="editor-link" onClick={() => setEditing(true)}>Add names</button>}
+            <button type="button" className="editor-link" onClick={showNextUnnamed}>{t.showNext}</button>
+            {!editing && <button type="button" className="editor-link" onClick={() => setEditing(true)}>{t.addNames}</button>}
           </div>
         )}
 
@@ -763,51 +762,51 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
             {editing && single && selectedLabel && selectedResolved && (
               <>
                 <span>
-                  Note name <strong>{selectedResolved.text}</strong>
-                  {selectedLabel.notes.length > 0 ? " · linked to playback" : " · not linked to playback"}
+                  {rich(t.selectedName, {}, { name: <strong>{selectedResolved.text}</strong> })}
+                  {selectedLabel.notes.length > 0 ? t.linked : t.notLinkedShort}
                 </span>
-                <button type="button" className="editor-link" onClick={() => openInlineFor(single)}>Retype</button>
+                <button type="button" className="editor-link" onClick={() => openInlineFor(single)}>{t.retype}</button>
                 {chord.length > 1 && (
                   <button type="button" className="editor-link"
                     onClick={() => setSelection(chord.map((l) => ({ kind: "label" as const, id: l.id })))}>
-                    Select chord ({chord.length})
+                    {fmt(t.selectChord, { count: chord.length })}
                   </button>
                 )}
-                <button type="button" className="editor-link" onClick={deleteSelection}>Hide</button>
+                <button type="button" className="editor-link" onClick={deleteSelection}>{t.hide}</button>
                 {doc.labels[selectedLabel.id] && (
-                  <button type="button" className="editor-link" onClick={() => resetLabels([selectedLabel.id])}>Reset</button>
+                  <button type="button" className="editor-link" onClick={() => resetLabels([selectedLabel.id])}>{t.reset}</button>
                 )}
               </>
             )}
             {editing && single?.kind === "text" && (
               <>
-                <span>Text note</span>
-                <button type="button" className="editor-link" onClick={() => openInlineFor(single)}>Edit</button>
-                <button type="button" className="editor-link" onClick={deleteSelection}>Delete</button>
+                <span>{t.textNote}</span>
+                <button type="button" className="editor-link" onClick={() => openInlineFor(single)}>{t.edit}</button>
+                <button type="button" className="editor-link" onClick={deleteSelection}>{m.common.delete}</button>
               </>
             )}
             {editing && single?.kind === "stroke" && (
               <>
-                <span>Drawing</span>
-                <button type="button" className="editor-link" onClick={deleteSelection}>Delete</button>
+                <span>{t.drawing}</span>
+                <button type="button" className="editor-link" onClick={deleteSelection}>{m.common.delete}</button>
               </>
             )}
             {editing && visibleSelection.length > 1 && (
               <>
-                <span><strong>{visibleSelection.length}</strong> selected · drag any of them to move them together</span>
+                <span>{rich(t.selectedMany, {}, { count: <strong>{visibleSelection.length}</strong> })}</span>
                 <button type="button" className="editor-link" onClick={deleteSelection}>
-                  {selectedLabelIds.length === visibleSelection.length ? "Hide" : "Hide / delete"}
+                  {selectedLabelIds.length === visibleSelection.length ? t.hide : t.hideOrDelete}
                 </button>
                 {selectedLabelIds.some((id) => doc.labels[id]) && (
-                  <button type="button" className="editor-link" onClick={() => resetLabels(selectedLabelIds)}>Reset names</button>
+                  <button type="button" className="editor-link" onClick={() => resetLabels(selectedLabelIds)}>{t.resetNamesButton}</button>
                 )}
-                <button type="button" className="editor-link" onClick={() => setSelection([])}>Clear</button>
+                <button type="button" className="editor-link" onClick={() => setSelection([])}>{t.clear}</button>
               </>
             )}
             {editing && !visibleSelection.length && tool === "select" && !edits.notice && (
               <span className="editor-hint">
-                Click to select · Shift- or Ctrl-click, or drag a box, to select several · double-click a name to retype it · hold Space and drag to move around
-                {variant === "original" && labelsLive && " · note names are edited in the Annotated view"}
+                {t.hint}
+                {variant === "original" && labelsLive && t.hintOriginal}
               </span>
             )}
             {edits.notice && (
@@ -815,11 +814,11 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
                 {edits.notice}
                 {resetNotice === edits.notice && (
                   <button type="button" className="editor-link" onClick={() => { undo(); edits.clearNotice(); }}>
-                    Undo
+                    {t.undo}
                   </button>
                 )}
                 <button type="button" className="editor-link" onClick={edits.clearNotice}
-                  aria-label="Dismiss">✕</button>
+                  aria-label={t.dismiss}>✕</button>
               </span>
             )}
           </div>

@@ -6,9 +6,7 @@ import { DEMO_JOB_ID } from "@/lib/api";
 import { useAuth } from "./auth-context";
 import { KeyboardIcon } from "./keyboard-icon";
 import { fetchDemoHidden, readLocalDemoHidden, saveDemoHidden, writeLocalDemoHidden } from "@/lib/demo-hidden";
-
-const PLAY_TITLE = "Try practice mode with a sample sheet - free, no account needed";
-const SHEET_TITLE = "See the sample sheet, annotated - free, no account needed";
+import { useI18n } from "@/lib/i18n/client";
 
 /** A standing, no-commitment invite to try Play - no upload, no account, no
  * subscription. Shown on both the landing page (signed out) and the library
@@ -28,6 +26,8 @@ const SHEET_TITLE = "See the sample sheet, annotated - free, no account needed";
  * sheets" message on top of nothing. */
 export function DemoSampleCard({ removable = false, emptyLibrary = false }: { removable?: boolean; emptyLibrary?: boolean }) {
   const { user, loading: authLoading } = useAuth();
+  const { m, path } = useI18n();
+  const t = m.demo;
   const [hidden, setHidden] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -60,9 +60,9 @@ export function DemoSampleCard({ removable = false, emptyLibrary = false }: { re
     if (!removable) return null;
     return (
       <>
-        {emptyLibrary && <div className="history-empty">No sheets annotated yet.</div>}
+        {emptyLibrary && <div className="history-empty">{t.noSheets}</div>}
         <button type="button" className="play-clear" onClick={show}>
-          Show the sample again
+          {t.showAgain}
         </button>
       </>
     );
@@ -70,13 +70,13 @@ export function DemoSampleCard({ removable = false, emptyLibrary = false }: { re
 
   if (!removable) {
     return (
-      <Link href={`/play?job=${DEMO_JOB_ID}`} className="history-row" title={PLAY_TITLE}>
+      <Link href={path(`/play?job=${DEMO_JOB_ID}`)} className="history-row" title={t.playTitle}>
         <div className="history-icon">🎼</div>
         <div className="history-info">
-          <div className="history-title">Try a sample</div>
-          <div className="history-meta">Ode to Joy · Beethoven · free, no account needed</div>
+          <div className="history-title">{t.title}</div>
+          <div className="history-meta">{t.meta}</div>
         </div>
-        <span className="history-badge done">Play</span>
+        <span className="history-badge done">{t.play}</span>
       </Link>
     );
   }
@@ -86,20 +86,20 @@ export function DemoSampleCard({ removable = false, emptyLibrary = false }: { re
   // separate keyboard icon - not the other way around.
   return (
     <div className="history-row">
-      <Link href={`/sheets?job=${DEMO_JOB_ID}`} className="history-row-link" title={SHEET_TITLE}>
+      <Link href={path(`/sheets?job=${DEMO_JOB_ID}`)} className="history-row-link" title={t.sheetTitle}>
         <div className="history-icon">🎼</div>
         <div className="history-info">
-          <div className="history-title">Try a sample</div>
-          <div className="history-meta">Ode to Joy · Beethoven · free, no account needed</div>
+          <div className="history-title">{t.title}</div>
+          <div className="history-meta">{t.meta}</div>
         </div>
-        <span className="history-badge done">Annotated</span>
+        <span className="history-badge done">{m.library.status.done}</span>
       </Link>
       <div className="history-actions">
         <Link
-          href={`/play?job=${DEMO_JOB_ID}`}
+          href={path(`/play?job=${DEMO_JOB_ID}`)}
           className="history-action history-play"
-          title="Practice with the keyboard"
-          aria-label="Practice with the keyboard"
+          title={m.common.practiceWithKeyboard}
+          aria-label={m.common.practiceWithKeyboard}
         >
           <KeyboardIcon size={40} />
         </Link>
@@ -107,8 +107,8 @@ export function DemoSampleCard({ removable = false, emptyLibrary = false }: { re
           type="button"
           className="history-action history-delete"
           onClick={hide}
-          title="Remove the sample from your library"
-          aria-label="Remove the sample from your library"
+          title={t.remove}
+          aria-label={t.remove}
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5m4-5v5" />

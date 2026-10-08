@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { signIn } from "@/lib/auth";
-import { PremiumWindow } from "./subscription/premium-window";
+import { PremiumWindow } from "./(en)/subscription/premium-window";
 import {
   CognitoError,
   callbackRedirectUri,
@@ -16,6 +16,9 @@ import {
   socialSignInUrl,
   type SocialProvider,
 } from "@/lib/cognito";
+import { useI18n } from "@/lib/i18n/client";
+import { fmt } from "@/lib/i18n/format";
+import { SIGN_IN_LOCALE_KEY } from "@/lib/i18n/config";
 
 /** Which step of the flow the modal is showing. Sign-up and password reset
  * both end at a code-entry step, so they're separate views rather than one
@@ -23,15 +26,16 @@ import {
 type View = "signin" | "signup" | "confirm" | "forgot" | "reset";
 
 /** Each provider's own mark and wording. "Sign in with X" is the sanctioned
- * phrasing for all three, and the logos below are the official ones drawn
- * unmodified - which is what Google's and Apple's brand guidelines require of
- * a sign-in button, and why these colours are hardcoded rather than themed:
- * the Google G's four colours and Apple's black are part of the mark, not of
- * this site's palette. `css` names the style variant in globals.css. */
-const SOCIAL: Record<SocialProvider, { label: string; css: string }> = {
-  Google: { label: "Sign in with Google", css: "google" },
-  SignInWithApple: { label: "Sign in with Apple", css: "apple" },
-  Facebook: { label: "Sign in with Facebook", css: "facebook" },
+ * phrasing for all three (m.signIn.social has it in each language), and the
+ * logos below are the official ones drawn unmodified - which is what Google's
+ * and Apple's brand guidelines require of a sign-in button, and why these
+ * colours are hardcoded rather than themed: the Google G's four colours and
+ * Apple's black are part of the mark, not of this site's palette. `css` names
+ * the style variant in globals.css. */
+const SOCIAL: Record<SocialProvider, { css: string }> = {
+  Google: { css: "google" },
+  SignInWithApple: { css: "apple" },
+  Facebook: { css: "facebook" },
 };
 
 function SocialIcon({ provider }: { provider: SocialProvider }) {
@@ -64,6 +68,7 @@ function SocialIcon({ provider }: { provider: SocialProvider }) {
 }
 
 function SocialButtons() {
+  const { m, locale } = useI18n();
   // Both checked: NEXT_PUBLIC_COGNITO_SOCIAL_PROVIDERS naming a provider
   // means nothing without the region/client id that make socialSignInUrl
   // safe to call - and it's called directly in the href below, not behind a
@@ -71,16 +76,19 @@ function SocialButtons() {
   if (!isCognitoConfigured || configuredSocialProviders.length === 0) return null;
   return (
     <>
-      <div className="modal-divider">or</div>
+      <div className="modal-divider">{m.signIn.or}</div>
       <div className="modal-social">
         {configuredSocialProviders.map((provider) => (
           <a
             key={provider}
             className={`modal-social-btn ${SOCIAL[provider].css}`}
             href={socialSignInUrl(provider, callbackRedirectUri())}
+            // The callback page is English-only (its URL is registered with
+            // Cognito); this is how it knows which language to come back to.
+            onClick={() => { try { sessionStorage.setItem(SIGN_IN_LOCALE_KEY, locale); } catch { /* lands on "/" */ } }}
           >
             <SocialIcon provider={provider} />
-            {SOCIAL[provider].label}
+            {m.signIn.social[provider]}
           </a>
         ))}
       </div>
@@ -88,15 +96,9 @@ function SocialButtons() {
   );
 }
 
-const TITLES: Record<View, string> = {
-  signin: "Sign in",
-  signup: "Create an account",
-  confirm: "Check your email",
-  forgot: "Reset your password",
-  reset: "Choose a new password",
-};
-
 export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSignedIn: () => void }) {
+  const { m } = useI18n();
+  const t = m.signIn;
   const [view, setView] = useState<View>("signin");
   const [plansOpen, setPlansOpen] = useState(false);
   const [email, setEmail] = useState("");
@@ -145,22 +147,23 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
       // leak more than they should.
       switch (err.code) {
         case "NotAuthorizedException":
-          return "Incorrect email or password.";
+          return t.errors.incorrect;
         case "UserNotFoundException":
-          return "Incorrect email or password.";
+          return t.errors.incorrect;
         case "UsernameExistsException":
-          return "An account with that email already exists.";
+          return t.errors.exists;
         case "CodeMismatchException":
-          return "That code doesn't match. Check it and try again.";
+          return t.errors.codeMismatch;
         case "ExpiredCodeException":
-          return "That code has expired - request a new one.";
+          return t.errors.codeExpired;
         case "LimitExceededException":
-          return "Too many attempts. Wait a few minutes and try again.";
+          return t.errors.tooMany;
         case "InvalidPasswordException":
-          return "That password doesn't meet the requirements below.";
+          return t.errors.badPassword;
         case "UserNotConfirmedException":
-          return "This account still needs the emailed confirmation code.";
+          return t.errors.notConfirmed;
         case "NetworkError":
+          return t.errors.network;
         case "NotConfigured":
           // Already written for a human by cognito.ts.
           return err.message;
@@ -198,7 +201,7 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
           // to route straight to the code step instead of a dead end.
           if (err instanceof CognitoError && err.code === "UserNotConfirmedException") {
             await resendConfirmationCode(email).catch(() => {});
-            go("confirm", "Your account isn't confirmed yet - we've sent you a new code.");
+            go("confirm", t.notConfirmedResent);
             return;
           }
           throw err;
@@ -208,13 +211,13 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
 
     if (view === "signup") {
       if (!name.trim()) {
-        setError("Please enter a display name.");
+        setError(t.errors.nameRequired);
         return;
       }
       return run(async () => {
         const needsCode = await signUp(email, password, name);
         if (needsCode) {
-          go("confirm", "We've emailed you a confirmation code.");
+          go("confirm", t.codeSent);
         } else {
           await signIn(email, password);
           onSignedIn();
@@ -239,11 +242,7 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
         // "sent" even when no password account has this address - most often
         // someone who signed up with Google or Apple. Say so rather than
         // promising an email that will never arrive.
-        go(
-          "reset",
-          `If ${email} has a password account, a reset code is on its way - check spam too. ` +
-            "Signed up with Google or Apple? There's no password to reset; use that button on the sign-in screen.",
-        );
+        go("reset", fmt(t.resetSent, { email }));
       });
     }
 
@@ -256,11 +255,11 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
   }
 
   const submitLabel: Record<View, string> = {
-    signin: busy ? "Signing in…" : "Sign in",
-    signup: busy ? "Creating…" : "Create account",
-    confirm: busy ? "Confirming…" : "Confirm",
-    forgot: busy ? "Sending…" : "Send reset code",
-    reset: busy ? "Saving…" : "Save and sign in",
+    signin: busy ? t.submit.signinBusy : t.submit.signin,
+    signup: busy ? t.submit.signupBusy : t.submit.signup,
+    confirm: busy ? t.submit.confirmBusy : t.submit.confirm,
+    forgot: busy ? t.submit.forgotBusy : t.submit.forgot,
+    reset: busy ? t.submit.resetBusy : t.submit.reset,
   };
 
   return (
@@ -273,23 +272,20 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="modal-card" role="dialog" aria-modal="true" aria-label={TITLES[view]} ref={dialogRef}>
-        <button type="button" className="modal-close" title="Close" aria-label="Close" onClick={onClose}>
+      <div className="modal-card" role="dialog" aria-modal="true" aria-label={t.titles[view]} ref={dialogRef}>
+        <button type="button" className="modal-close" title={m.common.close} aria-label={m.common.close} onClick={onClose}>
           <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
             <path d="M4 4l8 8M12 4l-8 8" />
           </svg>
         </button>
 
-        <h2 className="serif modal-title">{TITLES[view]}</h2>
+        <h2 className="serif modal-title">{t.titles[view]}</h2>
 
         {view === "confirm" && (
-          <p className="modal-sub">Enter the code we sent to {email}.</p>
+          <p className="modal-sub">{fmt(t.enterCode, { email })}</p>
         )}
         {view === "forgot" && (
-          <p className="modal-sub">
-            We&apos;ll email you a code to set a new password. If you signed in with Google or Apple, go back and
-            use that button instead - those accounts don&apos;t have a password.
-          </p>
+          <p className="modal-sub">{t.forgotIntro}</p>
         )}
 
         {notice && <p className="modal-notice">{notice}</p>}
@@ -298,7 +294,7 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
         <form onSubmit={handleSubmit}>
           {(view === "signin" || view === "signup" || view === "forgot") && (
             <label className="modal-field">
-              <span>Email</span>
+              <span>{t.email}</span>
               <input
                 ref={firstFieldRef}
                 type="email"
@@ -312,7 +308,7 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
 
           {view === "signup" && (
             <label className="modal-field">
-              <span>Display name</span>
+              <span>{t.displayName}</span>
               <input
                 type="text"
                 autoComplete="name"
@@ -325,7 +321,7 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
 
           {(view === "confirm" || view === "reset") && (
             <label className="modal-field">
-              <span>Code</span>
+              <span>{t.code}</span>
               <input
                 ref={firstFieldRef}
                 type="text"
@@ -340,7 +336,7 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
 
           {view !== "forgot" && view !== "confirm" && (
             <label className="modal-field">
-              <span>{view === "reset" ? "New password" : "Password"}</span>
+              <span>{view === "reset" ? t.newPassword : t.password}</span>
               <input
                 type="password"
                 autoComplete={view === "signin" ? "current-password" : "new-password"}
@@ -350,7 +346,7 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
                 onChange={(e) => setPassword(e.target.value)}
               />
               {view !== "signin" && (
-                <em className="modal-hint">At least 8 characters, with a number, an uppercase and a lowercase letter.</em>
+                <em className="modal-hint">{t.passwordHint}</em>
               )}
             </label>
           )}
@@ -368,34 +364,34 @@ export function SignInModal({ onClose, onSignedIn }: { onClose: () => void; onSi
         <div className="modal-links">
           {view === "signin" && (
             <>
-              <button type="button" title="Reset a forgotten password" onClick={() => go("forgot")}>Forgot password?</button>
-              <button type="button" title="Register a new account" onClick={() => go("signup")}>Create an account</button>
+              <button type="button" title={t.forgotLinkTitle} onClick={() => go("forgot")}>{t.forgotLink}</button>
+              <button type="button" title={t.createLinkTitle} onClick={() => go("signup")}>{t.createLink}</button>
             </>
           )}
           {(view === "signup" || view === "forgot") && (
-            <button type="button" title="Return to the sign-in form" onClick={() => go("signin")}>Back to sign in</button>
+            <button type="button" title={t.backToSignInTitle} onClick={() => go("signin")}>{t.backToSignIn}</button>
           )}
           {view === "confirm" && (
             <button
               type="button"
-              title="Send another confirmation code"
+              title={t.resendTitle}
               onClick={() => run(async () => {
                 await resendConfirmationCode(email);
-                setNotice("Sent - check your email again.");
+                setNotice(t.resent);
               })}
             >
-              Resend code
+              {t.resend}
             </button>
           )}
           {view === "reset" && (
-            <button type="button" title="Return to the sign-in form" onClick={() => go("signin")}>Back to sign in</button>
+            <button type="button" title={t.backToSignInTitle} onClick={() => go("signin")}>{t.backToSignIn}</button>
           )}
         </div>
 
         {/* A look at Premium before signing in, as on iOS's sign-in screen. */}
         {view === "signin" && (
           <button type="button" className="btn-premium" onClick={() => setPlansOpen(true)}>
-            See Premium plans
+            {m.common.seePremiumPlans}
           </button>
         )}
       </div>
