@@ -56,7 +56,8 @@ FREE_SHEET_LIMIT = 1
 # every sheet started counts - failed, deleted and read again included - since
 # each one used a worker; without it, deleting and uploading again ran sheets
 # back to back for free. Admins have none, for testing the pipeline itself.
-DAILY_SHEET_LIMITS = {"free": 5, "premium": 20}
+# Shown on the plans pages too: better_music_sheet_web/lib/plan-limits.ts.
+DAILY_SHEET_LIMITS = {"free": 5, "monthly": 20, "yearly": 30}
 
 # Fixed values keep rasterization cost predictable. Auto leaves the opening
 # pass at Audiveris's 300-DPI default and can selectively re-read unclear
@@ -477,19 +478,35 @@ def _check_free_sheet_limit(user_id):
                                      "upload another, or go Premium for unlimited sheets.")
 
 
+def _daily_sheet_plan(user_id):
+    """Which of DAILY_SHEET_LIMITS applies. A master user with no
+    subscription of their own has no billing period and gets the yearly one."""
+    entitlement = get_entitlement(user_id)
+    if entitlement["tier"] != "premium":
+        return "free"
+    return "monthly" if entitlement.get("plan") == "monthly" else "yearly"
+
+
 def _daily_sheet_limit(user_id):
     if db.is_admin(user_id):
         return None
-    return DAILY_SHEET_LIMITS["premium" if get_entitlement(user_id)["tier"] == "premium" else "free"]
+    return DAILY_SHEET_LIMITS[_daily_sheet_plan(user_id)]
 
 
-def _daily_limit_reached(limit):
+_DAILY_UPGRADE = {
+    "free": f" Premium allows {DAILY_SHEET_LIMITS['monthly']} a day, or {DAILY_SHEET_LIMITS['yearly']} "
+            f"on the yearly plan.",
+    "monthly": f" The yearly plan allows {DAILY_SHEET_LIMITS['yearly']} a day.",
+    "yearly": "",
+}
+
+
+def _daily_limit_reached(user_id, limit):
     now = time.time()
     reset = job_state.next_daily_reset(now)
     hours = int((reset - now) // 3600)
     when = (f"in about {hours} hour{'s' if hours != 1 else ''}" if hours else "within the hour")
-    upgrade = (f" Premium allows {DAILY_SHEET_LIMITS['premium']} a day."
-               if limit < DAILY_SHEET_LIMITS["premium"] else "")
+    upgrade = _DAILY_UPGRADE[_daily_sheet_plan(user_id)]
     return HTTPException(429, f"You've started {limit} sheets today, the most your plan allows in a day. "
                               f"You can start another {when}.{upgrade}",
                          headers={"Retry-After": str(int(reset - now) + 1)})
@@ -515,7 +532,7 @@ def reserve_upload(body, user_id):
     except job_state.Busy as exc:
         raise HTTPException(409, str(exc)) from exc
     except job_state.DailyLimit as exc:
-        raise _daily_limit_reached(limit) from exc
+        raise _daily_limit_reached(user_id, limit) from exc
 
 
 @app.post("/api/uploads", status_code=201)
@@ -678,7 +695,7 @@ def retry_sheet(job_id: str, user_id: str = Depends(get_signed_in_user_id)):
     except job_state.Busy as exc:
         raise HTTPException(409, "You already have a sheet processing. Wait for it to finish.") from exc
     except job_state.DailyLimit as exc:
-        raise _daily_limit_reached(limit) from exc
+        raise _daily_limit_reached(user_id, limit) from exc
     if not SERVERLESS:
         enqueue_local(job_id)
     elif storage.is_own_job(job):

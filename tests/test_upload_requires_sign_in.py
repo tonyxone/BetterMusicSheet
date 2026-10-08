@@ -134,7 +134,7 @@ class UploadRequiresSignInTests(unittest.TestCase):
         refused = self.upload(free)
         self.assertEqual(refused.status_code, 429)
         self.assertIn("started 5 sheets today", refused.json()["detail"])
-        self.assertIn("Premium allows 20 a day", refused.json()["detail"])
+        self.assertIn("Premium allows 20 a day, or 30 on the yearly plan", refused.json()["detail"])
         self.assertGreater(int(refused.headers["Retry-After"]), 0)
 
     def test_deleting_a_sheet_does_not_give_back_a_days_sheet(self):
@@ -146,13 +146,29 @@ class UploadRequiresSignInTests(unittest.TestCase):
                                                 headers=self.signed_in(free)).status_code, 204)
         self.assertEqual(self.upload(free).status_code, 429)
 
-    def test_a_premium_account_starts_twenty_sheets_a_day(self):
-        premium = "d3d3d3d3-d3d3-4d3d-8d3d-d3d3d3d3d3d3"
-        with patch.object(server, "get_entitlement", return_value={"tier": "premium"}):
-            self.started(premium, 20, status="done")
-            refused = self.upload(premium)
+    def test_a_monthly_account_starts_twenty_sheets_a_day(self):
+        monthly = "d3d3d3d3-d3d3-4d3d-8d3d-d3d3d3d3d3d3"
+        with patch.object(server, "get_entitlement", return_value={"tier": "premium", "plan": "monthly"}):
+            self.started(monthly, 20, status="done")
+            refused = self.upload(monthly)
         self.assertEqual(refused.status_code, 429)
-        self.assertNotIn("Premium allows", refused.json()["detail"])
+        self.assertIn("started 20 sheets today", refused.json()["detail"])
+        self.assertIn("The yearly plan allows 30 a day", refused.json()["detail"])
+
+    def test_a_yearly_account_starts_thirty_sheets_a_day(self):
+        yearly = "d7d7d7d7-d7d7-4d7d-8d7d-d7d7d7d7d7d7"
+        with patch.object(server, "get_entitlement", return_value={"tier": "premium", "plan": "yearly"}):
+            self.started(yearly, 30, status="done")
+            refused = self.upload(yearly)
+        self.assertEqual(refused.status_code, 429)
+        self.assertIn("started 30 sheets today", refused.json()["detail"])
+        # The most there is: nothing to upgrade to after when it resets.
+        self.assertRegex(refused.json()["detail"], r"another (in about \d+ hours?|within the hour)\.$")
+
+    def test_a_master_account_without_a_subscription_gets_the_yearly_limit(self):
+        master = "d8d8d8d8-d8d8-4d8d-8d8d-d8d8d8d8d8d8"
+        with patch.object(server, "get_entitlement", return_value={"tier": "premium", "plan": None, "master": True}):
+            self.assertEqual(server._daily_sheet_limit(master), 30)
 
     def test_reading_a_failed_sheet_again_counts_as_a_sheet_started(self):
         free = "d4d4d4d4-d4d4-4d4d-8d4d-d4d4d4d4d4d4"
