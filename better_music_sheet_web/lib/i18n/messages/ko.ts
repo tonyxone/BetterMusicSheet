@@ -5,10 +5,10 @@ import type { Messages } from "./en";
 export const ko: Messages = {
   meta: {
     siteTitle: "BetterMusicSheet.com | 연주를 더 쉽게",
-    siteDescription: "피아노 악보를 업로드하면 모든 음표에 음이름이 표시되고, 재생하면 건반 위에서 음이 빛납니다.",
+    siteDescription: "피아노 악보를 업로드하면 음표에 음이름을 표시해 드리며, 건반 재생으로 연습할 수도 있습니다.",
     pageTitle: "{page} | BetterMusicSheet.com",
     about: "소개",
-    aboutDescription: "BetterMusicSheet가 악보를 읽는 방식, 표시의 의미, 그리고 인식이 할 수 있는 것과 할 수 없는 것.",
+    aboutDescription: "BetterMusicSheet가 악보를 읽는 방식, 표시의 의미, 그리고 악보 인식에 관한 정보.",
     support: "고객 지원",
     supportDescription: "BetterMusicSheet 도움말과 문의 방법.",
     privacy: "개인정보",
@@ -72,27 +72,27 @@ export const ko: Messages = {
     terms: "이용약관",
     support: "고객 지원",
     contact: "문의",
-    disclaimer: "음이름은 자동으로 인식되므로 항상 정확하지는 않습니다. 믿고 쓰기 전에 원본 악보와 대조해 보세요.",
+    disclaimer: "음이름은 자동으로 인식되므로 정확성을 보장할 수 없습니다. 사용하기 전에 원본 악보와 대조해 보세요.",
   },
 
   landing: {
-    title: "악보의 모든 음표에 음이름을",
+    title: "악보의 모든 음표에 자동으로 음이름을",
     lead:
-      "피아노 악보 PDF나 사진을 업로드하면 모든 음표 위에 음이름이 적힌 같은 악보를 돌려받습니다. " +
-      "그대로 연습에도 쓸 수 있어요. 화면 속 건반으로 재생되며, 소리 나는 음이 빛납니다.",
+      "악보 PDF나 사진을 업로드하면 모든 음표에 음이름이 표시됩니다. 음이름이 표시된 악보로 연습하거나, " +
+      "연습 모드에서 건반으로 연습할 수 있습니다.",
     tryHeading: "먼저 체험해 보세요",
     tryBody: "가지고 있는 악보 파일이 없나요? 샘플 악보를 바로 재생해 보세요. 업로드도 계정도 필요 없습니다.",
     howHeading: "사용 방법",
     stepSeparator: " ",
     steps: [
-      { title: "악보를 업로드하세요.", body: "PDF가 가장 좋습니다. 평평하고 조명이 고른 사진이라면 악보 사진도 괜찮습니다." },
+      { title: "악보를 업로드하세요.", body: "PDF가 가장 좋습니다. 사진도 되지만 선명하고 평평하게 찍은 사진이어야 합니다." },
       {
         title: "자동으로 읽습니다.",
         body: "광학 악보 인식이 오선, 음자리표, 조표, 음표 머리를 찾아 각 음이 무엇인지 알아냅니다. 잘 읽히지 않은 페이지는 자동으로 다시 읽습니다.",
       },
       {
         title: "음이름이 표시된 악보를 받습니다.",
-        body: "같은 판본, 같은 레이아웃에 각 음표 위로 음이름이 붙고, 그 악보를 연주해 주는 연습 모드도 함께 제공됩니다.",
+        body: "같은 악보, 같은 레이아웃에 각 음표 주위로 음이름이 붙고, 그 악보를 연주해 주는 연습 모드도 함께 제공됩니다.",
       },
     ],
     getHeading: "이런 것을 얻습니다",
@@ -100,7 +100,7 @@ export const ko: Messages = {
     gets: [
       {
         title: "늘 보던 자리에 음이름이",
-        body: "음표 머리 위에 표시되어 연주하는 거리에서도 읽히고, 기보를 가리지 않습니다.",
+        body: "음표 주위에 표시되어 연주하는 거리에서도 읽히고, 음표를 가리지 않습니다.",
       },
       {
         title: "표기와 크기는 원하는 대로",
@@ -108,7 +108,7 @@ export const ko: Messages = {
       },
       {
         title: "연습 모드",
-        body: "음이름이 표시된 악보 아래에 88건반 키보드가 있어, 양손을 서로 다른 색으로 재생하고 재생 위치가 음악을 따라갑니다. 아무 마디나 클릭하면 거기서부터 시작합니다.",
+        body: "음이름이 표시된 악보 아래에 88건반 키보드가 있어, 양손을 서로 다른 색으로 재생하고 재생 위치가 음악을 따라갑니다. 아무 마디나 클릭하면 거기서부터 재생이 시작됩니다.",
       },
       {
         title: "원본은 그대로",
@@ -129,8 +129,8 @@ export const ko: Messages = {
 
   upload: {
     heading: "악보 업로드",
-    sub: "피아노 악보의 모든 음표를 읽고 음이름을 적어 드려요. 이제 짐작하지 않고 연습할 수 있습니다.",
-    accountNote: "업로드하려면 계정이 필요합니다. 무료 계정은 한 번에 악보 1개를, 프리미엄은 원하는 만큼 보관합니다. <plans>요금제 보기</plans>",
+    sub: "악보의 모든 음표를 읽고 음이름을 적어 드립니다. 이제 짐작하지 않고 연습할 수 있습니다.",
+    accountNote: "업로드하려면 계정이 필요합니다. 무료 계정은 한 번에 악보 1개를, 프리미엄은 개수 제한이 없습니다. <plans>요금제 보기</plans>",
     dropPrompt: "PDF나 사진을 여기에 끌어다 놓거나 클릭해서 선택하세요",
     photosOneSheet: "사진 {count}장 · 악보 1개",
     formats: "PDF, JPG, PNG · 최대 {mb}MB",
@@ -243,7 +243,7 @@ export const ko: Messages = {
     starting: "시작하는 중…",
     tryAgain: "다시 시도",
     addingNames: "음이름을 붙이는 중…",
-    addingNamesSub: "그동안 악보를 보거나 메모할 수 있습니다. 음이름이 준비되면 여기에 나타납니다.",
+    addingNamesSub: "그동안 악보를 보거나 메모할 수 있습니다. 음이름이 표시되면 여기에 나타납니다.",
     cancelFailed: "이 악보를 취소하지 못했습니다.",
     cancelFailedStatus: "이 악보를 취소하지 못했습니다({status}).",
     stopTitle: "음이름 붙이기를 중단할까요?",
@@ -287,7 +287,7 @@ export const ko: Messages = {
     tooOld: "이 브라우저는 너무 오래되어 악보를 표시할 수 없습니다.",
     tooOldBody:
       "뷰어에 필요한 기능을 사용 중인 브라우저가 아직 지원하지 않습니다. 대개 브라우저를 업데이트하면 해결됩니다. iPhone이나 iPad에서는 " +
-      "Safari가 시스템과 함께 업데이트되므로 iOS 또는 iPadOS 자체를 업데이트하세요. 최신 Chrome, Edge, Firefox에서도 사용할 수 있습니다.",
+      "Safari가 시스템과 함께 업데이트되므로 iOS 또는 iPadOS를 최신 버전으로 업데이트하세요. 최신 Chrome, Edge, Firefox에서도 사용할 수 있습니다.",
     showFailed: "악보를 표시하지 못했습니다. 페이지를 새로 고치면 대개 해결됩니다.",
     addName: "이 음표에 음이름 붙이기",
     notRecognized: "이 음표는 인식되지 않아 음이름이 없습니다",
@@ -553,7 +553,7 @@ export const ko: Messages = {
     checkoutFailed: "결제를 시작하지 못했습니다.",
     kicker: "프리미엄",
     heroTitle: "내 악보에 음이름을",
-    heroBody: "피아노 악보를 업로드하면 모든 음표 위에 음이름이 붙어 돌아오고, 소리 나는 음이 빛나는 건반으로 연습할 수 있습니다.",
+    heroBody: "악보를 업로드하면 모든 음표 위에 음이름이 붙어 돌아오고, 소리 나는 음이 빛나는 건반으로 연습할 수 있습니다.",
     chooseBilling: "결제 주기 선택",
     monthly: "월간",
     yearly: "연간",
@@ -572,8 +572,8 @@ export const ko: Messages = {
     premiumPlans: "프리미엄 요금제",
     goPremium: "프리미엄 시작하기",
     keepPracticing: "계속 연습하기",
-    previewOver: "무료 미리 듣기는 여기까지(처음 두 줄)입니다. 구독하면 모든 곡에서 연습 모드 전체를 쓸 수 있습니다.",
-    previewOverTrial: "무료 미리 듣기는 여기까지(처음 두 줄)입니다. 구독하면 모든 곡에서 연습 모드 전체를 쓸 수 있으며, 7일 무료 체험도 제공됩니다.",
+    previewOver: "무료 미리 듣기가 끝났습니다. 구독하면 모든 곡에서 연습 모드 전체를 쓸 수 있습니다.",
+    previewOverTrial: "무료 미리 듣기가 끝났습니다. 구독하면 모든 곡에서 연습 모드 전체를 쓸 수 있으며, 7일 무료 체험도 제공됩니다.",
   },
 
   subscription: {
@@ -614,7 +614,7 @@ export const ko: Messages = {
     ],
     plansFree: "무료 요금제는 한 번에 악보 1개를 보관하고, 연습 모드는 처음 두 줄을 재생합니다.",
     confirming: "구독을 확인하는 중…",
-    almostThere: "거의 다 됐어요",
+    almostThere: "거의 다 되었습니다",
     trialStarted: "체험이 시작되었습니다",
     subscribed: "구독이 완료되었습니다",
     moment: "잠시만 기다려 주세요.",
