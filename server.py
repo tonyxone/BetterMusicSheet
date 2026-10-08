@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import db
+import processed_sheets
 import storage
 import apple_billing
 import stripe_billing
@@ -436,6 +437,8 @@ def delete_account(user_id: str = Depends(get_signed_in_user_id)):
         raise HTTPException(409, "Wait for your current upload to finish before deleting your account.")
     delete_cognito_user(user_id)
     for job in db.list_annotation_jobs(user_id):
+        # Their sheets are no longer offered to anyone else's uploads.
+        processed_sheets.remove(job)
         db.delete_annotation_job(job["job_id"])
     for sheet in db.list_music_sheets(user_id):
         db.delete_music_sheet(sheet["music_sheet_id"])
@@ -561,13 +564,17 @@ async def submit_sheet(
                 version = storage.input_info(job)["VersionId"]
             else:
                 shutil.copyfile(raw, storage._local_path(job["input_key"]))
-                version = "local"
-            job_state.ready(job["job_id"], version)
-            enqueue_local(job["job_id"])
+                version = None
+            from worker import accept_input
+            # Done already when the same file was read before (see
+            # processed_sheets.py); otherwise queued for the worker.
+            accepted = accept_input(job["job_id"], version)
+            if accepted["status"] == "queued":
+                enqueue_local(job["job_id"])
         except Exception:
             job_state.fail(job, {"status": "uploading"}, "Upload failed.")
             raise
-    return {"job_id": job["job_id"], "music_sheet_id": job["music_sheet_id"], "status": "queued"}
+    return {"job_id": job["job_id"], "music_sheet_id": job["music_sheet_id"], "status": accepted["status"]}
 
 
 def _owned_job_or_404(job_id, user_id):
@@ -687,6 +694,9 @@ def delete_job(job_id: str, user_id: str = Depends(get_current_user_id)):
             job = _owned_job_or_404(job_id, user_id)
         else:
             raise HTTPException(409, "This sheet changed; refresh and try again.")
+        # Before the files, so a new upload of the same file is never sent
+        # to copy them while they're going.
+        processed_sheets.remove(job)
         storage.delete_job_files(job)
         db.delete_music_sheet(job["music_sheet_id"])
         job_state.release(job)

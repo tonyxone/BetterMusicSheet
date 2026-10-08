@@ -10,6 +10,7 @@ import traceback
 
 import db
 import job_state
+import processed_sheets
 import storage
 from config import QUEUE_SECONDS
 from worker import accept_input, event_jobs
@@ -29,6 +30,7 @@ def reconcile(sqs, queue_url, now):
                     job_state.release(job)
                     job_state.forget_check(job)
                 elif status in ("deleted", "deleting"):
+                    processed_sheets.remove(job)
                     storage.delete_job_files(job)
                     db.delete_music_sheet(job["music_sheet_id"])
                     job_state.release(job)

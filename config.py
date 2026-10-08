@@ -88,6 +88,18 @@ MASTER_USERS_TABLE = os.environ.get("MASTER_USERS_TABLE")
 # same reason: without a table nobody is an admin, and every admin route 404s.
 ADMIN_TABLE = os.environ.get("ADMIN_TABLE")
 
+# Finished sheets by the hash of their upload, so the same file uploaded again
+# reuses the result instead of being read again (see processed_sheets.py).
+# Optional in production for the same reason: without a table every upload is
+# simply read from scratch, as before. Local dev keeps the list in memory.
+PROCESSED_SHEET_TABLE = os.environ.get("PROCESSED_SHEET_TABLE")
+
+# Which generation of recognition a reusable result came from. Only results
+# from the current one are reused, so bump this after a fix to recognition:
+# from then on every upload is read again with the fix, and the results it
+# makes become the ones reused.
+CACHE_EPOCH = 1
+
 # Stripe is optional until somebody starts a checkout, cancels a subscription,
 # or Stripe calls the webhook. Keeping these nullable lets the rest of the API
 # start in local development without billing credentials.

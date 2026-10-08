@@ -16,6 +16,7 @@ import { PageLoading } from "../../page-loading";
 import { useI18n } from "@/lib/i18n/client";
 import { fmt, rich } from "@/lib/i18n/format";
 import { translateKnown } from "@/lib/i18n/known-text";
+import { namesProgress, namesStage } from "@/lib/names-progress";
 
 // pdf.js and the editor stay out of every other route's bundle, and out of
 // the static export's prerender pass, which has no canvas or worker.
@@ -247,6 +248,42 @@ function NamesBanner({ job, jobId, cancellingRef, onRetried }: {
         <div className="names-banner-sub">{t.addingNamesSub}</div>
       </div>
       <CancelAnnotation jobId={jobId} sheetName={job.sheet_name} cancellingRef={cancellingRef} inline />
+      <NamesProgressBar stage={job.stage} />
+    </div>
+  );
+}
+
+/** How far adding the names has got, worked out from the stage the job
+ * reports (lib/names-progress.ts). Ticks between polls so the bar keeps
+ * creeping, and only moves back when the job itself starts over. */
+function NamesProgressBar({ stage }: { stage: string | null }) {
+  const { m } = useI18n();
+  const { key, start, end } = namesStage(stage);
+  const [shown, setShown] = useState(start);
+  // The previous stage's start, to tell a retry starting over from progress.
+  const previousStart = useRef(start);
+
+  useEffect(() => {
+    const reachedAt = Date.now();
+    let restarted = start < previousStart.current;
+    previousStart.current = start;
+    function update() {
+      const progress = namesProgress({ key, start, end }, (Date.now() - reachedAt) / 1000);
+      setShown((before) => (restarted ? progress : Math.max(before, progress)));
+      restarted = false;
+    }
+    const first = setTimeout(update, 0);
+    const timer = setInterval(update, 1000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(timer);
+    };
+  }, [key, start, end]);
+
+  return (
+    <div className="names-progress" role="progressbar" aria-label={m.sheet.addingNames}
+      aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(shown * 100)}>
+      <div className="names-progress-fill" style={{ width: `${shown * 100}%` }} />
     </div>
   );
 }
