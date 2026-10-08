@@ -135,6 +135,36 @@ class ServerlessTests(unittest.TestCase):
         self.assertTrue(worker.process_job("a", runner=fake_runner))
         self.assertEqual(job_state.create("b", USER, "Second.pdf", OPTIONS, 1)["status"], "uploading")
 
+    def test_the_days_count_is_taken_in_the_reservation_transaction(self):
+        for job_id in ("a", "b"):
+            job_state.release(job_state.create(job_id, USER, "Summer.pdf", OPTIONS, 1, daily_limit=2))
+        with self.assertRaises(job_state.DailyLimit):
+            job_state.create("c", USER, "Summer.pdf", OPTIONS, 1, daily_limit=2)
+        # Refused as a whole: no job, no sheet, and the slot still free.
+        self.assertIsNone(db.get_annotation_job("c"))
+        self.assertIsNone(db.get_music_sheet("c"))
+        self.assertNotIn("Item", self.ddb.get_item(TableName="test-control", Key={"user_id": {"S": USER}}))
+        [counter] = [row for row in self.ddb.scan(TableName="test-control")["Items"]
+                     if row["user_id"]["S"].startswith(f"daily#{USER}#")]
+        self.assertEqual(counter["sheets"], {"N": "2"})
+        self.assertGreater(int(counter["expires_at"]["N"]), time.time() + 86400)
+
+    def test_a_sheet_in_progress_is_busy_before_it_is_over_the_days_limit(self):
+        job_state.create("a", USER, "Summer.pdf", OPTIONS, 1, daily_limit=1)
+        with self.assertRaises(job_state.Busy):
+            job_state.create("b", USER, "Summer.pdf", OPTIONS, 1, daily_limit=1)
+
+    def test_reading_a_failed_sheet_again_is_counted_in_its_transaction(self):
+        failed = self.upload()
+        db.update_annotation_job("a", status="failed")
+        job_state.release(failed)
+        job_state.release(job_state.create("b", USER, "Summer.pdf", OPTIONS, 1, daily_limit=1))
+        with self.assertRaises(job_state.DailyLimit):
+            job_state.retry(db.get_annotation_job("a"), daily_limit=1)
+        self.assertEqual(db.get_annotation_job("a")["status"], "failed")
+        self.assertNotIn("Item", self.ddb.get_item(TableName="test-control", Key={"user_id": {"S": USER}}))
+        self.assertTrue(job_state.retry(db.get_annotation_job("a"), daily_limit=2))
+
     def test_master_user_store_round_trips_through_dynamodb(self):
         self.assertFalse(db.is_master_user(USER))
         db.add_master_user(USER)

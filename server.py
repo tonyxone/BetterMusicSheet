@@ -52,6 +52,11 @@ ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
 # How many sheets a free account may keep. Failed and deleted jobs don't count,
 # so a failed upload can be retried and deleting a sheet frees the slot.
 FREE_SHEET_LIMIT = 1
+# How many sheets an account may start in a UTC day. Unlike FREE_SHEET_LIMIT,
+# every sheet started counts - failed, deleted and read again included - since
+# each one used a worker; without it, deleting and uploading again ran sheets
+# back to back for free. Admins have none, for testing the pipeline itself.
+DAILY_SHEET_LIMITS = {"free": 5, "premium": 20}
 
 # Fixed values keep rasterization cost predictable. Auto leaves the opening
 # pass at Audiveris's 300-DPI default and can selectively re-read unclear
@@ -472,6 +477,24 @@ def _check_free_sheet_limit(user_id):
                                      "upload another, or go Premium for unlimited sheets.")
 
 
+def _daily_sheet_limit(user_id):
+    if db.is_admin(user_id):
+        return None
+    return DAILY_SHEET_LIMITS["premium" if get_entitlement(user_id)["tier"] == "premium" else "free"]
+
+
+def _daily_limit_reached(limit):
+    now = time.time()
+    reset = job_state.next_daily_reset(now)
+    hours = int((reset - now) // 3600)
+    when = (f"in about {hours} hour{'s' if hours != 1 else ''}" if hours else "within the hour")
+    upgrade = (f" Premium allows {DAILY_SHEET_LIMITS['premium']} a day."
+               if limit < DAILY_SHEET_LIMITS["premium"] else "")
+    return HTTPException(429, f"You've started {limit} sheets today, the most your plan allows in a day. "
+                              f"You can start another {when}.{upgrade}",
+                         headers={"Retry-After": str(int(reset - now) + 1)})
+
+
 def reserve_upload(body, user_id):
     if Path(body.filename).suffix.lower() not in ALLOWED_EXTENSIONS:
         raise HTTPException(400, "Only PDF, JPG and PNG files are supported.")
@@ -484,12 +507,15 @@ def reserve_upload(body, user_id):
     # One job in progress at a time (above, and atomically in job_state), so
     # two concurrent uploads can't both slip under the limit.
     _check_free_sheet_limit(user_id)
+    limit = _daily_sheet_limit(user_id)
     try:
         return job_state.create(uuid.uuid4().hex, user_id, body.filename,
                                 body.model_dump(include={"style", "octave", "notation", "font_size", "dpi", "auto_retry", "color"}),
-                                body.size)
+                                body.size, daily_limit=limit)
     except job_state.Busy as exc:
         raise HTTPException(409, str(exc)) from exc
+    except job_state.DailyLimit as exc:
+        raise _daily_limit_reached(limit) from exc
 
 
 @app.post("/api/uploads", status_code=201)
@@ -645,11 +671,14 @@ def retry_sheet(job_id: str, user_id: str = Depends(get_signed_in_user_id)):
         raise HTTPException(409, "This upload didn't finish, so there is nothing to read again. "
                                  "Please upload the file again.")
     _check_free_sheet_limit(user_id)
+    limit = _daily_sheet_limit(user_id)
     try:
-        if not job_state.retry(job):
+        if not job_state.retry(job, daily_limit=limit):
             raise HTTPException(409, "This sheet isn't waiting to be tried again.")
     except job_state.Busy as exc:
         raise HTTPException(409, "You already have a sheet processing. Wait for it to finish.") from exc
+    except job_state.DailyLimit as exc:
+        raise _daily_limit_reached(limit) from exc
     if not SERVERLESS:
         enqueue_local(job_id)
     elif storage.is_own_job(job):
