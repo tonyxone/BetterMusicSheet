@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { getI18n } from "@/lib/i18n/server";
 import { pageMetadata } from "@/lib/i18n/metadata";
+import { fmt } from "@/lib/i18n/format";
+import { DAILY_SHEETS } from "@/lib/plan-limits";
 
 export const generateMetadata = () => pageMetadata("/subscription/plans/", "plans");
 
@@ -19,6 +21,7 @@ export default async function PlansPage() {
         <article className="subscription-card">
           <h2>{p.monthly}</h2>
           <p className="subscription-price">{p.amountMonthly} <small>{p.perMonth}</small></p>
+          <p><strong>{fmt(p.dailySheets, { count: DAILY_SHEETS.monthly })}</strong></p>
           <p className="flex-1">{t.plansMonthly}</p>
           <Link className="btn-pill mt-4 w-full text-center" href={path("/subscription/upgrade?plan=monthly")}>{t.getStarted}</Link>
         </article>
@@ -27,6 +30,7 @@ export default async function PlansPage() {
             {p.yearly} <span style={{ color: "var(--success)", fontSize: 11, fontWeight: 700, marginLeft: 4 }}>{p.save}</span>
           </h2>
           <p className="subscription-price">{p.amountYearly} <small>{p.perYear}</small></p>
+          <p><strong>{fmt(p.dailySheets, { count: DAILY_SHEETS.yearly })}</strong></p>
           <p className="flex-1">{t.plansYearly}</p>
           <Link className="btn-pill mt-4 w-full text-center" href={path("/subscription/upgrade?plan=yearly")}>{t.getStarted}</Link>
         </article>
@@ -36,7 +40,7 @@ export default async function PlansPage() {
         <ul className="landing-list">
           {t.plansPoints.map((point) => <li key={point}>{point}</li>)}
         </ul>
-        <p className="subscription-muted" style={{ marginTop: 16 }}>{t.plansFree}</p>
+        <p className="subscription-muted" style={{ marginTop: 16 }}>{fmt(t.plansFree, { count: DAILY_SHEETS.free })}</p>
       </div>
     </div>
   );
