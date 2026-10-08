@@ -125,7 +125,7 @@ def fail(job, expected, error, **fields):
     Every path to "failed" outside a leased worker goes through here, so the
     operator hears about each one exactly once: whoever wins the compare-and-set.
     """
-    if not change(job["job_id"], expected, status="failed", error=error, **fields):
+    if not change(job["job_id"], expected, status="failed", error=error, finished_at=int(time.time()), **fields):
         return False
     release(job)
     alerts.job_failed(job, error)
@@ -254,7 +254,10 @@ def heartbeat(job, **fields):
 
 
 def finish(job, **fields):
-    owned(job, **fields)
+    # updated_at is no completion time: a review note, a delete or a hand
+    # republish moves it later. finished_at is set once, when the job ends,
+    # by this or fail() - so finished_at - queued_at is how long it took.
+    owned(job, finished_at=int(time.time()), **fields)
     release(job)
 
 
