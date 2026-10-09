@@ -1,36 +1,32 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { clientApiFetch } from "@/lib/client-api";
 import { KeyboardIcon } from "./keyboard-icon";
 import { BackButton } from "./back-button";
 import { DemoSampleCard } from "./demo-sample-card";
 import { isActive, type AnnotationJob } from "@/lib/api";
-import { useSubscription } from "@/lib/subscription";
 import { paginateLibrary } from "@/lib/library-pagination";
 import { noteCountLabel } from "@/lib/note-count";
+import { useI18n } from "@/lib/i18n/client";
+import { fmt, rich } from "@/lib/i18n/format";
+import { translateKnown } from "@/lib/i18n/known-text";
 
-// A sheet can be opened as soon as its upload finishes; these describe its
-// note names, which may still be coming - or have failed, over a sheet that
-// is otherwise perfectly readable.
-const STATUS_LABEL: Record<AnnotationJob["status"], string> = {
-  uploading: "Uploading",
-  done: "Annotated",
-  failed: "No names",
-  processing: "Adding names",
-  queued: "Adding names",
-};
+// A sheet can be opened as soon as its upload finishes; its badge
+// (m.library.status) describes its note names, which may still be coming - or
+// have failed, over a sheet that is otherwise perfectly readable.
 
 // Rendered at two URLs: as the landing page at "/" for a signed-in visitor
-// (see app/page.tsx), and at /history for everyone, which is how a guest -
+// (see app/home.tsx), and at /history for everyone, which is how a guest -
 // who has a library of their own under a guest id, but gets the upload form
 // at "/" - reaches theirs.
 //
 // showBack: on /history there is a page above to return to; at the root there
 // is not, so the caller decides rather than this component guessing.
 export function LibraryView({ showBack = false }: { showBack?: boolean }) {
-  const { subscription } = useSubscription();
+  const { m, tag, path } = useI18n();
+  const t = m.library;
   const [jobs, setJobs] = useState<AnnotationJob[] | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AnnotationJob | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -45,7 +41,8 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
   }, []);
 
   const { pageCount, currentPage, start, end, showDemoLast, emptyLibrary } = paginateLibrary(jobs?.length ?? 0, page);
-  const pageJobs = useMemo(() => jobs?.slice(start, end) ?? [], [jobs, start, end]);
+  // Not memoized by hand: the React Compiler does it.
+  const pageJobs = jobs?.slice(start, end) ?? [];
 
   function openDelete(job: AnnotationJob) {
     setDeleteError(null);
@@ -68,12 +65,12 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => null) as { detail?: string } | null;
-        throw new Error(body?.detail || `Could not delete this sheet (${res.status}).`);
+        throw new Error(translateKnown(body?.detail, m) || fmt(t.deleteFailedStatus, { status: res.status }));
       }
       setJobs((current) => current?.filter((job) => job.job_id !== deleteTarget.job_id) ?? current);
       setDeleteTarget(null);
     } catch (error) {
-      setDeleteError(error instanceof Error ? error.message : "Could not delete this sheet.");
+      setDeleteError(error instanceof Error ? error.message : t.deleteFailed);
     } finally {
       setDeleting(false);
     }
@@ -83,12 +80,12 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
     <div className="wrap medium history-page">
       <div className="page-title-row">
         {showBack && <BackButton />}
-        <h1 className="serif">Library</h1>
+        <h1 className="serif">{t.title}</h1>
       </div>
-      <div className="sub" style={{ marginBottom: 30 }}>Sheets you&apos;ve uploaded.</div>
+      <div className="sub" style={{ marginBottom: 30 }}>{t.sub}</div>
 
       {jobs === null ? (
-        <p style={{ color: "var(--ink-soft)" }}>Loading…</p>
+        <p style={{ color: "var(--ink-soft)" }}>{m.common.loading}</p>
       ) : (
         <>
           {jobs.length > 0 && (
@@ -98,23 +95,25 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
               // sit alongside it inside the same card, and an <a>/<button> can't
               // nest inside another <a>.
               <div key={job.job_id} className="history-row">
-                <Link href={`/sheets?job=${job.job_id}`} className="history-row-link">
+                <Link href={path(`/sheets?job=${job.job_id}`)} className="history-row-link">
                   <div className="history-icon">📄</div>
                   <div className="history-info">
                     <div className="history-title">{job.sheet_name}</div>
-                    {noteCountLabel(job) && <div className="history-meta">{noteCountLabel(job)}</div>}
+                    {noteCountLabel(job, t, tag) && <div className="history-meta">{noteCountLabel(job, t, tag)}</div>}
                   </div>
-                  <span className={`history-badge ${job.status}`}>{STATUS_LABEL[job.status]}</span>
+                  <span className={`history-badge ${job.status}`}>{t.status[job.status]}</span>
                 </Link>
                 <div className="history-actions">
                   {/* Practice plays a finished sheet; before that it shows the
-                      upload and picks the names up once they're ready. */}
+                      upload and picks the names up once they're ready. Open
+                      to every plan: without Premium it plays the first lines,
+                      then offers Premium (play-view.tsx's FREE_LINES). */}
                   {(job.status === "done" || job.original_ready) && (
                     <Link
-                      href={subscription?.tier === "premium" ? `/play?job=${job.job_id}` : "/subscription/upgrade"}
+                      href={path(`/play?job=${job.job_id}`)}
                       className="history-action history-play"
-                      title={subscription?.tier === "premium" ? "Practice with the keyboard" : "Unlock practice mode"}
-                      aria-label={subscription?.tier === "premium" ? "Practice with the keyboard" : "Unlock practice mode"}
+                      title={m.common.practiceWithKeyboard}
+                      aria-label={m.common.practiceWithKeyboard}
                     >
                       <KeyboardIcon size={40} />
                     </Link>
@@ -126,10 +125,10 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
                     disabled={isActive(job)}
                     title={
                       isActive(job)
-                        ? "Wait for processing to finish before deleting"
-                        : `Delete ${job.sheet_name || "sheet"}`
+                        ? t.waitToDelete
+                        : fmt(t.deleteNamed, { name: job.sheet_name || m.common.sheet })
                     }
-                    aria-label={`Delete ${job.sheet_name || "sheet"}`}
+                    aria-label={fmt(t.deleteNamed, { name: job.sheet_name || m.common.sheet })}
                   >
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                       <path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5m4-5v5" />
@@ -146,23 +145,23 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
           {showDemoLast && <DemoSampleCard removable emptyLibrary={emptyLibrary} />}
 
           {pageCount > 1 && (
-            <nav className="pagination" aria-label="Library pages">
+            <nav className="pagination" aria-label={t.pagesNav}>
               <button
                 type="button"
                 className="pagination-btn"
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={currentPage === 1}
-                aria-label="Previous page"
+                aria-label={t.previousPage}
               >
                 ‹
               </button>
-              <span className="pagination-status">Page {currentPage} of {pageCount}</span>
+              <span className="pagination-status">{fmt(t.pageOf, { page: currentPage, count: pageCount })}</span>
               <button
                 type="button"
                 className="pagination-btn"
                 onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
                 disabled={currentPage === pageCount}
-                aria-label="Next page"
+                aria-label={t.nextPage}
               >
                 ›
               </button>
@@ -171,11 +170,11 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
         </>
       )}
 
-      <Link href="/upload" className="upload-fab" title="Upload a sheet" aria-label="Upload a sheet">
+      <Link href={path("/upload")} className="upload-fab" title={m.common.uploadASheet} aria-label={m.common.uploadASheet}>
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M12 5v14M5 12h14" />
         </svg>
-        Upload
+        {m.common.upload}
       </Link>
 
       {deleteTarget && (
@@ -188,25 +187,24 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
               className="modal-close"
               onClick={closeDelete}
               disabled={deleting}
-              title="Close"
-              aria-label="Close"
+              title={m.common.close}
+              aria-label={m.common.close}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="m6 6 12 12M18 6 6 18" />
               </svg>
             </button>
-            <h2 id="delete-title" className="modal-title">Delete this sheet?</h2>
+            <h2 id="delete-title" className="modal-title">{t.deleteTitle}</h2>
             <p className="modal-sub">
-              <strong>{deleteTarget.sheet_name || "Untitled sheet"}</strong> and its uploaded PDF,
-              annotated PDF, and playback data will be permanently deleted.
+              {rich(t.deleteBody, {}, { name: <strong>{deleteTarget.sheet_name || m.common.untitledSheet}</strong> })}
             </p>
             {deleteError && <div className="modal-error">{deleteError}</div>}
             <div className="modal-actions">
-              <button type="button" className="btn-pill ghost" title="Keep this sheet" onClick={closeDelete} disabled={deleting}>
-                Cancel
+              <button type="button" className="btn-pill ghost" title={t.keepSheet} onClick={closeDelete} disabled={deleting}>
+                {m.common.cancel}
               </button>
-              <button type="button" className="btn-pill danger" title="Permanently delete this sheet and its files" onClick={confirmDelete} disabled={deleting}>
-                {deleting ? "Deleting…" : "Delete"}
+              <button type="button" className="btn-pill danger" title={t.deleteForever} onClick={confirmDelete} disabled={deleting}>
+                {deleting ? m.common.deleting : m.common.delete}
               </button>
             </div>
           </div>

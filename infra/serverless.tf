@@ -63,6 +63,7 @@ module "serverless" {
   admin_table           = aws_dynamodb_table.admin.name
   sheets_table          = aws_dynamodb_table.music_sheet.name
   jobs_table            = aws_dynamodb_table.annotation_job.name
+  processed_sheet_table = aws_dynamodb_table.processed_sheet.name
   secret_parameter      = aws_ssm_parameter.backend_jwt_secret.arn
   cognito_pool          = aws_cognito_user_pool.users.id
   cognito_client        = aws_cognito_user_pool_client.web.id

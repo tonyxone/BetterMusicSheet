@@ -1,5 +1,7 @@
 """AWS contract tests use Moto; they never access the real account."""
+import contextlib
 import importlib
+import io
 import json
 import os
 import tempfile
@@ -17,6 +19,7 @@ import auth
 import config
 import db
 import job_state
+import processed_sheets
 import processor
 import server
 import storage
@@ -43,6 +46,7 @@ class ServerlessTests(unittest.TestCase):
             "ANNOTATION_JOB_TABLE": "test-jobs", "JOB_CONTROL_TABLE": "test-control",
             "SUBSCRIPTIONS_TABLE": "test-subscriptions", "MASTER_USERS_TABLE": "test-master-users",
             "ADMIN_TABLE": "test-admins", "JOB_QUEUE_URL": "", "JOB_DLQ_URL": "",
+            "PROCESSED_SHEET_TABLE": "test-processed",
             "JOB_FILES_BUCKET": "legacy-files", "NEW_JOB_FILES_BUCKET": "new-files",
             "BACKEND_JWT_SECRET": "test-only", "COGNITO_USER_POOL_ID": "us-west-1_test",
             "COGNITO_APP_CLIENT_ID": "test-client",
@@ -74,6 +78,12 @@ class ServerlessTests(unittest.TestCase):
                     {"AttributeName": "next_check_at", "KeyType": "RANGE"}], "Projection": {"ProjectionType": "ALL"}})
             self.ddb.create_table(TableName=name, BillingMode="PAY_PER_REQUEST", AttributeDefinitions=attrs,
                 KeySchema=[{"AttributeName": key, "KeyType": "HASH"}], **({"GlobalSecondaryIndexes": indexes} if indexes else {}))
+        self.ddb.create_table(TableName="test-processed", BillingMode="PAY_PER_REQUEST",
+            AttributeDefinitions=[{"AttributeName": "content_sha256", "AttributeType": "S"},
+                                  {"AttributeName": "sort", "AttributeType": "S"}],
+            KeySchema=[{"AttributeName": "content_sha256", "KeyType": "HASH"},
+                       {"AttributeName": "sort", "KeyType": "RANGE"}])
+        processed_sheets._tables.clear()
         self.s3 = boto3.client("s3")
         for bucket in ("legacy-files", "new-files"):
             self.s3.create_bucket(Bucket=bucket, CreateBucketConfiguration={"LocationConstraint": "us-west-1"})
@@ -100,6 +110,16 @@ class ServerlessTests(unittest.TestCase):
         for module in (config, db, storage, job_state, worker, server, controller):
             importlib.reload(module)
 
+    def test_settings_are_saved_to_the_account(self):
+        # DynamoDB has no float type: a speed of 0.7 is stored as a Decimal
+        # and must come back as the number it was.
+        self.client.put("/api/me/preferences", json={"speed": 0.7, "sheet_view": "original"},
+                        headers=self.signed_in())
+        response = self.client.put("/api/me/preferences", json={"sound_on": False}, headers=self.signed_in())
+        expected = {"preferences": {"speed": 0.7, "sheet_view": "original", "sound_on": False}}
+        self.assertEqual(response.json(), expected)
+        self.assertEqual(self.client.get("/api/me/preferences", headers=self.signed_in()).json(), expected)
+
     def upload(self, job_id="a", user=USER, data=b"source"):
         job = job_state.create(job_id, user, "Summer.pdf", OPTIONS, len(data))
         version = self.s3.put_object(Bucket="new-files", Key=job["input_key"], Body=data)["VersionId"]
@@ -115,6 +135,36 @@ class ServerlessTests(unittest.TestCase):
         self.assertTrue(worker.process_job("a", runner=fake_runner))
         self.assertEqual(job_state.create("b", USER, "Second.pdf", OPTIONS, 1)["status"], "uploading")
 
+    def test_the_days_count_is_taken_in_the_reservation_transaction(self):
+        for job_id in ("a", "b"):
+            job_state.release(job_state.create(job_id, USER, "Summer.pdf", OPTIONS, 1, daily_limit=2))
+        with self.assertRaises(job_state.DailyLimit):
+            job_state.create("c", USER, "Summer.pdf", OPTIONS, 1, daily_limit=2)
+        # Refused as a whole: no job, no sheet, and the slot still free.
+        self.assertIsNone(db.get_annotation_job("c"))
+        self.assertIsNone(db.get_music_sheet("c"))
+        self.assertNotIn("Item", self.ddb.get_item(TableName="test-control", Key={"user_id": {"S": USER}}))
+        [counter] = [row for row in self.ddb.scan(TableName="test-control")["Items"]
+                     if row["user_id"]["S"].startswith(f"daily#{USER}#")]
+        self.assertEqual(counter["sheets"], {"N": "2"})
+        self.assertGreater(int(counter["expires_at"]["N"]), time.time() + 86400)
+
+    def test_a_sheet_in_progress_is_busy_before_it_is_over_the_days_limit(self):
+        job_state.create("a", USER, "Summer.pdf", OPTIONS, 1, daily_limit=1)
+        with self.assertRaises(job_state.Busy):
+            job_state.create("b", USER, "Summer.pdf", OPTIONS, 1, daily_limit=1)
+
+    def test_reading_a_failed_sheet_again_is_counted_in_its_transaction(self):
+        failed = self.upload()
+        db.update_annotation_job("a", status="failed")
+        job_state.release(failed)
+        job_state.release(job_state.create("b", USER, "Summer.pdf", OPTIONS, 1, daily_limit=1))
+        with self.assertRaises(job_state.DailyLimit):
+            job_state.retry(db.get_annotation_job("a"), daily_limit=1)
+        self.assertEqual(db.get_annotation_job("a")["status"], "failed")
+        self.assertNotIn("Item", self.ddb.get_item(TableName="test-control", Key={"user_id": {"S": USER}}))
+        self.assertTrue(job_state.retry(db.get_annotation_job("a"), daily_limit=2))
+
     def test_master_user_store_round_trips_through_dynamodb(self):
         self.assertFalse(db.is_master_user(USER))
         db.add_master_user(USER)
@@ -124,6 +174,64 @@ class ServerlessTests(unittest.TestCase):
         self.assertEqual(auth.get_entitlement(USER)["tier"], "premium")
         db.remove_master_user(USER)
         self.assertFalse(db.is_master_user(USER))
+
+    def processed_rows(self):
+        return self.ddb.scan(TableName="test-processed")["Items"]
+
+    def test_the_same_file_is_reused_through_dynamodb_and_s3(self):
+        def runner(job, directory, tick):
+            fake_runner(job, directory, tick)
+            (directory / "notes.json").write_text('{"version": 1}')
+            return {"count": 7, "notes_named": 30, "notes_printed": None,
+                    "redrawn": (directory / "reuse" / "notes.json").exists()}
+
+        self.upload("a", data=b"same sheet")
+        self.assertTrue(worker.process_job("a", runner=runner))
+        first = db.get_annotation_job("a")
+        [row] = self.processed_rows()
+        self.assertEqual(row["content_sha256"]["S"], first["content_sha256"])
+        self.assertEqual(row["sort"]["S"], f"{first['created_at']:012d}#a")
+        self.assertEqual((row["job_id"]["S"], row["files_region"]["S"]), ("a", "us-west-1"))
+
+        other = "22222222-2222-4222-8222-222222222222"
+        copied = self.upload("b", user=other, data=b"same sheet")
+        self.assertEqual((copied["status"], copied["reused_from"]), ("done", "a"))
+        self.assertEqual(copied["output_key"], f"jobs/{other}/b/attempts/reused/output")
+        body = self.s3.get_object(Bucket="new-files", Key=copied["output_key"])
+        self.assertEqual(body["Body"].read(), b"%PDF-test")
+        self.assertEqual(body["ContentType"], "application/pdf")
+        # Never queued, and its upload slot is free again.
+        self.assertEqual(self.sqs.receive_message(QueueUrl=self.queue).get("Messages"), None)
+        job_state.create("b2", other, "Next.pdf", OPTIONS, 1)
+        self.assertEqual(len(self.processed_rows()), 2)
+
+        # Other settings: queued, to be drawn again from the first's notes.
+        third = "33333333-3333-4333-8333-333333333333"
+        redraw = job_state.create("c", third, "Summer.pdf", {**OPTIONS, "notation": "numbers"}, 10)
+        version = self.s3.put_object(Bucket="new-files", Key=redraw["input_key"], Body=b"same sheet")["VersionId"]
+        queued = worker.accept_input("c", version)
+        self.assertEqual(queued["status"], "queued")
+        # The newest sheet made from the file: the copy is as good as the first.
+        self.assertEqual(queued["redraw_from"], "b")
+        self.assertTrue(worker.process_job("c", runner=runner))
+        self.assertEqual(db.get_annotation_job("c")["reused_from"], "b")
+
+        # Deleting a sheet takes its row with it, before its files.
+        self.assertEqual(self.client.delete("/api/sheets/b", headers=self.signed_in(other)).status_code, 204)
+        self.assertNotIn("b", {r["job_id"]["S"] for r in self.processed_rows()})
+
+    def test_without_the_reuse_table_every_upload_is_read_as_before(self):
+        # Named but missing - code shipped before its table, or the table lost.
+        self.ddb.delete_table(TableName="test-processed")
+        self.upload("a", data=b"same sheet")
+        self.assertTrue(worker.process_job("a", runner=fake_runner))
+        self.assertEqual(db.get_annotation_job("a")["status"], "done")
+        other = "22222222-2222-4222-8222-222222222222"
+        second = self.upload("b", user=other, data=b"same sheet")
+        self.assertEqual(second["status"], "queued")
+        self.assertTrue(worker.process_job("b", runner=fake_runner))
+        self.assertEqual(db.get_annotation_job("b")["status"], "done")
+        self.assertEqual(self.client.delete("/api/sheets/a", headers=self.signed_in()).status_code, 204)
 
     def test_a_failed_sheet_is_retried_through_dynamodb_and_sqs(self):
         self.upload()
@@ -330,6 +438,34 @@ class ServerlessTests(unittest.TestCase):
                          f"s3://new-files/{job['input_key']} (us-west-1)"):
             self.assertIn(expected, body)
 
+    def test_every_failed_attempt_is_logged_with_its_cause(self):
+        read = self.alert_inbox()
+        self.upload()
+        crash = RuntimeError(job_state.UNREADABLE)
+        crash.crash = "Audiveris: WARN [input#2] Book 2044 | Error processing stub no such edge in graph: Exclusion"
+        runner = Mock(side_effect=crash)
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            self.assertFalse(worker.process_job("a", runner=runner))
+            self.assertTrue(worker.process_job("a", runner=Mock(side_effect=fake_runner)))
+        events = [json.loads(line) for line in printed.getvalue().splitlines() if line.startswith("{")]
+        failed, done = [e for e in events if e["event"] == "attempt_failed"], [e for e in events if e["event"] == "job_done"]
+        self.assertEqual(len(failed), 1)
+        self.assertEqual((failed[0]["job_id"], failed[0]["attempt"], failed[0]["retrying"]), ("a", 1, True))
+        self.assertIn("no such edge in graph", failed[0]["crash"])
+        self.assertEqual(done[0]["attempts"], 2, "a success after a crash says so")
+        self.assertEqual(read(), [], "a retried attempt is logged, not alerted")
+
+    def test_a_final_failure_email_names_the_cause(self):
+        read = self.alert_inbox()
+        self.upload()
+        crash = RuntimeError(job_state.UNREADABLE)
+        crash.crash = "Audiveris: Error processing stub no such edge in graph: Exclusion"
+        for _ in range(config.MAX_ATTEMPTS):
+            worker.process_job("a", runner=Mock(side_effect=crash))
+        [alert] = read()
+        self.assertIn("Cause:      Audiveris: Error processing stub", alert["Message"])
+
     def test_controller_failures_alert(self):
         read = self.alert_inbox()
         abandoned = job_state.create("a", USER, "夏日漱石.pdf", OPTIONS, 3)
@@ -353,12 +489,43 @@ class ServerlessTests(unittest.TestCase):
                 {"warnings": [warning] if i < 6 else []} for i in range(10)]}))
             return 7
 
-        self.upload("b", user="22222222")
+        # Another file: the same one would be copied, not read (processed_sheets.py).
+        self.upload("b", user="22222222", data=b"another sheet")
         self.assertTrue(worker.process_job("b", runner=rough))
         [alert] = read()
         self.assertEqual(alert["Subject"], "Sheet needs review: Summer.pdf")
         self.assertIn("6 of 10 measures have recognition warnings", alert["Message"])
         self.assertIn("Annotated:  s3://new-files/jobs/22222222/b/attempts/", alert["Message"])
+
+    def test_a_hand_republish_is_recorded_on_the_row_and_in_the_worker_log(self):
+        import republish
+        importlib.reload(republish)
+        self.addCleanup(importlib.reload, republish)  # after tearDown has left production
+        logs = boto3.client("logs")
+        logs.create_log_group(logGroupName=republish.LOG_GROUP)
+        self.upload()
+        self.assertTrue(worker.process_job("a", runner=fake_runner))
+        before = db.get_annotation_job("a")
+        self.assertGreaterEqual(before["finished_at"], before["queued_at"])
+
+        def runner(job, directory):
+            return {"count": fake_runner(job, directory, lambda: None)}
+
+        storage.write_edits(before, USER, b"{}")
+        with self.assertRaises(republish.Refused):
+            republish.republish("a", runner=runner)
+        with contextlib.redirect_stdout(io.StringIO()):
+            job = republish.republish("a", runner=runner, allow_edits=True, reason="a pipeline fix")
+        self.assertEqual((job["republished_from"], job["finished_at"], job["review_reasons"]),
+                         (before["output_key"], before["finished_at"], []))
+        self.assertNotEqual(job["output_key"], before["output_key"])
+        self.s3.head_object(Bucket="new-files", Key=job["output_key"])
+        self.s3.head_object(Bucket="new-files", Key=before["output_key"])
+        [stream] = logs.describe_log_streams(logGroupName=republish.LOG_GROUP)["logStreams"]
+        [event] = logs.get_log_events(logGroupName=republish.LOG_GROUP,
+                                      logStreamName=stream["logStreamName"])["events"]
+        self.assertEqual({k: v for k, v in json.loads(event["message"]).items() if k in ("event", "job_id", "reason")},
+                         {"event": "job_republished", "job_id": "a", "reason": "a pipeline fix"})
 
     def test_an_alert_that_cannot_be_sent_does_not_change_the_outcome(self):
         os.environ["ALERTS_TOPIC_ARN"] = "arn:aws:sns:us-west-1:123456789012:missing"

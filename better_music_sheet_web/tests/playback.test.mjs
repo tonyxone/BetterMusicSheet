@@ -48,7 +48,7 @@ function sampleEngine() {
   };
   const lib = { LAYERS:smplr.LAYERS, Scheduler:smplr.Scheduler, SplendidGrandPiano:create, ElectricPiano:create, Soundfont:create,
     HttpStorage:{fetch(){}}, CacheStorage:()=>({fetch(){}}) };
-  const { SynthEngine } = modules({smplr:lib}).load('app/play/synth.ts');
+  const { SynthEngine } = modules({smplr:lib}).load('app/(en)/play/synth.ts');
   const param = () => ({value:0,setTargetAtTime(){}});
   const node = () => ({gain:param(),threshold:param(),knee:param(),ratio:param(),connect(){},disconnect(){}});
   const engine = new SynthEngine({currentTime:0,createGain:node,createDynamicsCompressor:node,destination:{}});
@@ -109,7 +109,7 @@ const score = (notes, total = 8, extra = {}) => ({ version: 2, tempo_bpm_default
   measures: [{ index: 0, start_beat: 0, length_beats: total, label: '1', page: 1, bbox_pt: null, distinct_midis: [] }], ...extra });
 function player(timeline) {
   const runtime = modules();
-  const { Playback } = runtime.load('app/play/playback.ts');
+  const { Playback } = runtime.load('app/(en)/play/playback.ts');
   const ctx = { currentTime: 0 };
   const sounds = [], highlights = [], progress = [];
   let ended = 0;
@@ -151,14 +151,14 @@ test('preview boundary clips long sustains and schedules nothing beyond it', () 
 });
 
 test('tempo changes integrate and invert exactly', () => {
-  const { tempoClock } = modules().load('app/play/tempo.ts');
+  const { tempoClock } = modules().load('app/(en)/play/tempo.ts');
   const clock = tempoClock(score([], 8, { tempo_map: [{ start_beat: 0, bpm: 60 }, { start_beat: 4, bpm: 120 }] }));
   assert.equal(clock.secondsAt(8), 6);
   for (const beat of [-4, 0, 2, 4, 5, 8]) assert.equal(clock.beatAt(clock.secondsAt(beat)), beat);
 });
 
 test('printed dotted-quarter BPM displays 68 and retains its sounding tempo', () => {
-  const { tempoControl, tempoClock } = modules().load('app/play/tempo.ts');
+  const { tempoControl, tempoClock } = modules().load('app/(en)/play/tempo.ts');
   const t = score([], 6, { tempo_map: [{ start_beat: 0, bpm: 102, beat_unit_quarters: 1.5 }] });
   const control = tempoControl(t);
   assert.equal(control.bpm, 68);
@@ -170,7 +170,7 @@ test('printed dotted-quarter BPM displays 68 and retains its sounding tempo', ()
 });
 
 test('legacy tempo data defaults to quarter-note BPM', () => {
-  const { tempoControl } = modules().load('app/play/tempo.ts');
+  const { tempoControl } = modules().load('app/(en)/play/tempo.ts');
   const control = tempoControl(score([], 4));
   assert.equal(control.bpm, 60);
   assert.equal(control.toQuarterBpm(80), 80);
@@ -288,7 +288,7 @@ function nativeSampler() {
   const lib = {...smplr,
     CacheStorage: () => ({}),
     SplendidGrandPiano: (context, options) => smplr.SplendidGrandPiano(context, {...options, loader})};
-  const {SynthEngine} = modules({smplr: lib}).load('app/play/synth.ts');
+  const {SynthEngine} = modules({smplr: lib}).load('app/(en)/play/synth.ts');
   return {engine: new SynthEngine(ctx), ctx, sources};
 }
 

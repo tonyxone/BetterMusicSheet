@@ -20,6 +20,45 @@ class LeaseLost(Exception):
     pass
 
 
+class DailyLimit(Exception):
+    """The account has started as many sheets today as it may in a day."""
+
+
+# Sheets started per account per UTC day: one counter row each, in the same
+# control table as the upload slot. Its user_id is "daily#<user>#<date>", a
+# key no slot row can have (those are bare user ids), and it expires itself
+# (the table's TTL) a day after the day it counts.
+_daily_counts = {}
+
+
+def _daily_key(user_id, now):
+    return f"daily#{user_id}#{time.strftime('%Y-%m-%d', time.gmtime(now))}"
+
+
+def next_daily_reset(now):
+    """When today's count starts over: the next UTC midnight."""
+    return (int(now) // 86400 + 1) * 86400
+
+
+def _count_daily(user_id, limit, now):
+    """The transaction item adding one to today's count, unless that would
+    take it past ``limit``. Counted when a sheet is started, and never given
+    back: a failed or deleted sheet still used a worker."""
+    return {"Update": {"TableName": _table().name, "Key": _serialized({"user_id": _daily_key(user_id, now)}),
+                       "UpdateExpression": "ADD sheets :one SET expires_at = :expires",
+                       "ConditionExpression": "attribute_not_exists(sheets) OR sheets < :limit",
+                       "ExpressionAttributeValues": _serialized({
+                           ":one": 1, ":limit": limit, ":expires": next_daily_reset(now) + 86400})}}
+
+
+def _count_daily_locally(user_id, limit, now):
+    """_count_daily for the in-memory store; the caller holds db._lock."""
+    key = _daily_key(user_id, now)
+    if _daily_counts.get(key, 0) >= limit:
+        raise DailyLimit(limit)
+    _daily_counts[key] = _daily_counts.get(key, 0) + 1
+
+
 # What a reader sees when recognition fails for a reason they can't fix
 # themselves. Honest about it: every failure emails the operator (alerts.py),
 # and a failed sheet keeps its upload, so it can be read again (retry below)
@@ -40,7 +79,10 @@ def _serialized(item):
     return {k: serializer.serialize(v) for k, v in item.items()}
 
 
-def create(job_id, user_id, name, options, size):
+def create(job_id, user_id, name, options, size, daily_limit=None):
+    """Reserve a new upload: Busy while the account has another sheet in
+    progress, DailyLimit once it has started ``daily_limit`` sheets today
+    (None: no daily limit, for the operator's own tools)."""
     now = int(time.time())
     sheet = {"music_sheet_id": job_id, "user_id": user_id, "sheet_name": name,
              "created_at": now, "storage_version": 2}
@@ -61,24 +103,34 @@ def create(job_id, user_id, name, options, size):
         # The lock has no short TTL: the reconciler explicitly releases abandoned
         # uploads and terminal jobs, so an active processing job never loses it.
         lock = {"user_id": user_id, "job_id": job_id}
+        items = [
+            {"Put": {"TableName": _table().name, "Item": _serialized(lock),
+                     "ConditionExpression": "attribute_not_exists(user_id)"}},
+            {"Put": {"TableName": db._music_sheet_table.name, "Item": _serialized(sheet),
+                     "ConditionExpression": "attribute_not_exists(music_sheet_id)"}},
+            {"Put": {"TableName": db._annotation_job_table.name, "Item": _serialized(stored),
+                     "ConditionExpression": "attribute_not_exists(job_id)"}},
+        ]
+        if daily_limit is not None:
+            # In the same transaction, so concurrent uploads can't all pass
+            # a count taken before any of them was added to it.
+            items.append(_count_daily(user_id, daily_limit, now))
         try:
             import boto3
-            boto3.client("dynamodb").transact_write_items(TransactItems=[
-                {"Put": {"TableName": _table().name, "Item": _serialized(lock),
-                         "ConditionExpression": "attribute_not_exists(user_id)"}},
-                {"Put": {"TableName": db._music_sheet_table.name, "Item": _serialized(sheet),
-                         "ConditionExpression": "attribute_not_exists(music_sheet_id)"}},
-                {"Put": {"TableName": db._annotation_job_table.name, "Item": _serialized(stored),
-                         "ConditionExpression": "attribute_not_exists(job_id)"}},
-            ])
+            boto3.client("dynamodb").transact_write_items(TransactItems=items)
         except db._annotation_job_table.meta.client.exceptions.TransactionCanceledException as exc:
-            if any(r.get("Code") == "ConditionalCheckFailed" for r in exc.response.get("CancellationReasons", [])):
+            failed = [r.get("Code") == "ConditionalCheckFailed" for r in exc.response.get("CancellationReasons", [])]
+            if any(failed[:3]):
                 raise Busy("You already have a sheet uploading or processing.") from exc
+            if any(failed[3:]):
+                raise DailyLimit(daily_limit) from exc
             raise
     else:
         with db._lock:
             if any(j["user_id"] == user_id and j["status"] in ACTIVE for j in db._annotation_jobs.values()):
                 raise Busy("You already have a sheet uploading or processing.")
+            if daily_limit is not None:
+                _count_daily_locally(user_id, daily_limit, now)
             db._music_sheets[job_id] = sheet
             db._annotation_jobs[job_id] = job
     return job
@@ -125,7 +177,7 @@ def fail(job, expected, error, **fields):
     Every path to "failed" outside a leased worker goes through here, so the
     operator hears about each one exactly once: whoever wins the compare-and-set.
     """
-    if not change(job["job_id"], expected, status="failed", error=error, **fields):
+    if not change(job["job_id"], expected, status="failed", error=error, finished_at=int(time.time()), **fields):
         return False
     release(job)
     alerts.job_failed(job, error)
@@ -143,13 +195,30 @@ def release(job):
         pass
 
 
-def ready(job_id, version):
+def ready(job_id, version, **fields):
+    """Queue an upload that has arrived. ``fields`` are stored with it: the
+    upload's hash, and what to draw the names from when its music was
+    already read (see worker.accept_input)."""
     job = db.get_annotation_job(job_id)
     if job and job["status"] == "uploading":
         now = int(time.time())
         change(job_id, {"status": "uploading"}, status="queued", input_version=version, queued_at=now,
-               stage="Waiting for a recognition worker", next_check_at=now + 300)
+               stage="Waiting for a recognition worker", next_check_at=now + 300, **fields)
     return db.get_annotation_job(job_id)
+
+
+def reused(job, version, **fields):
+    """Finish an upload straight away, with results copied from an earlier
+    sheet made from the same file - it is never queued. False if the upload
+    stopped waiting meanwhile (another caller got here first, or a delete)."""
+    now = int(time.time())
+    # next_check_at: the controller frees the upload slot again should the
+    # release below not happen, exactly as for a job a worker finished.
+    if not change(job["job_id"], {"status": "uploading"}, status="done", input_version=version,
+                  queued_at=now, stage="Complete", error=None, next_check_at=now, **fields):
+        return False
+    release(job)
+    return True
 
 
 def can_retry(job):
@@ -158,14 +227,16 @@ def can_retry(job):
     return job["status"] == "failed" and job.get("storage_version") == 2 and bool(job.get("input_version"))
 
 
-def retry(job):
+def retry(job, daily_limit=None):
     """Queue a failed sheet to be read again, from the upload it kept.
 
     Takes the user's upload slot, exactly as a new upload does: Busy if
-    another of their sheets is uploading or processing. False if the job
-    stopped being failed meanwhile (a second click, or a delete). The
-    controller sends it to the workers within a minute (next_check_at), and
-    the caller may send it sooner.
+    another of their sheets is uploading or processing, and counts as a sheet
+    started today (DailyLimit past ``daily_limit``) - reading a sheet again
+    costs a worker the same as a new one. False if the job stopped being
+    failed meanwhile (a second click, or a delete). The controller sends it
+    to the workers within a minute (next_check_at), and the caller may send
+    it sooner.
     """
     now = int(time.time())
     fields = {"status": "queued", "attempt_count": 0, "error": None, "stage": "Waiting for a recognition worker",
@@ -177,27 +248,34 @@ def retry(job):
             row = db._annotation_jobs.get(job["job_id"])
             if row is None or row["status"] != "failed":
                 return False
+            if daily_limit is not None:
+                _count_daily_locally(job["user_id"], daily_limit, now)
             row.update(fields)
             return True
     import boto3
     names = {f"#f{i}": key for i, key in enumerate(fields)}
     values = {f":f{i}": value for i, value in enumerate(fields.values())}
     names["#s"], values[":failed"] = "status", "failed"
+    items = [
+        {"Put": {"TableName": _table().name, "Item": _serialized({"user_id": job["user_id"], "job_id": job["job_id"]}),
+                 "ConditionExpression": "attribute_not_exists(user_id)"}},
+        {"Update": {"TableName": db._annotation_job_table.name, "Key": _serialized({"job_id": job["job_id"]}),
+                    "UpdateExpression": "SET " + ", ".join(f"#f{i} = :f{i}" for i in range(len(fields))),
+                    "ConditionExpression": "#s = :failed",
+                    "ExpressionAttributeNames": names, "ExpressionAttributeValues": _serialized(values)}},
+    ]
+    if daily_limit is not None:
+        items.append(_count_daily(job["user_id"], daily_limit, now))
     try:
-        boto3.client("dynamodb").transact_write_items(TransactItems=[
-            {"Put": {"TableName": _table().name, "Item": _serialized({"user_id": job["user_id"], "job_id": job["job_id"]}),
-                     "ConditionExpression": "attribute_not_exists(user_id)"}},
-            {"Update": {"TableName": db._annotation_job_table.name, "Key": _serialized({"job_id": job["job_id"]}),
-                        "UpdateExpression": "SET " + ", ".join(f"#f{i} = :f{i}" for i in range(len(fields))),
-                        "ConditionExpression": "#s = :failed",
-                        "ExpressionAttributeNames": names, "ExpressionAttributeValues": _serialized(values)}},
-        ])
+        boto3.client("dynamodb").transact_write_items(TransactItems=items)
     except db._annotation_job_table.meta.client.exceptions.TransactionCanceledException as exc:
         reasons = [r.get("Code") for r in exc.response.get("CancellationReasons", [])]
         if reasons and reasons[0] == "ConditionalCheckFailed":
             raise Busy("You already have a sheet uploading or processing.") from exc
         if len(reasons) > 1 and reasons[1] == "ConditionalCheckFailed":
             return False
+        if len(reasons) > 2 and reasons[2] == "ConditionalCheckFailed":
+            raise DailyLimit(daily_limit) from exc
         raise
     return True
 
@@ -237,7 +315,10 @@ def heartbeat(job, **fields):
 
 
 def finish(job, **fields):
-    owned(job, **fields)
+    # updated_at is no completion time: a review note, a delete or a hand
+    # republish moves it later. finished_at is set once, when the job ends,
+    # by this or fail() - so finished_at - queued_at is how long it took.
+    owned(job, finished_at=int(time.time()), **fields)
     release(job)
 
 

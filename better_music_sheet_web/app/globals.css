@@ -47,6 +47,25 @@ h1, h2, .serif {
   font-family: 'Spectral', serif;
 }
 
+/* Neither Work Sans nor Spectral has Chinese, Japanese or Korean, so each
+   language names the system fonts that do, in its own forms: the same
+   character is drawn differently in Simplified, Traditional and Japanese,
+   and a browser left to guess can pick the wrong one. The headings prefer a
+   serif to match Spectral where the system has one, and fall back to the
+   sans rather than to a generic serif (SimSun and MS Mincho on Windows read
+   poorly at heading weights). */
+html:lang(zh-Hans) body { font-family: 'Work Sans', "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", "Noto Sans CJK SC", sans-serif; }
+html:lang(zh-Hans) :is(h1, h2, .serif, .history-title, .legal h3) { font-family: 'Spectral', "Songti SC", "Noto Serif SC", "Noto Serif CJK SC", "PingFang SC", "Microsoft YaHei", serif; }
+html:lang(zh-Hant) body { font-family: 'Work Sans', "PingFang TC", "Microsoft JhengHei", "Noto Sans TC", "Noto Sans CJK TC", sans-serif; }
+html:lang(zh-Hant) :is(h1, h2, .serif, .history-title, .legal h3) { font-family: 'Spectral', "Songti TC", "Noto Serif TC", "Noto Serif CJK TC", "PingFang TC", "Microsoft JhengHei", serif; }
+html:lang(ja) body { font-family: 'Work Sans', "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", "YuGothic", Meiryo, "Noto Sans JP", "Noto Sans CJK JP", sans-serif; }
+html:lang(ja) :is(h1, h2, .serif, .history-title, .legal h3) { font-family: 'Spectral', "Hiragino Mincho ProN", "Yu Mincho", "YuMincho", "Noto Serif JP", "Noto Serif CJK JP", "Hiragino Sans", "Yu Gothic", Meiryo, serif; }
+html:lang(ko) body { font-family: 'Work Sans', "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", "Noto Sans CJK KR", sans-serif; }
+html:lang(ko) :is(h1, h2, .serif, .history-title, .legal h3) { font-family: 'Spectral', "AppleMyungjo", "Noto Serif KR", "Noto Serif CJK KR", "Apple SD Gothic Neo", "Malgun Gothic", serif; }
+/* Korean breaks lines between words, like English, not between any two
+   characters as Chinese and Japanese do. */
+html:lang(ko) body { word-break: keep-all; }
+
 main {
   position: relative;
   z-index: 1;
@@ -125,6 +144,14 @@ main {
 .upload-sub {
   font-size: 15.5px; color: var(--ink-soft); text-align: center; margin-top: 10px;
   max-width: 460px; margin-left: auto; margin-right: auto; line-height: 1.5;
+}
+.upload-check {
+  margin: 12px 0 0; padding: 10px 14px; border-radius: 12px; background: var(--danger-bg); color: var(--danger);
+  font-size: 13.5px; line-height: 1.5;
+}
+.upload-quality {
+  margin: 12px 0 0; padding: 10px 14px; border-radius: 12px; background: #FBF1DF; color: #6B4A12;
+  font-size: 13.5px; line-height: 1.5;
 }
 .dropzone {
   display: block; border: 2px dashed #E4D6B8; border-radius: 20px; padding: 48px 24px; text-align: center;
@@ -222,6 +249,10 @@ details.options[open] summary::before { content: "▾ "; }
 .names-banner-sub { font-size: 13px; color: var(--ink-soft); margin-top: 2px; }
 .names-banner-error { font-size: 13px; color: var(--danger); margin-top: 6px; }
 .names-banner .btn-pill { flex: none; text-decoration: none; }
+/* How far adding the names has got - a full-width line under the banner's text. */
+.names-progress { flex: 1 0 100%; height: 6px; border-radius: 999px; background: var(--paper-deep); overflow: hidden; }
+.names-progress-fill { height: 100%; border-radius: inherit; background: var(--accent); transition: width 1s linear; }
+@media (prefers-reduced-motion: reduce) { .names-progress-fill { transition: none; } }
 .practice-wait-sheet { padding: 12px; }
 .history-badge.uploading { background: var(--paper-deep); color: var(--ink-soft); }
 
@@ -509,6 +540,46 @@ details.options[open] summary::before { content: "▾ "; }
 .subscription-action a { color: var(--accent); font-size: 14px; }
 .subscription-error { max-width: 440px; padding: 10px 12px; border-radius: 10px; background: var(--danger-bg); color: var(--danger) !important; }
 .subscription-muted { color: var(--ink-soft); }
+/* Free, Monthly and Yearly in one row (the Free card first), drawn alike -
+   Free just isn't one of the choices (iOS's FreePlanCard). On a phone the
+   cards stack, Premium's first. */
+.subscription-tiers {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 14px;
+  max-width: 860px; margin: 0 auto 22px; text-align: left;
+}
+.subscription-tiers .subscription-plans { max-width: none; margin: 0; }
+.free-plan-points { list-style: none; margin: 0; padding: 14px 0 0; border-top: 1px solid var(--paper-deep); display: grid; gap: 8px; }
+/* The separator lines up across the row: every list starts right after a
+   description given room for two lines, rather than sinking to the card's
+   foot - where Free's shorter list would put its line lower. */
+.subscription-tiers .subscription-card > p:not(.subscription-price) { min-height: 3em; }
+.subscription-tiers .subscription-benefits { margin-top: 0; }
+.subscription-card p:has(+ .free-plan-points) { margin-bottom: 14px; }
+.free-plan-points li { display: flex; gap: 10px; font-size: 13.5px; line-height: 1.45; color: var(--ink); }
+.free-plan-mark { flex: none; width: 14px; font-weight: 700; text-align: center; }
+.free-plan-points li.included .free-plan-mark { color: var(--success); }
+.free-plan-points li.limited .free-plan-mark { color: var(--danger); }
+@media (max-width: 760px) {
+  .subscription-tiers { grid-template-columns: 1fr; }
+  .subscription-tiers .free-plan-card { order: 2; }
+}
+/* The way into Premium, as iOS draws it: a gold gradient capsule with white
+   text (PremiumButtonStyle). The shadow keeps the text readable over the
+   gradient's pale end. */
+.btn-premium {
+  display: block; width: 100%; height: 46px; margin-top: 20px; border: 0; border-radius: 999px;
+  background: linear-gradient(135deg, #FCE3AF, #A37239); color: #fff;
+  font: inherit; font-size: 15px; font-weight: 600; text-shadow: 0 1px 2px rgba(80, 50, 15, 0.45);
+  cursor: pointer;
+}
+.btn-premium:hover { filter: brightness(1.04); }
+.btn-premium:active { opacity: 0.8; }
+/* Premium's whole page in a window, over the sign-in window. */
+.modal-card.premium-window { max-width: 900px; padding: 8px 8px 24px; }
+/* A button that opens a window, written into a sentence like a link. */
+.inline-link { border: 0; padding: 0; background: none; font: inherit; color: var(--accent); cursor: pointer; }
+.inline-link:hover { text-decoration: underline; }
+.premium-window .subscription-page { padding-top: 24px; padding-bottom: 0; }
 .manage-card { max-width: 540px; margin: 22px auto 0; text-align: left; }
 .manage-card dl { margin: 0 0 22px; }
 .manage-card dl > div { display: flex; justify-content: space-between; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--paper-deep); }
@@ -801,6 +872,13 @@ button.history-row { width: 100%; font-family: inherit; cursor: pointer; text-al
   border-bottom: 1px solid transparent;
 }
 .footer-links a:hover { color: var(--ink); border-bottom-color: var(--ink-soft); }
+.language-picker { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-soft); font-size: 0.85rem; }
+.language-picker svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6; }
+.language-picker select {
+  font: inherit; color: inherit; background: transparent; border: 1px solid rgba(122, 103, 83, 0.3);
+  border-radius: 999px; padding: 3px 10px; cursor: pointer;
+}
+.language-picker select:hover, .language-picker select:focus-visible { color: var(--ink); border-color: var(--ink-soft); }
 .footer-note {
   color: var(--ink-soft);
   font-size: 0.8rem;
@@ -844,6 +922,10 @@ button.history-row { width: 100%; font-family: inherit; cursor: pointer; text-al
   font-family: 'Spectral', serif;
 }
 .legal p, .legal li { color: var(--ink); line-height: 1.7; margin-bottom: 12px; }
+.english-only {
+  margin: 0 0 20px; padding: 10px 14px; border-radius: 10px; font-size: 0.9rem; line-height: 1.6;
+  background: rgba(217, 164, 65, 0.12); color: var(--ink-soft);
+}
 .legal ul { margin: 0 0 12px 1.1rem; list-style: disc; }
 .legal li { margin-bottom: 8px; }
 .legal code {
@@ -1067,7 +1149,8 @@ textarea.sheet-inline-input { font-family: system-ui, -apple-system, "Segoe UI",
    list as it goes, leaving a hidden placeholder behind, which isn't a page. */
 .photo-pages { counter-reset: page; }
 .photo-pages li:not([data-dnd-placeholder]) { counter-increment: page; }
-.photo-page-number::before { content: "Page " counter(page); }
+/* The words around the number come from the page's language (upload-form.tsx). */
+.photo-page-number::before { content: var(--page-before, "Page ") counter(page) var(--page-after, ""); }
 .photo-pages li {
   display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 6px;
   background: var(--card); border: 1px solid var(--paper-deep); border-radius: 12px;

@@ -5,10 +5,27 @@ import xml.etree.ElementTree as ET
 
 
 def _parse_sheet(omr_path, sheet_index):
+    """A sheet's recognition, or an empty sheet for a page the book skipped -
+    one Audiveris dropped as holding no music, such as a cover picture."""
     with zipfile.ZipFile(omr_path) as z:
-        with z.open(f"sheet#{sheet_index}/sheet#{sheet_index}.xml") as f:
-            tree = ET.parse(f)
-    return tree.getroot()
+        try:
+            with z.open(f"sheet#{sheet_index}/sheet#{sheet_index}.xml") as f:
+                return ET.parse(f).getroot()
+        except KeyError:
+            return ET.Element('sheet')
+
+
+def has_sheet(omr_path, sheet_index):
+    """Whether the book read this page at all, rather than leaving it out as
+    holding no music (run.recognize_book). A book that cannot be opened says
+    nothing about it, so the page is taken as read."""
+    if not omr_path:
+        return True
+    try:
+        with zipfile.ZipFile(omr_path) as z:
+            return f"sheet#{sheet_index}/sheet#{sheet_index}.xml" in z.namelist()
+    except (OSError, zipfile.BadZipFile):
+        return True
 
 
 def load_sheet_heads(omr_path, sheet_index):
@@ -301,11 +318,9 @@ def load_tie_stop_heads(omr_path, sheet_index):
 
 
 def get_picture_size(omr_path, sheet_index):
-    with zipfile.ZipFile(omr_path) as z:
-        with z.open(f"sheet#{sheet_index}/sheet#{sheet_index}.xml") as f:
-            tree = ET.parse(f)
-    pic = tree.getroot().find('picture')
-    return int(pic.get('width')), int(pic.get('height'))
+    """(width, height) in pixels, or None for a page the book skipped."""
+    pic = _parse_sheet(omr_path, sheet_index).find('picture')
+    return (int(pic.get('width')), int(pic.get('height'))) if pic is not None else None
 
 
 def group_heads_by_staff(heads):
@@ -331,10 +346,7 @@ def load_chord_id_groups(omr_path, sheet_index):
     overlapping its neighbor, which a pure x-distance clusterer misreads as a
     separate time-event, misaligning every beat-group that follows it on that staff.
     """
-    with zipfile.ZipFile(omr_path) as z:
-        with z.open(f"sheet#{sheet_index}/sheet#{sheet_index}.xml") as f:
-            tree = ET.parse(f)
-    root = tree.getroot()
+    root = _parse_sheet(omr_path, sheet_index)
 
     chord_ids = {hc.get('id') for hc in root.iter('head-chord')}
     head_to_chord = {}

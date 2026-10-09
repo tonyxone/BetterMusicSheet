@@ -4,17 +4,20 @@ Usage:
     .venv\\Scripts\\python.exe run.py "input.pdf" -o "annotated.pdf"
 """
 import argparse
+import re
 import statistics
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pymupdf as fitz
 
 import page_size
 import scan
+from config import MAX_JOB_SECONDS
 from audiveris_heads import (
-    _parse_sheet, load_sheet_heads, load_staff_lines, load_system_staff_groups,
+    _parse_sheet, has_sheet, load_sheet_heads, load_staff_lines, load_system_staff_groups,
 )
 
 AUDIVERIS_DIR = Path(__file__).parent / "tools" / "Audiveris" / "Audiveris"
@@ -151,7 +154,15 @@ UNREADABLE_MESSAGE = (
 CRASH_FALLBACK_DPIS = (220, 400)
 
 
-def run_audiveris(pdf_path, out_dir, dpi=None, sheets=None, switches=None, binarize=False):
+# Audiveris caps a time signature's width below what a two-digit numeral
+# takes. Nuvole Bianche's 12/8 (Sibelius, the 1 and 2 touching) was skipped,
+# so every bar after it was expected in 4/4 and lost the chords past that
+# length. At 3 interlines it reads 12/8; page 1 of all 20 local test pieces
+# read the same time signatures and bar lengths as before.
+WIDE_TIME_SIGNATURES = {"org.audiveris.omr.sheet.time.TimeBuilder.maxTimeWidth": 3}
+
+
+def run_audiveris(pdf_path, out_dir, dpi=None, sheets=None, switches=None, binarize=False, constants=None):
     """Recognize ``pdf_path`` into ``out_dir``; returns the .mxl and .omr.
 
     ``binarize`` has Audiveris read a black-and-white copy of the scanned pages
@@ -185,6 +196,8 @@ def run_audiveris(pdf_path, out_dir, dpi=None, sheets=None, switches=None, binar
         cmd += ["-constant",
                 f"org.audiveris.omr.sheet.ProcessingSwitches.{name}="
                 f"{'true' if enabled else 'false'}"]
+    for name, value in {**WIDE_TIME_SIGNATURES, **(constants or {})}.items():
+        cmd += ["-constant", f"{name}={value}"]
     if sheets is not None:
         # -sheets keeps each selected page's original sheet number in the
         # output .omr (e.g. "-sheets 3" still produces sheet#3, not sheet#1),
@@ -196,22 +209,25 @@ def run_audiveris(pdf_path, out_dir, dpi=None, sheets=None, switches=None, binar
     stem = pdf_path.stem
     mxl = out_dir / f"{stem}.mxl"
     omr = out_dir / f"{stem}.omr"
+    if omr.exists() and not mxl.exists() and any(out_dir.glob(f"{stem}.mvt*.mxl")):
+        raise SplitIntoMovements(f"Audiveris split {pdf_path.name} into movements")
     if not mxl.exists() or not omr.exists():
         raise RuntimeError(f"Audiveris did not produce expected output ({mxl}, {omr})")
     return mxl, omr
 
 
-def _stub_crashed(work_dir, stem):
-    """Whether Audiveris's log for this run shows it crashed inside a step
-    ("Error processing stub") - a bug in the engine, not a verdict on the page,
-    and one that repeats on every retry of the same input."""
+class SplitIntoMovements(RuntimeError):
+    """Audiveris took an indented system for the start of a new movement and
+    exported one file per movement, which nothing downstream reads."""
+
+
+def _audiveris_log(work_dir, stem):
+    """The text of Audiveris's own log for the latest run, or "" if none."""
     logs = sorted(work_dir.glob(f"{stem}-*.log"))
-    if not logs:
-        return False
     try:
-        return "Error processing stub" in logs[-1].read_text(encoding="utf-8", errors="replace")
+        return logs[-1].read_text(encoding="utf-8", errors="replace") if logs else ""
     except OSError:
-        return False
+        return ""
 
 
 def _no_system_found(work_dir, stem):
@@ -219,14 +235,176 @@ def _no_system_found(work_dir, stem):
     'No system found' - it fails outright (not just an empty result) when a
     page has nothing staff-like on it at all, which happens before any of our
     own detection code even runs."""
-    logs = sorted(work_dir.glob(f"{stem}-*.log"))
-    if not logs:
-        return False
-    try:
-        text = logs[-1].read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return False
-    return "No system found" in text
+    return "No system found" in _audiveris_log(work_dir, stem)
+
+
+# Audiveris sometimes throws while cleaning up one page ("no such edge in
+# graph: Exclusion"), and then exports nothing for the whole book. Whether it
+# does changes from run to run on the very same file - one sheet failed 4 runs
+# in a row and then went through - so an immediate fresh run usually succeeds,
+# for a fraction of what a whole job retry costs. Bounded by time as well as
+# count, so a long book that crashes falls back to the job retry instead of
+# spending its time limit here.
+CRASH_RERUNS = 2
+CRASH_RERUN_BUDGET_SECONDS = MAX_JOB_SECONDS / 3
+
+
+def _a_sheet_crashed(work_dir, stem):
+    """Whether Audiveris's log for this run shows one of its sheets threw - as
+    opposed to failing for a reason a fresh run would only repeat."""
+    return _STUB_CRASH.search(_audiveris_log(work_dir, stem)) is not None
+
+
+# A page Audiveris drops as holding no music is logged like a crash, but a
+# fresh run only drops it again.
+_NO_MUSIC = r"\S*StepException: (Sheet removed|No system found|No regularly spaced lines found)"
+_STUB_CRASH = re.compile(rf"Error processing stub (?!{_NO_MUSIC})")
+# Every page that failed: "[input#3] Book.java:2044 | Error processing stub
+# <cause>" ("[input]" in a one-page book) - a page with no music on it, such
+# as a cover picture or a blank page, or one that crashed - and "Error
+# visiting System#6 in {Page#1.2}" for one whose export threw. Any one of
+# them fails the whole book.
+_FAILED_SHEET = re.compile(r"\[[^\]\s#]*(?:#(\d+))?\][^|\n]*\|\s*Error processing stub (.*)")
+_FAILED_EXPORT = re.compile(r"Error visiting System#\d+ in \{Page#(\d+)\.")
+
+
+def _failed_sheets(work_dir, stem):
+    """{page: whether it simply holds no music} for each page that failed."""
+    text = _audiveris_log(work_dir, stem)
+    failed = {}
+    for number, cause in _FAILED_SHEET.findall(text):
+        page = int(number or 1)
+        failed[page] = failed.get(page, True) and re.match(_NO_MUSIC, cause) is not None
+    for number in _FAILED_EXPORT.findall(text):
+        failed[int(number)] = False
+    return failed
+
+
+# "With a too low interline value of 7 pixels, either this sheet contains no
+# multi-line staves, or the picture resolution is too low". A phone screenshot
+# saved as a PDF: its staff lines are there, just too few pixels apart.
+_LOW_INTERLINE = re.compile(r"too low interline value of (\d+) pixels")
+# Rasterizing such a page finer gives Audiveris enough pixels between the
+# lines; measured on two screenshots with 7px and 9px interlines, both read
+# in full at 600 DPI. Bounded, as the pages it applies to are small but the
+# cost grows with the square.
+MAX_UPSCALE_DPI = 800
+
+
+def _upscaled_dpi(work_dir, stem, dpi):
+    """The DPI that gives the staves Audiveris dropped as too fine a usable
+    interline, or None if there are none or it would not read them finer."""
+    found = _LOW_INTERLINE.findall(_audiveris_log(work_dir, stem))
+    if not found:
+        return None
+    current = dpi or DEFAULT_DPI
+    needed = current * MIN_INTERLINE_PX / max(1, min(int(px) for px in found))
+    target = min(MAX_UPSCALE_DPI, -(-int(needed) // 100) * 100)
+    return target if target > current else None
+
+
+# Audiveris starts a new movement at an indented system, and an indent is all
+# it takes - the cut-off last system of a phone photo was one. Raised past any
+# page width, no system counts as indented, and the book exports as one piece.
+NO_MOVEMENTS = {"org.audiveris.omr.sheet.SystemManager.minIndentation": 1000}
+
+
+def recognize_book(pdf_path, work_dir, dpi=None, log=print):
+    """The whole-book Audiveris pass, read again where a fresh run does
+    better: at once if a page crashed, finer if its staves were too coarse to
+    find, as one piece if it came back split into movements, and without any
+    page it cannot read - a cover picture, a blank page, one that keeps
+    crashing - so one such page never costs the rest. Only a book with no
+    readable page at all fails. Returns the .mxl, the .omr, and the DPI they
+    were read at."""
+    started = time.monotonic()
+    constants, runs, crashes, sheets = None, 0, 0, None
+    fallbacks = list(CRASH_FALLBACK_DPIS)
+    while True:
+        runs += 1
+        try:
+            mxl, omr = run_audiveris(pdf_path, work_dir, dpi=dpi, sheets=sheets, constants=constants)
+            if sheets:
+                number_pages(mxl, sheets)
+            return mxl, omr, dpi
+        except SplitIntoMovements:
+            if constants:
+                raise
+            log("[1/3] Audiveris split the sheet into movements; reading it again as one piece ...")
+            constants = NO_MOVEMENTS
+        except (subprocess.CalledProcessError, RuntimeError):
+            stem = pdf_path.stem
+            finer = _upscaled_dpi(work_dir, stem, dpi)
+            # One more run costs about what the runs so far averaged.
+            spent = time.monotonic() - started
+            within_budget = spent * (runs + 1) / runs <= CRASH_RERUN_BUDGET_SECONDS
+            if finer:
+                log(f"[1/3] The pages are too low-resolution to read; reading them again at {finer} DPI ...")
+                dpi = finer
+            elif _a_sheet_crashed(work_dir, stem) and crashes < CRASH_RERUNS and within_budget:
+                crashes += 1
+                log(f"[1/3] Audiveris crashed on a page; reading the sheet again ({crashes} of {CRASH_RERUNS}) ...")
+            else:
+                pages = sheets or list(range(1, count_pages(pdf_path) + 1))
+                failed = {page: no_music for page, no_music in _failed_sheets(work_dir, stem).items()
+                          if page in pages}
+                kept = [page for page in pages if page not in failed]
+                if failed and kept and within_budget:
+                    left_out = ", ".join(str(page) for page in sorted(failed))
+                    log(f"[1/3] No music could be read on page {left_out}; reading the other pages ...")
+                    sheets = kept
+                elif failed and not kept and all(failed.values()):
+                    raise NotMusic(NOT_MUSIC_MESSAGE)
+                elif _a_sheet_crashed(work_dir, stem) and fallbacks and within_budget:
+                    # Reruns at this resolution only repeat a deterministic
+                    # crash; another resolution changes what Audiveris builds.
+                    dpi = fallbacks.pop(0)
+                    log(f"[1/3] Audiveris keeps crashing; reading the sheet again at {dpi} DPI ...")
+                elif _a_sheet_crashed(work_dir, stem) and crashes:
+                    raise Unreadable(UNREADABLE_MESSAGE)
+                else:
+                    raise
+        _clear_audiveris_output(work_dir, pdf_path.stem)
+
+
+def number_pages(mxl_path, pages):
+    """Stamp each page of an export with the PDF page it was read from, as
+    MusicXML's print page-number. An export numbers only the pages it read, so
+    with a cover left out the music's first page would claim to be page 1."""
+    import xml.etree.ElementTree as ET
+    import zipfile
+    with zipfile.ZipFile(mxl_path) as z:
+        entries = {info: z.read(info.filename) for info in z.infolist()}
+    score = next(info for info in entries if info.filename.endswith(".xml")
+                 and not info.filename.startswith("META-INF/"))
+    root = ET.fromstring(entries[score])
+    for part in root.iter("part"):
+        index = 0
+        for position, measure in enumerate(part.iter("measure")):
+            pr = measure.find("print")
+            if position == 0:
+                if pr is None:
+                    pr = ET.Element("print")
+                    measure.insert(0, pr)
+            elif pr is None or pr.get("new-page") != "yes":
+                continue
+            else:
+                index += 1
+            if index < len(pages):
+                pr.set("page-number", str(pages[index]))
+    entries[score] = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    with zipfile.ZipFile(mxl_path, "w", zipfile.ZIP_DEFLATED) as z:
+        for info, data in entries.items():
+            z.writestr(info, data)
+
+
+def _clear_audiveris_output(work_dir, stem):
+    """Remove a failed run's book and log, so the next run starts clean and
+    its own log is the one read back - by _a_sheet_crashed, and by the
+    worker's page progress."""
+    for path in [work_dir / f"{stem}.omr", work_dir / f"{stem}.mxl", *work_dir.glob(f"{stem}.mvt*.mxl"),
+                 *work_dir.glob(f"{stem}-*.log")]:
+        path.unlink(missing_ok=True)
 
 
 # Audiveris's cost tracks the rasterized area of a page and, to within the
@@ -379,6 +557,14 @@ def missing_staves(omr_path, num_pages):
     return sum(max(sizes) - size for size in sizes) if sizes else 0
 
 
+def lone_staves(omr_path, num_pages):
+    """Systems recognized with a single staff. A page that lost the same staff
+    from every system looks complete to missing_staves - a phone screenshot of
+    a piano score came back as one staff - though a melody line genuinely has
+    one, and the black-and-white re-read then simply finds no more."""
+    return sum(size == 1 for size in system_sizes(omr_path, num_pages))
+
+
 def reread_binarized(pdf_path, work_dir, omr_path, num_pages, dpi=None, log=print):
     """Re-read a scan that lost staves from a black-and-white copy of it.
 
@@ -398,10 +584,10 @@ def reread_binarized(pdf_path, work_dir, omr_path, num_pages, dpi=None, log=prin
     source = scan.prepare_for_recognition(pdf_path, target / "input", dpi)
     if source == Path(pdf_path):
         return None
-    log(f"[1b/3] {missing_staves(omr_path, num_pages)} staves were not recognized; re-reading "
+    log(f"[1b/3] Some staves look unrecognized; re-reading "
         f"the scan should take {describe_duration(estimated_seconds(pdf_path, dpi or DEFAULT_DPI))}:")
     try:
-        mxl, omr = run_audiveris(source, target, dpi=dpi)
+        mxl, omr = run_audiveris(source, target, dpi=dpi, constants=NO_MOVEMENTS)
     except (subprocess.CalledProcessError, RuntimeError):
         print("  the re-read failed; keeping the original recognition")
         return None
@@ -577,10 +763,13 @@ def find_sparse_pages(omr_path, num_pages, mxl_path=None, pdf_path=None):
     # Deliberately left as a plain count comparison, with no staff condition:
     # this is the pre-existing test and a page whose staves went undetected
     # entirely is one of the cases it already covers.
-    if len(counts) >= 2:
-        median = statistics.median(counts.values())
+    # A page the book left out as holding no music has nothing to re-read.
+    read = {page for page in counts if has_sheet(str(omr_path), page)}
+    if len(read) >= 2:
+        median = statistics.median(counts[page] for page in read)
         if median >= SPARSE_MIN_MEDIAN:
-            sparse.update(p for p, c in counts.items() if c < SPARSE_RATIO * median)
+            sparse.update(p for p in read if counts[p] < SPARSE_RATIO * median)
+    sparse &= read
 
     def severity(page):
         # Noteheads per staff, so a short final page isn't ranked as worse than
@@ -634,7 +823,7 @@ def retry_variants(pdf_path, page, base_dpi=None, poor_recall=False):
     interline = staff_interline_pt(pdf_path, page)
     small_staves = interline is None or interline * 300 / 72 < MIN_INTERLINE_PX
     dearer = []
-    if base_dpi != RETRY_DPI and (small_staves or poor_recall):
+    if (base_dpi or DEFAULT_DPI) < RETRY_DPI and (small_staves or poor_recall):
         dearer = [(f"{RETRY_DPI} DPI", {"sheets": [page], "dpi": RETRY_DPI}),
                   (f"{RETRY_DPI} DPI with inferred tuplets",
                    {"sheets": [page], "dpi": RETRY_DPI, "switches": {"implicitTuplets": True}})]
@@ -818,9 +1007,13 @@ def retry_sparse_pages(pdf_path, work_dir, counts, sparse_pages, num_pages=None,
                 continue
             retry_dir = work_dir / f"_retry_p{page}_{index}"
             try:
-                mxl, omr = run_audiveris(pdf_path, retry_dir,
+                # A re-read is weighed against the book read as one piece, so
+                # it is read as one piece too.
+                mxl, omr = run_audiveris(pdf_path, retry_dir, constants=NO_MOVEMENTS,
                                          **({**variant, "binarize": True} if binarize else variant))
-            except subprocess.CalledProcessError:
+            except (subprocess.CalledProcessError, RuntimeError):
+                # A re-read is only ever a chance at a better page; the one
+                # already read stands if it fails, whatever the reason.
                 print(f"    {label}: Audiveris failed; trying the next approach")
                 continue
             override = {page: {'omr': str(omr), 'mxl': str(mxl)}}
@@ -873,7 +1066,7 @@ def recognition_quality(omr_path, mxl_path, page, single_page=False):
 
 def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font_size=6.5,
                   dpi=None, auto_retry=True, log=print, timeline_path=None, color="#000000",
-                  labels_path=None, notation="letters", stats=None):
+                  labels_path=None, notation="letters", stats=None, notes_path=None):
     """Run the full PDF -> Audiveris OMR -> annotated PDF pipeline. Shared by the
     CLI (main(), below) and the web API (server.py) so the two stay in sync.
 
@@ -884,6 +1077,10 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
     ``labels_path``: optional path to also write the placed labels as JSON
     (see label_export.py), for the web viewer's editable label layer. Also
     best-effort, for the same reason.
+
+    ``notes_path``: optional path to also save the notes read (save_notes),
+    so the same file can later be drawn with other settings by redraw_pdf.
+    Best-effort too.
 
     ``stats``: optional dict, filled in with ``notes_named`` - how many
     noteheads the reader identified, each given a name. (A chord repeated
@@ -899,25 +1096,7 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
     pdf_path, scales = page_size.shrink_oversized(upload, work_dir / "page-size")
 
     log(f"[1/3] Running Audiveris OMR on {pdf_path.name} ...")
-    try:
-        mxl, omr = run_audiveris(pdf_path, work_dir, dpi=dpi)
-    except (subprocess.CalledProcessError, RuntimeError):
-        if _no_system_found(work_dir, pdf_path.stem):
-            raise NotMusic(NOT_MUSIC_MESSAGE)
-        if not _stub_crashed(work_dir, pdf_path.stem):
-            raise
-        for fallback in CRASH_FALLBACK_DPIS:
-            log(f"[1/3] Audiveris crashed; reading again at {fallback} DPI ...")
-            retry_dir = work_dir / f"_crash_{fallback}"
-            try:
-                mxl, omr = run_audiveris(pdf_path, retry_dir, dpi=fallback)
-            except (subprocess.CalledProcessError, RuntimeError):
-                continue
-            # Later passes build on this recognition, at the resolution it used.
-            work_dir, dpi = retry_dir, fallback
-            break
-        else:
-            raise Unreadable(UNREADABLE_MESSAGE)
+    mxl, omr, dpi = recognize_book(pdf_path, work_dir, dpi, log)
     num_pages = count_pages(pdf_path)
 
     if not has_any_staff(omr, num_pages):
@@ -926,7 +1105,7 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
     page_overrides = {}
     binarized = False
     if auto_retry:
-        if missing_staves(omr, num_pages):
+        if missing_staves(omr, num_pages) or lone_staves(omr, num_pages):
             reread = reread_binarized(pdf_path, work_dir, omr, num_pages, dpi, log)
             if reread:
                 mxl, omr = reread
@@ -949,7 +1128,6 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
                                                 binarize=binarized)
 
     log("[2/3] Matching pitches to notehead positions ...")
-    from annotate import build_records, render
     from score_notes import resolve_score_notes
     resolved = resolve_score_notes(str(pdf_path), str(omr), num_pages, page_overrides)
     prepared = None
@@ -959,9 +1137,6 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
                                  page_overrides, resolved_notes=resolved)
     except Exception as e:
         log(f"Rhythm alignment unavailable; using resolved OMR labels: {e}")
-    records = build_records(str(pdf_path), str(omr), num_pages, style=style, octave=octave,
-                             page_omr_overrides=page_overrides, resolved_notes=resolved,
-                             notation=notation)
     if stats is not None:
         stats["notes_named"] = len(resolved["notes"])
     unnamed = []
@@ -991,6 +1166,29 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
         except Exception as e:
             log(f"[2b/3] Timeline build failed, Play mode unavailable for this sheet: {e}")
 
+    if notes_path is not None:
+        try:
+            save_notes(notes_path, resolved, unnamed, tl if scales else None)
+        except Exception as e:
+            log(f"Saving the read notes failed, this sheet can't be redrawn: {e}")
+    return draw_names(pdf_path, upload, scales, output, resolved, tl, unnamed, style=style, octave=octave,
+                      font_size=font_size, color=color, notation=notation, labels_path=labels_path, log=log)
+
+
+def draw_names(pdf_path, upload, scales, output, resolved, tl, unnamed, style="unicode", octave=False,
+               font_size=6.5, color="#000000", notation="letters", labels_path=None, log=print):
+    """Everything the settings decide, from notes already read: the names'
+    text, the annotated PDF, and the labels for the viewer. Shared by
+    annotate_pdf and redraw_pdf, so a sheet drawn again from saved notes
+    comes out exactly as reading it afresh would.
+
+    ``pdf_path`` is the copy recognition read (shrunk, when ``scales``), and
+    ``resolved``, ``tl`` and ``unnamed`` are in its points; ``upload`` is
+    the file as uploaded, which the output is scaled back to.
+    """
+    from annotate import records_from_resolved, render
+    records = records_from_resolved(resolved, style, octave, notation=notation)
+    log(f"Resolved {len(resolved['notes'])} noteheads into {len(records)} label groups.")
     log(f"[3/3] Rendering {output} ...")
     placed = render(str(pdf_path), str(output), records, font_size=font_size, color=color)
     if scales:
@@ -1013,14 +1211,65 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
     return len(records)
 
 
+# The notes a reading found, saved so that the same file uploaded again with
+# other settings is only drawn again (redraw_pdf), not read again. Bump when
+# what is saved changes shape; an older file is then read from scratch.
+NOTES_VERSION = 1
+
+
+def save_notes(path, resolved, unnamed, shrunk_timeline=None):
+    """``shrunk_timeline``: the timeline in the shrunk copy's points, for an
+    oversized upload only - otherwise the published timeline already is."""
+    import json
+    Path(path).write_text(json.dumps({"version": NOTES_VERSION, "resolved": resolved, "unnamed": unnamed,
+                                      "timeline": shrunk_timeline}, ensure_ascii=False), encoding="utf-8")
+
+
+def _number_keys(mapping):
+    """JSON keeps only string keys; page and staff numbers were ints."""
+    return {int(k) if isinstance(k, str) and k.lstrip("-").isdigit() else k: v for k, v in mapping.items()}
+
+
+def load_notes(path):
+    """What save_notes wrote, with its page and staff numbers ints again."""
+    import json
+    saved = json.loads(Path(path).read_text(encoding="utf-8"))
+    if saved.get("version") != NOTES_VERSION:
+        raise ValueError(f"saved notes are version {saved.get('version')}, not {NOTES_VERSION}")
+    resolved = saved["resolved"]
+    resolved["pages"] = {page: {**data, "staff_lines_pt": _number_keys(data.get("staff_lines_pt") or {})}
+                         for page, data in _number_keys(resolved.get("pages") or {}).items()}
+    return saved
+
+
+def redraw_pdf(pdf_path, output, work_dir, notes_path, timeline_path=None, style="unicode", octave=False,
+               font_size=6.5, color="#000000", notation="letters", labels_path=None, log=print, stats=None):
+    """annotate_pdf for a file whose notes were already read (save_notes):
+    the names are drawn with these settings, and nothing is read again.
+    ``timeline_path``: the reading's published timeline, if it has one."""
+    import json
+    upload = Path(pdf_path)
+    pdf_path, scales = page_size.shrink_oversized(upload, Path(work_dir) / "page-size")
+    saved = load_notes(notes_path)
+    tl = saved.get("timeline")
+    if tl is None and timeline_path is not None and Path(timeline_path).exists():
+        tl = json.loads(Path(timeline_path).read_text(encoding="utf-8"))
+    resolved = saved["resolved"]
+    if stats is not None:
+        stats["notes_named"] = len(resolved["notes"])
+    return draw_names(pdf_path, upload, scales, output, resolved, tl, saved.get("unnamed") or [], style=style,
+                      octave=octave, font_size=font_size, color=color, notation=notation,
+                      labels_path=labels_path, log=log)
+
+
 def main():
     ap = argparse.ArgumentParser(description="Annotate a piano sheet-music PDF with note-name labels.")
     ap.add_argument("input_pdf")
     ap.add_argument("-o", "--output", default=None)
     ap.add_argument("--style", choices=["unicode", "ascii"], default="unicode")
     ap.add_argument("--octave", action="store_true")
-    ap.add_argument("--notation", choices=["letters", "numbers"], default="letters",
-                    help="letter names (C D E) or jianpu numbers, 1 = C (1 2 3)")
+    ap.add_argument("--notation", choices=["letters", "numbers", "solfege"], default="letters",
+                    help="letter names (C D E), jianpu numbers, 1 = C (1 2 3), or solfege (do re mi)")
     ap.add_argument("--font-size", type=float, default=6.5)
     ap.add_argument("--color", default="#000000",
                      help="Note-label colour as #rrggbb (default: black).")

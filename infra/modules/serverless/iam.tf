@@ -10,7 +10,7 @@ locals {
     Resource = [for group in aws_cloudwatch_log_group.logs : "${group.arn}:*"]
   }
   db_statement = {
-    Effect   = "Allow", Action = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:TransactWriteItems"],
+    Effect   = "Allow", Action = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:TransactWriteItems", "dynamodb:ConditionCheckItem"],
     Resource = concat(local.table_arns, [for arn in local.table_arns : "${arn}/index/*"])
   }
   # Read-only on purpose: being listed here grants premium everywhere (see

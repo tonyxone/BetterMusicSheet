@@ -158,23 +158,35 @@ def build_records(pdf_path, omr_path, num_pages, style='unicode', octave=False, 
     return records
 
 
+# A notehead's width on ordinary engraving: the narrowest of this project's
+# test pieces measures 5.0pt (the widest 7.2pt).
+NORMAL_NOTEHEAD_PT = 5.0
+
+
 def records_from_resolved(resolved, style='unicode', octave=False, suppress_repeated_chords=True,
                           notation='letters'):
     """Render every recognized written note, including tied continuations.
 
     Optional compact labeling compares full pitches, never display strings.
-    ``notation='numbers'`` prints jianpu numbers, 1 = C (labels.numbered_label),
-    instead of letters; each record's 'letters' keeps the letter names either
-    way, for the viewer's own labels.
+    ``notation='numbers'`` prints jianpu numbers, 1 = C (labels.numbered_label);
+    ``notation='solfege'`` prints fixed-do syllables, do = C (labels.solfege_label);
+    either instead of letters. Each record's 'letters' keeps the letter names
+    either way, for the viewer's own labels.
     """
     from collections import defaultdict
-    from labels import diatonic_label, numbered_label
+    from labels import diatonic_label, numbered_label, solfege_label
     groups = defaultdict(list)
-    widths = defaultdict(list)
+    widths, head_pts = defaultdict(list), defaultdict(list)
     for n in resolved['notes']:
         groups[(n['page'], n['staff'], n['chord_id'])].append(n)
         widths[n['page']].append(n['w'])
+        if n.get('bbox_pt'):
+            head_pts[n['page']].append(n['bbox_pt'][2] - n['bbox_pt'][0])
     medians = {p: sorted(ws)[len(ws) // 2] for p, ws in widths.items()}
+    # The label size suits ordinary engraving. Music printed smaller - a phone
+    # screenshot saved as a small PDF page - gets labels shrunk to match, or a
+    # dense bar has nowhere to put a name that clears its noteheads.
+    engraving = {p: min(1, sorted(ws)[len(ws) // 2] / NORMAL_NOTEHEAD_PT) for p, ws in head_pts.items()}
     seen, records = {}, []
     symbols = {-2: '𝄫', -1: '♭', 0: '', 1: '♯', 2: '𝄪'}
     for group in sorted(groups.values(), key=lambda g: (g[0]['page'], g[0]['system'], g[0]['staff'], min(n['cx'] for n in g))):
@@ -190,9 +202,14 @@ def records_from_resolved(resolved, style='unicode', octave=False, suppress_repe
         marks = ['?' if n.get('pitch_uncertain') else '' for n in group]
         letters = [diatonic_label(n.get('label_diatonic', n['diatonic']), symbols.get(n['alter'], ''), style=style, octave=octave)
                    + mark for n, mark in zip(group, marks)]
-        labels = letters if notation != 'numbers' else [
-            numbered_label(n.get('label_diatonic', n['diatonic']), n['alter'], style=style) + mark
-            for n, mark in zip(group, marks)]
+        if notation == 'numbers':
+            labels = [numbered_label(n.get('label_diatonic', n['diatonic']), n['alter'], style=style) + mark
+                      for n, mark in zip(group, marks)]
+        elif notation == 'solfege':
+            labels = [solfege_label(n.get('label_diatonic', n['diatonic']), n['alter'], style=style) + mark
+                      for n, mark in zip(group, marks)]
+        else:
+            labels = letters
         boxes = [n['bbox_pt'] for n in group]
         width = sum(n['w'] for n in group) / len(group)
         staff_lines = resolved.get('pages', {}).get(first['page'], {}).get('staff_lines_pt', {})
@@ -205,7 +222,8 @@ def records_from_resolved(resolved, style='unicode', octave=False, suppress_repe
             'top_y_pt': min((b[1] + b[3]) / 2 for b in boxes),
             'bottom_y_pt': max((b[1] + b[3]) / 2 for b in boxes),
             'labels': labels, 'letters': letters, 'measure': (first['system_measure'] or 0) + 1,
-            'scale': max(.65, min(1, width / medians[first['page']])) if medians[first['page']] else 1,
+            'scale': (max(.65, min(1, width / medians[first['page']])) if medians[first['page']] else 1)
+                     * engraving.get(first['page'], 1),
             'notehead_w_pt': sum(b[2] - b[0] for b in boxes) / len(boxes),
             'note_boxes_pt': boxes, 'staff_lines_pt': staff_ys,
             'staff_top_pt': staff_top, 'staff_bottom_pt': staff_bottom,

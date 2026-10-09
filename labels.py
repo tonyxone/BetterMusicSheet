@@ -86,25 +86,41 @@ def alter_symbol(shape, style='unicode'):
     return sym
 
 
-# ---- numbered notation (jianpu) --------------------------------------------
-# Fixed-do: 1 = C, 2 = D, ... 7 = B whatever the key, so a number always means
-# the same piano key. A note on a white key reads as that key's number however
-# it is spelled (E# is 4); one on a black key keeps its printed sharp or flat
-# (D# is #2), a double one taking the nearest single one (Fbb is b3). Mirrors
+# ---- numbered notation (jianpu) and solfège --------------------------------
+# Fixed-do: 1 = C, 2 = D, ... 7 = B (do re mi fa so la si) whatever the key, so
+# a degree always means the same piano key. A note on a white key reads as
+# that key's degree however it is spelled (E# is 4/mi); one on a black key
+# keeps its printed sharp or flat (D# is #2/#re), a double one taking the
+# nearest single one (Fbb is b3/bmi). Mirrors
 # better_music_sheet_web/lib/notation.ts.
 
 _STEP_SEMITONES = [0, 2, 4, 5, 7, 9, 11]
 _UNICODE_ACC = {-2: DOUBLE_FLAT, -1: FLAT, 0: '', 1: SHARP, 2: DOUBLE_SHARP}
 _ASCII_ACC = {-2: 'bb', -1: 'b', 0: '', 1: '#', 2: '##'}
+_SOLFEGE = ['do', 're', 'mi', 'fa', 'so', 'la', 'si']
+
+
+def _fixed_do_degree(diatonic, alter):
+    """A diatonic pitch value + alteration as (scale degree 0..6, alter)."""
+    step = _STEPS.index(step_of(diatonic))
+    pc = (_STEP_SEMITONES[step] + alter) % 12
+    if pc in _STEP_SEMITONES:
+        return _STEP_SEMITONES.index(pc), 0
+    if abs(alter) > 1:
+        alter = 1 if alter > 0 else -1
+        step = _STEP_SEMITONES.index((pc - alter) % 12)
+        return step, alter
+    return step, alter
 
 
 def numbered_label(diatonic, alter, style='unicode'):
     """A diatonic pitch value + its alteration as a number: '5', '♯4', 'b7'."""
-    step = _STEPS.index(step_of(diatonic))
-    pc = (_STEP_SEMITONES[step] + alter) % 12
-    if pc in _STEP_SEMITONES:
-        step, alter = _STEP_SEMITONES.index(pc), 0
-    elif abs(alter) > 1:
-        alter = 1 if alter > 0 else -1
-        step = _STEP_SEMITONES.index((pc - alter) % 12)
+    step, alter = _fixed_do_degree(diatonic, alter)
     return (_ASCII_ACC if style == 'ascii' else _UNICODE_ACC).get(alter, '') + str(step + 1)
+
+
+def solfege_label(diatonic, alter, style='unicode'):
+    """A diatonic pitch value + its alteration as a fixed-do solfège syllable:
+    'so', '♯fa', 'bsi'."""
+    step, alter = _fixed_do_degree(diatonic, alter)
+    return (_ASCII_ACC if style == 'ascii' else _UNICODE_ACC).get(alter, '') + _SOLFEGE[step]

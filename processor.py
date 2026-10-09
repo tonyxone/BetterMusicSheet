@@ -19,6 +19,30 @@ STAGES = {
 }
 RECOGNITION = STAGES["[1/3]"]
 
+# A photo becomes a page sized so that recognition, which reads a PDF at 300
+# DPI, sees the photo's own pixels one to one. The web app sizes the photos it
+# puts together the same way (lib/photo-pages.ts), and so does the viewer for
+# a photo whose names failed - marks made there are in this page's points. The
+# dpi the picture itself claims is ignored: a phone screenshot says 72 or 96,
+# which had recognition read it three to four times enlarged and blurred.
+PHOTO_DPI = 300
+
+
+def photo_as_pdf(raw, pdf):
+    """Write the photo at ``raw`` to ``pdf`` as one PHOTO_DPI page, turned
+    the way its orientation tag says, at its full resolution."""
+    import pymupdf
+    with pymupdf.open(raw) as photo, pymupdf.open("pdf", photo.convert_to_pdf()) as converted,             pymupdf.open() as out:
+        stored = pymupdf.Pixmap(str(raw))
+        width, height = stored.width, stored.height
+        turned = converted[0].rect
+        # Turned a quarter: the stored pixels' sides swap.
+        if (turned.width > turned.height) != (width > height):
+            width, height = height, width
+        page = out.new_page(width=width * 72 / PHOTO_DPI, height=height * 72 / PHOTO_DPI)
+        page.show_pdf_page(page.rect, converted, 0)
+        out.save(pdf)
+
 
 def publish(directory, **progress):
     """Hand progress to worker.py, which owns the database write.
@@ -47,8 +71,7 @@ def generate(raw, directory, options):
             if doc.is_pdf:
                 doc.save(pdf)
             else:
-                with pymupdf.open("pdf", doc.convert_to_pdf()) as converted:
-                    converted.save(pdf)
+                photo_as_pdf(raw, pdf)
     except Exception as exc:
         raise InvalidSheet(f"Upload a valid, unencrypted PDF or image with at most {MAX_PAGES} pages.") from exc
 
@@ -86,6 +109,10 @@ def generate(raw, directory, options):
 
     timeline = directory / "timeline.json"
     stats = {}
+    redrawn = redraw(pdf, directory, options, log, stats)
+    if redrawn is not None:
+        return {"count": redrawn, "notes_named": stats.get("notes_named"), "notes_printed": expected,
+                "redrawn": True}
     count = annotate_pdf(pdf, directory / "annotated.pdf", directory / "work",
                          style=options["style"], octave=options["octave"], font_size=options["font_size"],
                          dpi=options["dpi"], auto_retry=options["auto_retry"], timeline_path=timeline,
@@ -93,10 +120,47 @@ def generate(raw, directory, options):
                          # .get, not [...]: jobs queued before this option existed
                          # have no colour in their options.json and must still run.
                          color=options.get("color", "#000000"),
-                         notation=options.get("notation", "letters"), log=log, stats=stats)
+                         notation=options.get("notation", "letters"), log=log, stats=stats,
+                         notes_path=directory / "notes.json")
     # For the library's "606/634": notes named, out of the notes the sheet
     # prints - the latter only known for a vector PDF (None for a scan).
     return {"count": count, "notes_named": stats.get("notes_named"), "notes_printed": expected}
+
+
+def redraw(pdf, directory, options, log, stats):
+    """Draw the names from an earlier reading of this same file, which
+    worker.py put in ``reuse/`` - the count of labeled groups, or None to
+    read the sheet from scratch: there was nothing to redraw from, or it
+    failed, which must never cost the reader their sheet."""
+    import shutil
+    from run import redraw_pdf
+
+    reuse = directory / "reuse"
+    if not (reuse / "notes.json").exists():
+        return None
+    timeline = directory / "timeline.json"
+    try:
+        if (reuse / "timeline.json").exists():
+            shutil.copyfile(reuse / "timeline.json", timeline)
+        count = redraw_pdf(pdf, directory / "annotated.pdf", directory / "work", reuse / "notes.json",
+                           timeline_path=timeline, style=options["style"], octave=options["octave"],
+                           font_size=options["font_size"], color=options.get("color", "#000000"),
+                           notation=options.get("notation", "letters"), labels_path=directory / "labels.json",
+                           log=log, stats=stats)
+    except Exception as exc:
+        log(f"Redrawing from the earlier reading failed, reading the sheet instead: {exc}")
+        # Nothing of the attempt may leak into the reading that follows.
+        for name in ("annotated.pdf", "timeline.json", "labels.json"):
+            (directory / name).unlink(missing_ok=True)
+        shutil.rmtree(directory / "work", ignore_errors=True)
+        stats.clear()
+        return None
+    try:
+        # Kept with this sheet too, so it can be drawn again from here.
+        shutil.copyfile(reuse / "notes.json", directory / "notes.json")
+    except Exception as exc:
+        log(f"Keeping the notes for later failed, this sheet won't be redrawn from: {exc}")
+    return count
 
 
 def main(directory):
@@ -114,6 +178,29 @@ def main(directory):
         # generic message instead.
         (directory / "result.json").write_text(json.dumps({"error": str(exc), "permanent": True}))
         return 2
+    except Exception as exc:
+        # Still a crash to retry, but worker.py would otherwise only see an
+        # exit status: this is what its attempt log says went wrong.
+        (directory / "result.json").write_text(json.dumps({"crash": crash_cause(directory, exc)}))
+        raise
+
+
+def crash_cause(directory, exc):
+    """One line saying why a run crashed. For Audiveris, its own log names the
+    page and the error (e.g. "Error processing stub ... no such edge in graph:
+    Exclusion" on "[input#2]"); the CalledProcessError says only "exit 1"."""
+    import subprocess
+    if isinstance(exc, subprocess.CalledProcessError):
+        try:
+            logs = sorted((directory / "work").rglob("*.log"), key=lambda p: p.stat().st_mtime)
+            lines = logs[-1].read_text(encoding="utf-8", errors="replace").splitlines() if logs else []
+        except OSError:
+            lines = []
+        problems = [line for line in lines if "Error processing stub" in line or "No system found" in line]
+        if problems:
+            return "Audiveris: " + " ".join(problems[-1].split())[:400]
+        return f"Audiveris exited with status {exc.returncode}"
+    return f"{type(exc).__name__}: {exc}"[:400]
 
 
 if __name__ == "__main__":

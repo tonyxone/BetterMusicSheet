@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { DragDropProvider } from "@dnd-kit/react";
 import { isSortable, useSortable } from "@dnd-kit/react/sortable";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { MAX_UPLOAD_BYTES, uploadSheet } from "@/lib/sheet-files";
 import { useAuth } from "./auth-context";
@@ -11,27 +10,23 @@ import { clientApiFetch } from "@/lib/client-api";
 import { refreshSubscription } from "@/lib/subscription";
 import { resolveUploadAttempt } from "@/lib/upload-gate";
 import { addFiles, combinePhotos, isPhoto, moveFile, removeFile } from "@/lib/photo-pages";
+import { checkUpload, type UploadCheck } from "@/lib/staff-check";
+import { PremiumWindow } from "./(en)/subscription/premium-window";
+import { useI18n } from "@/lib/i18n/client";
+import { fmt, plural, rich } from "@/lib/i18n/format";
+import { translateKnown } from "@/lib/i18n/known-text";
+import type { Messages } from "@/lib/i18n/messages/en";
 
 type UploadOption = "notation" | "style" | "fontSize" | "color" | "dpi" | "octave" | "autoRetry";
 
-const OPTION_HELP: Record<UploadOption, string> = {
-  notation: "Letter names each note C, D, E... Jianpu (numbered notation, 簡譜) shows a number instead: 1 = C, 2 = D, 3 = E, 4 = F, 5 = G, 6 = A, 7 = B in every key, so a number always means the same piano key - F♯ reads ♯4 and B♭ reads ♭7. You can switch between the two while viewing the sheet at any time; this sets the printed download.",
-  style: "Unicode uses musical accidental symbols such as B♭ and C♯. ASCII uses plain-text Bb and C#, which can be easier to copy into older software.",
-  fontSize: "Controls the printed note-label size. Larger labels are easier to read but have less room around dense chords.",
-  color: "Sets the printed colour of every note label. A colour makes the labels easy to tell apart from the printed music, while black keeps the page looking like the original. Pale colours can be hard to read on white paper.",
-  dpi: "Controls the resolution used for recognition. Auto starts at 300 DPI and can re-read unclear pages using different recognition methods. A forced higher value takes longer and uses more memory.",
-  octave: "Adds the scientific octave number to every label, such as B♭4. This identifies the exact piano key but makes each label longer.",
-  autoRetry: "Automatically re-reads a page when notes are missing or its musical structure looks incomplete. It uses higher resolution where noteheads went undetected, and cheaper re-readings where they were found but could not be timed. It can improve difficult pages but increases processing time.",
-};
-
 /** Presets worth one click. All dark enough to read against the staff; the
  * picker beside them still allows anything at all. */
-const LABEL_COLORS = [
-  { value: "#000000", name: "Black" },
-  { value: "#1451c4", name: "Blue" },
-  { value: "#c62828", name: "Red" },
-  { value: "#1b7a3e", name: "Green" },
-  { value: "#6a3fb5", name: "Purple" },
+const LABEL_COLORS: { value: string; name: keyof Messages["upload"]["colours"] }[] = [
+  { value: "#000000", name: "black" },
+  { value: "#1451c4", name: "blue" },
+  { value: "#c62828", name: "red" },
+  { value: "#1b7a3e", name: "green" },
+  { value: "#6a3fb5", name: "purple" },
 ];
 
 /** ``heading`` off when the page around it already has a title of its own -
@@ -40,6 +35,8 @@ const LABEL_COLORS = [
 export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
   const router = useRouter();
   const { user, openSignIn } = useAuth();
+  const { m, path, tag, locale } = useI18n();
+  const t = m.upload;
   // One PDF, or one or more photos of the same score in page order - see
   // lib/photo-pages.ts. Several photos are put together into one sheet.
   const [files, setFiles] = useState<File[]>([]);
@@ -47,7 +44,7 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
   const [preparing, setPreparing] = useState(false);
   const [style, setStyle] = useState<"unicode" | "ascii">("unicode");
   const [octave, setOctave] = useState(false);
-  const [notation, setNotation] = useState<"letters" | "numbers">("letters");
+  const [notation, setNotation] = useState<"letters" | "numbers" | "solfege">("letters");
   const [fontSize, setFontSize] = useState(6.5);
   const [color, setColor] = useState("#000000");
   const [dpi, setDpi] = useState("");
@@ -56,6 +53,24 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [atFreeLimit, setAtFreeLimit] = useState(false);
+  const [plansOpen, setPlansOpen] = useState(false);
+  // Whether the chosen pages show staves recognition can read (lib/staff-
+  // check.ts), so a photo that will fail is caught now rather than minutes
+  // into processing. Kept with the files it was made for, so a result for
+  // an earlier choice is never shown against a newer one.
+  const [checked, setChecked] = useState<{ files: File[]; result: UploadCheck } | null>(null);
+  const check = checked?.files === files ? checked.result : null;
+  const unreadableAll = !!check?.unreadable.length && check.unreadable.length === check.checked;
+
+  useEffect(() => {
+    if (!files.length) return;
+    let cancelled = false;
+    checkUpload(files, () => cancelled)
+      .then((result) => { if (result && !cancelled) setChecked({ files, result }); })
+      // A file the check can't open is left to the upload to judge.
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [files]);
 
   // Uploading needs a signed-in account. Premium uploads freely; the free
   // plan keeps one sheet at a time (lib/upload-gate.ts). Both are checked
@@ -67,7 +82,7 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
   function choose(incoming: FileList | null) {
     const result = addFiles(files, Array.from(incoming ?? []));
     setFiles(result.files);
-    setError(result.error);
+    setError(result.error && translateKnown(result.error, m));
   }
 
   async function checkAccountAndUpload() {
@@ -100,9 +115,9 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
         style, octave, notation, font_size: fontSize, auto_retry: autoRetry, dpi: dpi ? Number(dpi) : null,
         color,
       });
-      router.push(`/sheets?job=${job_id}`);
+      router.push(path(`/sheets?job=${job_id}`));
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(translateKnown(err instanceof Error ? err.message : String(err), m));
     } finally {
       setSubmitting(false);
     }
@@ -124,17 +139,15 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
     <div className={heading ? "wrap" : "wrap embedded"}>
       {heading && (
         <>
-          <h1 className="upload-h1">Upload your sheet music</h1>
-          <p className="upload-sub">
-            We read every note on your piano sheet music and pencil in the letter name so you can
-            practice without guessing.
-          </p>
+          <h1 className="upload-h1">{t.heading}</h1>
+          <p className="upload-sub">{t.sub}</p>
         </>
       )}
 
       <p className="upload-sub" style={{ marginTop: heading ? 6 : 0 }}>
-        Uploading needs an account. A free account keeps one sheet at a time; Premium keeps as many as you like -{" "}
-        <Link href="/subscription/plans" style={{ color: "var(--accent)" }}>see plans</Link>.
+        {rich(t.accountNote, {
+          plans: (text) => <button type="button" className="inline-link" onClick={() => setPlansOpen(true)}>{text}</button>,
+        })}
       </p>
 
       <form onSubmit={handleSubmit} style={{ marginTop: 40 }}>
@@ -156,27 +169,40 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
           />
           <div className="icon">📄</div>
           <div className="title">
-            {!files.length ? "Drop a PDF or photos here, or click to browse"
-              : photos && files.length > 1 ? `${files.length} photos · one sheet`
+            {!files.length ? t.dropPrompt
+              : photos && files.length > 1 ? fmt(t.photosOneSheet, { count: files.length })
               : files[0].name}
           </div>
           {!files.length ? (
             <>
-              <div className="detail">PDF, JPG, or PNG · up to {MAX_UPLOAD_BYTES / 1024 / 1024} MB</div>
-              <div className="detail">
-                Several photos of one score become one sheet, a page each. A digital PDF gives the most accurate labels.
-              </div>
+              <div className="detail">{fmt(t.formats, { mb: MAX_UPLOAD_BYTES / 1024 / 1024 })}</div>
+              <div className="detail">{t.photosHint}</div>
             </>
           ) : photos ? (
-            <div className="detail">Click or drop to add more pages, then put them in order below.</div>
+            <div className="detail">{t.addMorePages}</div>
           ) : file && (
             <div className="detail">
               {file.size > MAX_UPLOAD_BYTES
-                ? `${(file.size / 1024 / 1024).toFixed(1)} MB · over the ${MAX_UPLOAD_BYTES / 1024 / 1024} MB limit`
-                : `${(file.size / 1024).toFixed(0)} KB · ready to annotate`}
+                ? fmt(t.overLimit, { size: (file.size / 1024 / 1024).toFixed(1), limit: MAX_UPLOAD_BYTES / 1024 / 1024 })
+                : fmt(t.ready, { size: (file.size / 1024).toFixed(0) })}
             </div>
           )}
         </label>
+
+        {check && check.unreadable.length > 0 && (
+          <p className="upload-check" role="alert">
+            {unreadableAll
+              ? rich(t.checkUnreadableAll, { b: (text) => <strong>{text}</strong> })
+              // Filled in first: the page list sits inside the bold run.
+              : rich(plural(locale, check.unreadable.length, t.checkUnreadablePages, {
+                pages: new Intl.ListFormat(tag, { type: "conjunction" }).format(check.unreadable.map(String)),
+              }), { b: (text) => <strong>{text}</strong> })}
+          </p>
+        )}
+
+        <p className="upload-quality" role="note">
+          {rich(t.qualityNote, { b: (text) => <strong>{text}</strong> })}
+        </p>
 
         {photos ? (
           <PhotoPages files={files} onChange={setFiles} disabled={submitting} />
@@ -184,26 +210,27 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
           <div className="picked-file">
             <button type="button" className="link-button" disabled={submitting}
               onClick={() => { setFiles([]); setError(null); }}>
-              Remove this file
+              {t.removeFile}
             </button>
           </div>
         )}
 
         <details className="options">
-          <summary>Options</summary>
+          <summary>{t.options}</summary>
           <div>
             <div className="opt-row">
-              <label htmlFor="notation" className="main">Note names</label>
-              <OptionHelp option="notation" label="Note names" open={openHelp} onToggle={setOpenHelp} />
-              <select id="notation" value={notation} onChange={(e) => setNotation(e.target.value as "letters" | "numbers")}>
-                <option value="letters">Letter (C D E)</option>
-                <option value="numbers">簡 Jianpu (1 2 3)</option>
+              <label htmlFor="notation" className="main">{t.noteNames}</label>
+              <OptionHelp option="notation" label={t.noteNames} open={openHelp} onToggle={setOpenHelp} />
+              <select id="notation" value={notation} onChange={(e) => setNotation(e.target.value as "letters" | "numbers" | "solfege")}>
+                <option value="letters">{t.notationLetters}</option>
+                <option value="numbers">{t.notationNumbers}</option>
+                <option value="solfege">{t.notationSolfege}</option>
               </select>
             </div>
             {openHelp === "notation" && <OptionExplanation option="notation" />}
             <div className="opt-row">
-              <label htmlFor="style" className="main">Label style</label>
-              <OptionHelp option="style" label="Label style" open={openHelp} onToggle={setOpenHelp} />
+              <label htmlFor="style" className="main">{t.labelStyle}</label>
+              <OptionHelp option="style" label={t.labelStyle} open={openHelp} onToggle={setOpenHelp} />
               <select id="style" value={style} onChange={(e) => setStyle(e.target.value as "unicode" | "ascii")}>
                 <option value="unicode">Unicode (B♭, C♯)</option>
                 <option value="ascii">ASCII (Bb, C#)</option>
@@ -211,8 +238,8 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
             </div>
             {openHelp === "style" && <OptionExplanation option="style" />}
             <div className="opt-row">
-              <label htmlFor="fontSize" className="main">Font size</label>
-              <OptionHelp option="fontSize" label="Font size" open={openHelp} onToggle={setOpenHelp} />
+              <label htmlFor="fontSize" className="main">{t.fontSize}</label>
+              <OptionHelp option="fontSize" label={t.fontSize} open={openHelp} onToggle={setOpenHelp} />
               <input
                 id="fontSize"
                 type="number"
@@ -225,8 +252,8 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
             </div>
             {openHelp === "fontSize" && <OptionExplanation option="fontSize" />}
             <div className="opt-row">
-              <label htmlFor="color" className="main">Label colour</label>
-              <OptionHelp option="color" label="Label colour" open={openHelp} onToggle={setOpenHelp} />
+              <label htmlFor="color" className="main">{t.labelColour}</label>
+              <OptionHelp option="color" label={t.labelColour} open={openHelp} onToggle={setOpenHelp} />
               <div className="opt-colors">
                 {LABEL_COLORS.map((preset) => (
                   <button
@@ -234,8 +261,8 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
                     type="button"
                     className={`swatch${color.toLowerCase() === preset.value ? " on" : ""}`}
                     style={{ background: preset.value }}
-                    title={preset.name}
-                    aria-label={preset.name}
+                    title={t.colours[preset.name]}
+                    aria-label={t.colours[preset.name]}
                     aria-pressed={color.toLowerCase() === preset.value}
                     onClick={() => setColor(preset.value)}
                   />
@@ -246,32 +273,32 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
                   id="color"
                   type="color"
                   value={color}
-                  title="Choose any colour"
-                  aria-label="Choose any colour"
+                  title={t.anyColour}
+                  aria-label={t.anyColour}
                   onChange={(e) => setColor(e.target.value)}
                 />
               </div>
             </div>
             {openHelp === "color" && <OptionExplanation option="color" />}
             <div className="opt-row">
-              <label htmlFor="dpi" className="main">Force DPI</label>
-              <OptionHelp option="dpi" label="Force DPI" open={openHelp} onToggle={setOpenHelp} />
+              <label htmlFor="dpi" className="main">{t.forceDpi}</label>
+              <OptionHelp option="dpi" label={t.forceDpi} open={openHelp} onToggle={setOpenHelp} />
               <select
                 id="dpi"
                 value={dpi}
                 onChange={(e) => setDpi(e.target.value)}
               >
-                <option value="">Auto (recommended)</option>
+                <option value="">{t.dpiAuto}</option>
                 {[200, 300, 400, 500, 600].map((value) => (
-                  <option key={value} value={value}>{value} DPI</option>
+                  <option key={value} value={value}>{fmt(t.dpiValue, { dpi: value })}</option>
                 ))}
               </select>
             </div>
             {openHelp === "dpi" && <OptionExplanation option="dpi" />}
             <div className="opt-row checkbox">
               <input id="octave" type="checkbox" checked={octave} onChange={(e) => setOctave(e.target.checked)} />
-              <label htmlFor="octave">Show octave number (B♭4)</label>
-              <OptionHelp option="octave" label="Show octave number" open={openHelp} onToggle={setOpenHelp} />
+              <label htmlFor="octave">{t.showOctave}</label>
+              <OptionHelp option="octave" label={t.showOctaveShort} open={openHelp} onToggle={setOpenHelp} />
             </div>
             {openHelp === "octave" && <OptionExplanation option="octave" />}
             <div className="opt-row checkbox">
@@ -281,8 +308,8 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
                 checked={autoRetry}
                 onChange={(e) => setAutoRetry(e.target.checked)}
               />
-              <label htmlFor="autoRetry">Auto re-read unclear pages</label>
-              <OptionHelp option="autoRetry" label="Auto re-scan" open={openHelp} onToggle={setOpenHelp} />
+              <label htmlFor="autoRetry">{t.autoRetry}</label>
+              <OptionHelp option="autoRetry" label={t.autoRetryShort} open={openHelp} onToggle={setOpenHelp} />
             </div>
             {openHelp === "autoRetry" && <OptionExplanation option="autoRetry" />}
           </div>
@@ -295,16 +322,21 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
           className={`btn-block${ready ? " ready" : ""}`}
           disabled={!files.length || submitting}
           title={
-            !files.length ? "Choose a PDF or photos first"
-            : submitting ? "Your sheet is being uploaded"
-            : !user ? "Sign in to upload and annotate this sheet"
-            : "Upload and annotate this sheet"
+            !files.length ? t.chooseFirst
+            : submitting ? t.beingUploaded
+            : !user ? t.signInToAnnotate
+            : t.uploadAndAnnotate
           }
         >
-          {preparing ? "Preparing pages…" : submitting ? "Uploading…" : !user && files.length ? "Sign in to upload" : "Upload"}
+          {preparing ? t.preparingPages : submitting ? t.uploading : !user && files.length ? t.signInToUpload
+            : unreadableAll ? t.uploadAnyway : t.submit}
         </button>
       </form>
-      {atFreeLimit && <FreeLimitNotice onClose={() => setAtFreeLimit(false)} />}
+      {atFreeLimit && (
+        <FreeLimitNotice onClose={() => setAtFreeLimit(false)}
+          onSeePlans={() => { setAtFreeLimit(false); setPlansOpen(true); }} />
+      )}
+      {plansOpen && <PremiumWindow onClose={() => setPlansOpen(false)} />}
     </div>
   );
 }
@@ -312,24 +344,21 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
 /** A free account that already has a sheet: the free plan keeps one at a
  * time, so the way on is to delete it (or go Premium). The chosen file stays
  * picked, for straight after either. */
-function FreeLimitNotice({ onClose }: { onClose: () => void }) {
+function FreeLimitNotice({ onClose, onSeePlans }: { onClose: () => void; onSeePlans: () => void }) {
+  const { m } = useI18n();
   return (
     <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <div className="modal-card delete-modal" role="alertdialog" aria-modal="true" aria-labelledby="free-limit-title"
         style={{ textAlign: "left" }}>
-        <button type="button" className="modal-close" onClick={onClose} title="Close" aria-label="Close">
+        <button type="button" className="modal-close" onClick={onClose} title={m.common.close} aria-label={m.common.close}>
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="m6 6 12 12M18 6 6 18" />
           </svg>
         </button>
-        <h2 id="free-limit-title" className="modal-title">One sheet at a time on the free plan</h2>
-        <p className="modal-sub">
-          The free plan keeps one sheet at a time. Delete your current sheet to upload this one, or go Premium to keep as many as you like.
-        </p>
+        <h2 id="free-limit-title" className="modal-title">{m.upload.freeLimitTitle}</h2>
+        <p className="modal-sub">{m.upload.freeLimitBody}</p>
         <div className="modal-actions">
-          <button type="button" className="btn-pill ghost" onClick={onClose}>Not now</button>
-          <Link href="/sheets" className="btn-pill ghost" style={{ textDecoration: "none" }}>Go to my sheet</Link>
-          <Link href="/subscription/upgrade" className="btn-pill" style={{ textDecoration: "none" }}>See Premium plans</Link>
+          <button type="button" className="btn-pill" onClick={onSeePlans}>{m.common.seePremiumPlans}</button>
         </div>
       </div>
     </div>
@@ -389,6 +418,7 @@ function PhotoPages({ files, onChange, disabled }: {
   onChange: (files: File[]) => void;
   disabled: boolean;
 }) {
+  const { m } = useI18n();
   return (
     <>
       <DragDropProvider
@@ -398,14 +428,17 @@ function PhotoPages({ files, onChange, disabled }: {
           onChange(moveFile(files, source.initialIndex, source.index));
         }}
       >
-        <ol className="photo-pages" aria-label="Pages, in order">
+        <ol className="photo-pages" aria-label={m.upload.pagesInOrder} style={{
+          "--page-before": JSON.stringify(m.upload.pageNumberBefore),
+          "--page-after": JSON.stringify(m.upload.pageNumberAfter),
+        } as React.CSSProperties}>
           {files.map((file, index) => (
             <PhotoPage key={photoId(file)} file={file} index={index} disabled={disabled}
               onRemove={() => onChange(removeFile(files, index))} />
           ))}
         </ol>
       </DragDropProvider>
-      {files.length > 1 && <p className="photo-pages-hint">Drag the pages into order.</p>}
+      {files.length > 1 && <p className="photo-pages-hint">{m.upload.dragHint}</p>}
     </>
   );
 }
@@ -417,6 +450,7 @@ function PhotoPage({ file, index, disabled, onRemove }: {
   onRemove: () => void;
 }) {
   const { ref, isDragging, isDropping } = useSortable({ id: photoId(file), index, disabled });
+  const { m } = useI18n();
   const [preview, setPreview] = useState<string | null>(null);
   useEffect(() => {
     let current = true;
@@ -437,7 +471,7 @@ function PhotoPage({ file, index, disabled, onRemove }: {
         <span>{file.name}</span>
       </div>
       <button type="button" className="photo-remove" onClick={onRemove}
-        disabled={disabled} aria-label={`Remove page ${index + 1}`} title="Remove">✕</button>
+        disabled={disabled} aria-label={fmt(m.upload.removePage, { n: index + 1 })} title={m.upload.remove}>✕</button>
     </li>
   );
 }
@@ -449,12 +483,13 @@ function OptionHelp({ option, label, open, onToggle }: {
   onToggle: (option: UploadOption | null) => void;
 }) {
   const expanded = open === option;
+  const { m } = useI18n();
   return (
     <button
       type="button"
       className="option-help"
-      title={OPTION_HELP[option]}
-      aria-label={`About ${label}`}
+      title={m.upload.help[option]}
+      aria-label={fmt(m.upload.aboutOption, { label })}
       aria-expanded={expanded}
       aria-controls={`option-explanation-${option}`}
       onClick={() => onToggle(expanded ? null : option)}
@@ -465,9 +500,10 @@ function OptionHelp({ option, label, open, onToggle }: {
 }
 
 function OptionExplanation({ option }: { option: UploadOption }) {
+  const { m } = useI18n();
   return (
     <p id={`option-explanation-${option}`} className="option-explanation" role="status">
-      {OPTION_HELP[option]}
+      {m.upload.help[option]}
     </p>
   );
 }

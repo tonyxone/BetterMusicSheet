@@ -37,7 +37,7 @@ export async function fetchSheetFile(jobId: string, kind: SheetFileKind) {
   const assets = await clientApiFetch(`/api/sheets/${jobId}/assets`, { cache: "no-store" });
   // Allows the new UI to be published before the backend cutover.
   if (assets.status === 404) {
-    return clientApiFetch(`/api/sheets/${jobId}/${LEGACY_PATHS[kind]}`);
+    return clientApiFetch(`/api/sheets/${jobId}/${LEGACY_PATHS[kind]}`, { cache: "no-store" });
   }
   if (!assets.ok) return assets;
   const data = await assets.json() as SheetAssets;
@@ -49,7 +49,9 @@ export async function fetchSheetFile(jobId: string, kind: SheetFileKind) {
   if (!url) return new Response("File not available", { status: 404 });
   return data.direct && url.startsWith("http")
     ? fetch(url, { credentials: "omit", cache: "no-store" })
-    : clientApiFetch(url);
+    // no-store: the same URL answers each visitor differently, so a copy
+    // cached while signed in must not be handed back after signing out.
+    : clientApiFetch(url, { cache: "no-store" });
 }
 
 /** Matches the backend's own cap (MAX_UPLOAD_BYTES in config.py). Checked here

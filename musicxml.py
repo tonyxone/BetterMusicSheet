@@ -55,7 +55,7 @@ _DYNAMICS = {'ppp': 28, 'pp': 40, 'p': 52, 'mp': 64, 'mf': 80,
 _UNITS = {'whole': 4, 'half': 2, 'quarter': 1, 'eighth': .5, '16th': .25, '32nd': .125, '64th': .0625}
 
 
-def _direction(el, cursor, divisions, staff, part, shifts, meta):
+def _direction(el, cursor, divisions, staff, part, shifts, meta, stops):
     when = max(0.0, float(cursor + Fraction(el.findtext('{*}offset', '0')) / divisions))
     base = {'beat': when, 'staff': staff, 'part': part}
     events = meta['events']
@@ -77,8 +77,17 @@ def _direction(el, cursor, divisions, staff, part, shifts, meta):
             if kind == 'octave-shift':
                 key = (staff, mark.get('number', '1'))
                 amount = (int(mark.get('size', '8')) - 1) // 7
-                if mark.get('type') != 'continue':
-                    shifts[key] = amount if mark.get('type') == 'down' else -amount if mark.get('type') == 'up' else 0
+                way = mark.get('type')
+                # Voices are written one after another, so a line's stop can
+                # come before its start in the file though after it in time.
+                # That line has closed already; opening it now would shift the
+                # rest of the staff.
+                if way in ('up', 'down') and stops.get(key, -1) >= when:
+                    continue
+                if way != 'continue':
+                    shifts[key] = amount if way == 'down' else -amount if way == 'up' else 0
+                if way == 'stop':
+                    stops[key] = max(when, stops.get(key, when))
             elif kind == 'pedal' and (sound is None or sound.get('damper-pedal') is None):
                 events.append(dict(base, kind='pedal', value=mark.get('type', 'stop')))
             elif kind == 'dynamics' and (sound is None or sound.get('dynamics') is None):
@@ -125,9 +134,17 @@ def _parse_part(part, part_ordinal, default_staff):
         identity = (label, occurrence)
         pr = measure.find('{*}print')
         if pr is not None:
+            # A book read without some of its pages says which page each of
+            # its own came from (run.number_pages).
+            number = pr.get('page-number', '')
+            if not measures and number.isdigit():
+                page = int(number)
             if pr.get('new-page') == 'yes':
-                page += 1
+                page = int(number) if number.isdigit() else page + 1
                 system, system_measure = 0, 0
+                # Each page is recognized on its own, so a line still open
+                # here lost its stop; one that does run on is restarted.
+                shifts.clear()
             elif pr.get('new-system') == 'yes':
                 system += 1
                 system_measure = 0
@@ -139,6 +156,7 @@ def _parse_part(part, part_ordinal, default_staff):
                 'warnings': [], 'rests': [], 'repeat_forward': False,
                 'repeat_backward': 0, 'endings': list(active_endings), 'navigation': {}}
         system_measure += 1
+        stops = {}
         for el in measure:
             tag = _tag(el)
             if tag == 'attributes':
@@ -170,7 +188,7 @@ def _parse_part(part, part_ordinal, default_staff):
                     cursor = Fraction(0)
                 high = max(high, cursor)
             elif tag in ('direction', 'sound'):
-                _direction(el, cursor, divisions, _int_text(el.find('{*}staff'), default_staff), part_ordinal, shifts, meta)
+                _direction(el, cursor, divisions, _int_text(el.find('{*}staff'), default_staff), part_ordinal, shifts, meta, stops)
             elif tag == 'barline':
                 repeat = el.find('{*}repeat')
                 if repeat is not None:

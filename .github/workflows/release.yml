@@ -118,8 +118,11 @@ jobs:
     # (this is exactly how the original migration once broke uploads with
     # KeyError: 'JOB_CONTROL_TABLE' - see docs/serverless-migration.md).
     # Only runs for the serverless target - legacy's ECS API isn't
-    # Terraform's to manage (see infra/README.md).
-    if: ${{ !cancelled() && !failure() && needs.preflight.outputs.deploy == 'true' && needs.preflight.outputs.target == 'serverless' }}
+    # Terraform's to manage (see infra/README.md). And only once the images
+    # exist: a skipped build is not a failure, so without the explicit check
+    # this applied with empty image tags when v0.0.60's tests never got a
+    # runner (stopped only by the variables' own validation).
+    if: ${{ !cancelled() && !failure() && needs.push-image.result == 'success' && needs.preflight.outputs.deploy == 'true' && needs.preflight.outputs.target == 'serverless' }}
     # What Terraform says is deployed in us-east-1 (see infra/us-east-1.tf) -
     # the deploy job below reads these rather than keeping its own copy.
     outputs:
@@ -278,8 +281,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [preflight, push-image, apply-infra]
     # apply-infra skips itself (rather than failing) for this target, so this
-    # only needs to rule out an actual failure/cancellation, not a skip.
-    if: ${{ !cancelled() && !failure() && needs.preflight.outputs.deploy == 'true' && needs.preflight.outputs.target == 'legacy' }}
+    # only needs to rule out an actual failure/cancellation, not a skip -
+    # of apply-infra; the image build itself must have run.
+    if: ${{ !cancelled() && !failure() && needs.push-image.result == 'success' && needs.preflight.outputs.deploy == 'true' && needs.preflight.outputs.target == 'legacy' }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -321,7 +325,8 @@ jobs:
     # it - if apply-infra genuinely failed, don't deploy on top of half-applied
     # infra. (It skips itself, rather than failing, for the legacy target, so
     # this only needs to rule out an actual failure/cancellation, not a skip.)
-    if: ${{ !cancelled() && !failure() && needs.preflight.outputs.deploy == 'true' && needs.preflight.outputs.target == 'serverless' }}
+    # Both must actually have run, though: a skipped build has no image.
+    if: ${{ !cancelled() && !failure() && needs.push-image.result == 'success' && needs.apply-infra.result == 'success' && needs.preflight.outputs.deploy == 'true' && needs.preflight.outputs.target == 'serverless' }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -464,9 +469,10 @@ jobs:
     name: Build and deploy the web UI
     runs-on: ubuntu-latest
     needs: [preflight, deploy-legacy, deploy-serverless]
-    # Exactly one of the deploy jobs runs and the other is skipped, so this
-    # waits on "nothing failed" rather than on either one succeeding.
-    if: ${{ !cancelled() && !failure() && needs.preflight.outputs.deploy == 'true' }}
+    # Exactly one of the deploy jobs runs and the other is skipped - but one
+    # of them must have run: with both skipped (no image was built) "nothing
+    # failed" would still ship a UI ahead of the API it talks to.
+    if: ${{ !cancelled() && !failure() && (needs.deploy-legacy.result == 'success' || needs.deploy-serverless.result == 'success') && needs.preflight.outputs.deploy == 'true' }}
     steps:
       - uses: actions/checkout@v4
 

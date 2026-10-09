@@ -4,42 +4,34 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { Logo } from "./logo";
-import { KeyboardIcon } from "./keyboard-icon";
 import { HistoryIcon } from "./history-icon";
 import { SignInIcon } from "./sign-in-icon";
 import { useAuth } from "./auth-context";
 import { isAuthConfigured } from "@/lib/auth";
 import { clientApiFetch } from "@/lib/client-api";
 import { useSubscription } from "@/lib/subscription";
+import { useI18n } from "@/lib/i18n/client";
+import { fmt, rich } from "@/lib/i18n/format";
+import { translateKnown } from "@/lib/i18n/known-text";
 
 export function Header() {
   const { user, loading, openSignIn, signOut } = useAuth();
+  const { m, path } = useI18n();
 
   return (
     <header className="site-header">
-      <Link href="/" className="logo" title="Home">
+      <Link href={path("/")} className="logo" title={m.header.home}>
         <Logo />
       </Link>
       <nav className="flex items-center gap-3">
-        {/* Practice opens for everyone - a non-subscriber gets a limited
-            preview and a prompt to subscribe, rather than being turned away
-            before ever seeing the page (see play-view.tsx). */}
-        <Link
-          href="/play"
-          className="icon-link"
-          title="Practice with the keyboard"
-          aria-label="Practice with the keyboard"
-        >
-          <KeyboardIcon size={44} />
-        </Link>
         {/* /history, not "/": the root is the Library only for a signed-in
             visitor, and a guest with sheets of their own needs this to work
             too. */}
         <Link
-          href="/history"
+          href={path("/history")}
           className="icon-link"
-          title="Library"
-          aria-label="Library"
+          title={m.header.library}
+          aria-label={m.header.library}
         >
           <HistoryIcon />
         </Link>
@@ -51,7 +43,7 @@ export function Header() {
             // An account made before names were required may not have one.
             // Fall back to the email rather than the id - a raw UUID where a
             // name belongs just looks broken.
-            name={user.display_name || user.email || "Account"}
+            name={user.display_name || user.email || m.header.account}
             email={user.email}
             onSignOut={signOut}
           />
@@ -59,8 +51,8 @@ export function Header() {
           <button
             type="button"
             className="icon-link"
-            title="Sign in"
-            aria-label="Sign in"
+            title={m.common.signIn}
+            aria-label={m.common.signIn}
             onClick={() => openSignIn()}
           >
             <SignInIcon />
@@ -74,6 +66,7 @@ export function Header() {
 function UserMenu({ name, email, onSignOut }: { name: string; email: string | null; onSignOut: () => void }) {
   // Only a subscriber has anything to manage; everyone else goes to the plans.
   const { subscription } = useSubscription();
+  const { m, path } = useI18n();
   const subscribed = subscription?.tier === "premium";
   const [open, setOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -105,7 +98,7 @@ function UserMenu({ name, email, onSignOut }: { name: string; email: string | nu
     setConfirmText("");
   }
 
-  const confirmTextMatches = confirmText.trim().toLowerCase() === "delete";
+  const confirmTextMatches = confirmText.trim().toLowerCase() === m.header.confirmWord.toLowerCase();
 
   async function confirmDeleteAccount() {
     if (deleting || !confirmTextMatches) return;
@@ -115,13 +108,13 @@ function UserMenu({ name, email, onSignOut }: { name: string; email: string | nu
       const res = await clientApiFetch("/api/me", { method: "DELETE" });
       if (!res.ok) {
         const body = await res.json().catch(() => null) as { detail?: string } | null;
-        throw new Error(body?.detail || `Could not delete your account (${res.status}).`);
+        throw new Error(translateKnown(body?.detail, m) || fmt(m.header.deleteFailedStatus, { status: res.status }));
       }
       // The account (and its Cognito identity) is gone - same cleanup as an
       // ordinary sign-out: drop the local session and reload signed out.
       onSignOut();
     } catch (error) {
-      setDeleteError(error instanceof Error ? error.message : "Could not delete your account.");
+      setDeleteError(error instanceof Error ? error.message : m.header.deleteFailed);
       setDeleting(false);
     }
   }
@@ -131,7 +124,7 @@ function UserMenu({ name, email, onSignOut }: { name: string; email: string | nu
       <button
         type="button"
         className="nav-btn ghost nav-user-btn"
-        title={email ? `Open account menu for ${email}` : "Open account menu"}
+        title={email ? fmt(m.header.openAccountMenuFor, { email }) : m.header.openAccountMenu}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
@@ -144,38 +137,38 @@ function UserMenu({ name, email, onSignOut }: { name: string; email: string | nu
       {open && (
         <div className="nav-menu" role="menu">
           <Link
-            href={subscribed ? "/subscription" : "/subscription/upgrade"}
+            href={path(subscribed ? "/subscription" : "/subscription/upgrade")}
             className="nav-menu-item"
             role="menuitem"
-            title="Manage your subscription"
+            title={m.header.manageSubscriptionTitle}
             onClick={() => setOpen(false)}
           >
-            Manage subscription
+            {m.header.manageSubscription}
           </Link>
           <button
             type="button"
             className="nav-menu-item"
             role="menuitem"
-            title="Sign out of this account"
+            title={m.header.signOutTitle}
             onClick={() => {
               setOpen(false);
               onSignOut();
             }}
           >
-            Sign out
+            {m.header.signOut}
           </button>
           <button
             type="button"
             className="nav-menu-item danger"
             role="menuitem"
-            title="Permanently delete your account"
+            title={m.header.deleteAccountTitle}
             onClick={() => {
               setOpen(false);
               setDeleteError(null);
               setDeleteOpen(true);
             }}
           >
-            Delete account
+            {m.header.deleteAccount}
           </button>
         </div>
       )}
@@ -199,20 +192,19 @@ function UserMenu({ name, email, onSignOut }: { name: string; email: string | nu
                 className="modal-close"
                 onClick={closeDeleteAccount}
                 disabled={deleting}
-                title="Close"
-                aria-label="Close"
+                title={m.common.close}
+                aria-label={m.common.close}
               >
                 <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
                   <path d="M4 4l8 8M12 4l-8 8" />
                 </svg>
               </button>
-              <h2 id="delete-account-title" className="serif modal-title">Delete your account?</h2>
+              <h2 id="delete-account-title" className="serif modal-title">{m.header.deleteHeading}</h2>
               <p className="modal-sub">
-                This permanently deletes your account{email ? ` (${email})` : ""} and your sheet
-                history. This can&apos;t be undone.
+                {email ? fmt(m.header.deleteBodyEmail, { email }) : m.header.deleteBody}
               </p>
               <label className="modal-field">
-                <span>Type <strong>delete</strong> to confirm</span>
+                <span>{rich(m.header.typeToConfirm, {}, { word: <strong>{m.header.confirmWord}</strong> })}</span>
                 <input
                   type="text"
                   autoComplete="off"
@@ -224,17 +216,17 @@ function UserMenu({ name, email, onSignOut }: { name: string; email: string | nu
               </label>
               {deleteError && <p className="modal-error">{deleteError}</p>}
               <div className="modal-actions">
-                <button type="button" className="btn-pill ghost" title="Keep your account" onClick={closeDeleteAccount} disabled={deleting}>
-                  Cancel
+                <button type="button" className="btn-pill ghost" title={m.header.keepAccount} onClick={closeDeleteAccount} disabled={deleting}>
+                  {m.common.cancel}
                 </button>
                 <button
                   type="button"
                   className="btn-pill danger"
-                  title={confirmTextMatches ? "Permanently delete your account" : 'Type "delete" to enable this button'}
+                  title={confirmTextMatches ? m.header.deleteAccountTitle : fmt(m.header.typeToEnable, { word: m.header.confirmWord })}
                   onClick={confirmDeleteAccount}
                   disabled={deleting || !confirmTextMatches}
                 >
-                  {deleting ? "Deleting…" : "Delete account"}
+                  {deleting ? m.common.deleting : m.header.deleteAccount}
                 </button>
               </div>
             </div>

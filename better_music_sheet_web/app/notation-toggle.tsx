@@ -1,22 +1,26 @@
 "use client";
 
-// Letter names (C D E...) or jianpu numbers, 1 = C
-// (1 2 3..., see lib/notation.ts). Styled as the Annotated/Original
-// switch beside it, since it is the same kind of choice about one view.
+// Letter names (C D E...), jianpu numbers (1 2 3..., see lib/notation.ts),
+// or solfège (do re mi...). Styled as the Annotated/Original switch beside
+// it, since it is the same kind of choice about one view.
 
 import type { Notation } from "@/lib/notation";
+import { useI18n } from "@/lib/i18n/client";
 
 export function NotationToggle({ value, onChange, dark = false }: {
   value: Notation;
   onChange: (next: Notation) => void;
   dark?: boolean;
 }) {
+  const { m } = useI18n();
+  const t = m.toggles;
   const options: { id: Notation; label: string; title: string }[] = [
-    { id: "letters", label: "Letter", title: "Letter names: C D E F G A B" },
-    { id: "numbers", label: "簡", title: "Jianpu (numbered notation, 簡譜): 1 2 3 4 5 6 7 for C D E F G A B" },
+    { id: "letters", label: "CDE", title: t.lettersTitle },
+    { id: "numbers", label: "123", title: t.numbersTitle },
+    { id: "solfege", label: "DoReMi", title: t.solfegeTitle },
   ];
   return (
-    <div className={`sheet-toggle${dark ? " dark" : ""}`} role="group" aria-label="Note name notation">
+    <div className={`sheet-toggle${dark ? " dark" : ""}`} role="group" aria-label={t.notation}>
       {options.map((option) => (
         <button
           key={option.id}

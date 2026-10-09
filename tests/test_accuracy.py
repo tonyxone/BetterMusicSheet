@@ -367,7 +367,7 @@ class AccuracyTests(unittest.TestCase):
         self.assertEqual(overrides[1]['omr'], str(retry[1]))
         # Isolation alone recovered the page, so the tuplet pass never runs.
         self.assertEqual(audiveris.call_count, 1)
-        self.assertEqual(audiveris.call_args.kwargs, {'sheets': [1]})
+        self.assertEqual(audiveris.call_args.kwargs, {'sheets': [1], 'constants': run.NO_MOVEMENTS})
 
     def tail_fixture(self):
         body = ATTR.replace('<beats>4</beats>', '<beats>7</beats>').replace('<beat-type>4', '<beat-type>8')
@@ -506,6 +506,21 @@ class AccuracyTests(unittest.TestCase):
             {'c': '4', 'origin': (200, 30)}]}
         self.assertEqual([m['beats'] for m in pdf_marks.time_signatures(self._page(music, prose))], [3])
 
+    def test_pdf_meter_reads_ascii_digits_from_a_sonata_layout_font(self):
+        # Sibelius's Opus (and Finale's Maestro) predate SMuFL: no private-use
+        # glyphs, the black notehead is "œ" and the time digits are ASCII.
+        opus = {'font': 'OpusStd', 'chars': [{'c': 'œ', 'origin': (40 + i, 60)} for i in range(5)] + [
+            {'c': '4', 'origin': (10, 20)},
+            {'c': '4', 'origin': (10, 30)}]}
+        self.assertEqual([m['beats'] for m in pdf_marks.time_signatures(self._page(opus))], [4])
+
+    def test_pdf_meter_ignores_a_text_font_that_merely_contains_oe(self):
+        # French lyrics ("cœur") with stacked verse numbers must stay prose.
+        lyrics = {'font': 'Times', 'chars': [{'c': c, 'origin': (40 + i * 5, 60)} for i, c in enumerate('cœur, mon cœur')] + [
+            {'c': '1', 'origin': (10, 20)},
+            {'c': '2', 'origin': (10, 30)}]}
+        self.assertEqual(pdf_marks.time_signatures(self._page(lyrics)), [])
+
     def test_pdf_meter_rejects_stacked_fingerings(self):
         # Two fingerings on a chord stack exactly like a time signature. "5
         # over 1" is a plausible fingering and an implausible meter.
@@ -584,6 +599,33 @@ class AccuracyTests(unittest.TestCase):
         ns, ms = self.parse(measure(attrs + note(duration=1) + note('D', duration=1) + '<backup><duration>2</duration></backup>' + note('E', duration=3, voice=2)))
         self.assertEqual([round(n['start_beat_in_measure'], 6) for n in ns], [0, 0, round(1/3, 6)])
         self.assertEqual(ms[0]['content_length_beats'], 1)
+
+    def test_an_octave_line_closed_by_an_earlier_voice_stays_closed(self):
+        # Audiveris wrote Calice de Vino's m1 this way: the stop sits in voice
+        # 1, before the backup to voice 2 that holds the line's earlier start.
+        def shift(kind):
+            return f'<direction><direction-type><octave-shift type="{kind}" size="8"/></direction-type><staff>1</staff></direction>'
+        ns, _ = self.parse(measure(ATTR + note(duration=2) + shift('stop') + note('D', duration=2)
+                                   + '<backup><duration>4</duration></backup>' + shift('down') + note('E', duration=4, voice=2))
+                           + measure(note('F', duration=4), 2))
+        self.assertEqual([n['octave_shift'] for n in ns], [0, 0, 0, 0])
+
+    def test_an_octave_line_left_open_ends_with_its_page(self):
+        shift = '<direction><direction-type><octave-shift type="down" size="8"/></direction-type><staff>1</staff></direction>'
+        ns, _ = self.parse(measure(ATTR + shift + note(duration=4))
+                           + measure('<print new-system="yes"/>' + note('D', duration=4), 2)
+                           + measure('<print new-page="yes"/>' + note('E', duration=4), 3))
+        self.assertEqual([n['octave_shift'] for n in ns], [1, 1, 0])
+
+    def test_a_book_read_without_its_cover_keeps_its_page_numbers(self):
+        # Read with "-sheets 2 3", the export numbers its own pages 1 and 2.
+        path = mxl(self.path / 'score.mxl', measure(ATTR + note(duration=4))
+                   + measure('<print new-system="yes"/>' + note('D', duration=4), 2)
+                   + measure('<print new-page="yes"/>' + note('E', duration=4), 3))
+        run.number_pages(path, [2, 3])
+        _, ms = musicxml.load_score_notes(path)
+        self.assertEqual([m['page'] for m in ms], [2, 2, 3])
+        self.assertEqual([m['system'] for m in ms], [0, 1, 0])
 
     def test_implicit_final_measure_is_not_padded(self):
         _, ms = self.parse(measure(ATTR + note(duration=4)) + measure(note(duration=1), 2, 'implicit="yes"'))
@@ -676,6 +718,28 @@ class AccuracyTests(unittest.TestCase):
         self.assertEqual([n['attack'] for n in t['notes']], [True, False])
         self.assertTrue(all(n['bbox_pt'] for n in t['notes']))
 
+    def build_with_meters(self, marks, first=3):
+        """Two measures recognized as 4/4 in one system - the first holding
+        `first` beats, the second a half note - with the given printed meters."""
+        with patch.object(timeline, 'time_signatures', side_effect=lambda page: marks):
+            return self.build([[[(6, 0, 1, None)], [(6, 0, 1, None)]]],
+                              measure(ATTR + note(duration=first)) + measure(note(duration=2), 2))[1]
+
+    def test_printed_meter_change_carries_into_later_measures(self):
+        t = self.build_with_meters([dict(x=10, y=130, beats=3.0)])
+        self.assertEqual([m['length_beats'] for m in t['measures']], [3, 3])
+        # The half note no longer fits 3 beats, so that doubt stays; the full
+        # first measure's mismatch was only against the misread 4/4.
+        self.assertFalse(any(w.startswith('Recognized duration') for w in t['measures'][0]['warnings']))
+        self.assertTrue(any(w.startswith('Recognized duration') for w in t['measures'][1]['warnings']))
+        t = self.build_with_meters([dict(x=10, y=130, beats=4.0), dict(x=110, y=130, beats=2.0)], first=4)
+        self.assertEqual([m['length_beats'] for m in t['measures']], [4, 2])
+
+    def test_a_courtesy_meter_closing_a_system_is_not_its_last_measure_s(self):
+        # Sibelius prints the next system's meter after the last bar's notes.
+        t = self.build_with_meters([dict(x=10, y=130, beats=3.0), dict(x=190, y=130, beats=5.0)])
+        self.assertEqual([m['length_beats'] for m in t['measures']], [3, 3])
+
     def test_octave_shift_not_applied_twice(self):
         direction = '<direction><direction-type><octave-shift type="down" size="8"/></direction-type></direction>'
         p, t = self.build([[[ (-4, 0, 1, None)]]], measure(ATTR + direction + note('F', octave=6, duration=4)))
@@ -754,6 +818,50 @@ class AccuracyTests(unittest.TestCase):
             get_drawings=lambda: [{'dashes': '[1 1] 0', 'items': [('l', pymupdf.Point(30, 25), pymupdf.Point(180, 25))]}])
         self.assertEqual(pdf_marks.octave_intervals(page, {1: (40, 50, 60, 70, 80)}), {1: [(18, 182, 1)]})
         page.get_drawings = lambda: []
+        self.assertEqual(pdf_marks.octave_intervals(page, {1: (40, 50, 60, 70, 80)}), {})
+
+    def test_pdf_octave_glyph_with_solid_line_is_recognized(self):
+        # MuseScore 4 exports the 8va line as a solid stroke.
+        from types import SimpleNamespace
+        for label in ('', '8va'):
+            page = SimpleNamespace(get_text=lambda _, label=label: {'blocks': [{'lines': [{'spans': [
+                {'text': label, 'bbox': (20, 20, 28, 30)}]}]}]},
+                get_drawings=lambda: [{'dashes': '[] 0', 'items': [('l', pymupdf.Point(40, 25), pymupdf.Point(180, 25))]}])
+            self.assertEqual(pdf_marks.octave_intervals(page, {1: (40, 50, 60, 70, 80)}), {1: [(18, 182, 1)]}, msg=label)
+
+    def test_pdf_bare_continuation_shifts_the_way_its_line_did(self):
+        # MuseScore: "8" glyph + "va" text, a solid line to the right edge;
+        # the next system restarts it under a bare "8" that sits nearer the
+        # bass staff above than the treble staff below.
+        from types import SimpleNamespace
+        staffs = {1: (40, 45, 50, 55, 60), 2: (80, 85, 90, 95, 100),
+                  3: (140, 145, 150, 155, 160), 4: (180, 185, 190, 195, 200)}
+        spans = [{'text': '', 'bbox': (300, 20, 306, 30)},
+                 {'text': 'va', 'bbox': (306, 21, 316, 31)},
+                 {'text': '', 'bbox': (20, 105, 26, 115)}]
+        lines = [((318, 25), (400, 25)), ((28, 110), (400, 110)),
+                 ((10, 40), (400, 40))]  # a staff line: where the systems end
+        page = SimpleNamespace(
+            get_text=lambda _: {'blocks': [{'lines': [{'spans': spans}]}]},
+            get_drawings=lambda: [{'dashes': '[] 0', 'items': [
+                ('l', pymupdf.Point(*a), pymupdf.Point(*b))]} for a, b in lines])
+        self.assertEqual(pdf_marks.octave_intervals(page, staffs),
+                         {1: [(298, 402, 1)], 3: [(18, 402, 1)]})
+
+    def test_pdf_octave_glyph_suffix_vb_lowers_the_staff_above(self):
+        from types import SimpleNamespace
+        page = SimpleNamespace(get_text=lambda _: {'blocks': [{'lines': [{'spans': [
+            {'text': '', 'bbox': (20, 85, 26, 95)}, {'text': 'vb', 'bbox': (26, 86, 36, 96)}]}]}]},
+            get_drawings=lambda: [{'dashes': '[] 0', 'items': [('l', pymupdf.Point(38, 90), pymupdf.Point(180, 90))]}])
+        self.assertEqual(pdf_marks.octave_intervals(page, {1: (40, 50, 60, 70, 80), 2: (100, 110, 120, 130, 140)}),
+                         {1: [(18, 182, -1)]})
+
+    def test_pdf_bare_text_digit_beside_a_solid_line_is_not_an_octave(self):
+        # A tuplet bracket is a plain number with solid lines either side.
+        from types import SimpleNamespace
+        page = SimpleNamespace(get_text=lambda _: {'blocks': [{'lines': [{'spans': [
+            {'text': '8', 'bbox': (20, 20, 28, 30)}]}]}]},
+            get_drawings=lambda: [{'dashes': '[] 0', 'items': [('l', pymupdf.Point(30, 25), pymupdf.Point(180, 25))]}])
         self.assertEqual(pdf_marks.octave_intervals(page, {1: (40, 50, 60, 70, 80)}), {})
 
     def test_pdf_octave_label_with_embedded_dashes_is_recognized(self):

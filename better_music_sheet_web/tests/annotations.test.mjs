@@ -16,6 +16,7 @@ function load(entry) {
   const external = {
     react: { useCallback: () => {}, useEffect: () => {}, useRef: () => ({}), useState: () => [], useSyncExternalStore: () => null },
     './client-api': { clientApiFetch: async () => { throw new Error('no network in tests'); } },
+    './preferences': { usePreference: (_key, fallback) => [fallback, () => {}] },
     './sheet-files': { fetchSheetAssets: async () => null, fetchSheetFile: async () => null },
     './pdfjs': { openPdf: async () => { throw new Error('no pdf.js in tests'); } },
   };
@@ -182,6 +183,21 @@ test('numbered notation is fixed-do: 1 is always C', () => {
   assert.equal(notation.toNumbered('rit.'), 'rit.');
 });
 
+test('solfège is fixed-do too: do is always C', () => {
+  assert.deepEqual(['C', 'D', 'E', 'F', 'G', 'A', 'B'].map((t) => notation.toSolfege(t)),
+    ['do', 're', 'mi', 'fa', 'so', 'la', 'si']);
+  assert.deepEqual(['D♭', 'E♭', 'F', 'G♭', 'A♭', 'B♭', 'C'].map((t) => notation.toSolfege(t)),
+    ['♭re', '♭mi', 'fa', '♭so', '♭la', '♭si', 'do']);
+  assert.equal(notation.toSolfege('F♯'), '♯fa');
+  assert.equal(notation.toSolfege('G♭'), '♭so');
+  assert.equal(notation.toSolfege('E♯'), 'fa');
+  assert.equal(notation.toSolfege('C♭'), 'si');
+  assert.equal(notation.toSolfege('F𝄫'), '♭mi');
+  assert.equal(notation.toSolfege('Bb4'), 'bsi');
+  assert.equal(notation.toSolfege('C#?'), '#do?');
+  assert.equal(notation.toSolfege('rit.'), 'rit.');
+});
+
 test('every letter round-trips through its number to the same piano key', () => {
   const pc = (text) => { const p = labels.parseNoteName(text); return (([0, 2, 4, 5, 7, 9, 11][p.step] + p.alter) % 12 + 12) % 12; };
   for (const letter of 'CDEFGAB') {
@@ -193,6 +209,12 @@ test('every letter round-trips through its number to the same piano key', () => 
       assert.doesNotMatch(number, /𝄪|𝄫/u, name);
       assert.equal(notation.toNumbered(back), number, name);
       assert.equal(pc(back), pc(name), name);
+
+      const syllable = notation.toSolfege(name);
+      const backSolfege = notation.fromSolfege(syllable, 'X');
+      assert.notEqual(backSolfege, null, name);
+      assert.equal(notation.toSolfege(backSolfege), syllable, name);
+      assert.equal(pc(backSolfege), pc(name), name);
     }
   }
 });
@@ -208,11 +230,23 @@ test('a typed number becomes the letter it means', () => {
   assert.equal(notation.fromNumbered('F#', 'G'), null);
 });
 
-test('labels read as numbers, and edits stay letters', () => {
+test('a typed solfège syllable becomes the letter it means', () => {
+  assert.equal(notation.fromSolfege('#fa', 'G'), 'F♯');
+  assert.equal(notation.fromSolfege('bsi', 'G'), 'B♭');
+  assert.equal(notation.fromSolfege('fa', 'Bb'), 'F');
+  assert.equal(notation.fromSolfege('so', 'G4'), 'G4');
+  assert.equal(notation.fromSolfege('fa', 'E♯'), 'E♯');
+  assert.equal(notation.fromSolfege('Do', 'C'), 'C');
+  assert.equal(notation.fromSolfege('F#', 'G'), null);
+});
+
+test('labels read as numbers or solfège, and edits stay letters', () => {
   const item = { id: 'L1', group: 'g', page: 1, x: 0, y: 0, size: 6, text: 'F♯', notes: [] };
   const doc = { ...edits.EMPTY_EDITS, labels: { L1: { text: 'F' } } };
   assert.equal(edits.resolveLabel(item, edits.EMPTY_EDITS, 'numbers').text, '♯4');
   assert.equal(edits.resolveLabel(item, doc, 'numbers').text, '4');
+  assert.equal(edits.resolveLabel(item, edits.EMPTY_EDITS, 'solfege').text, '♯fa');
+  assert.equal(edits.resolveLabel(item, doc, 'solfege').text, 'fa');
   assert.equal(edits.resolveLabel(item, doc, 'letters').text, 'F');
 });
 
@@ -220,6 +254,7 @@ test('falling notes are named as written, or from the pitch once corrected', () 
   const note = { midi: 66, step: 'F', alter: 1, octave: 4, key_fifths: 1 };
   assert.equal(notation.timelineNoteName(note, 'letters'), 'F♯');
   assert.equal(notation.timelineNoteName(note, 'numbers'), '♯4');
+  assert.equal(notation.timelineNoteName(note, 'solfege'), '♯fa');
   // Spelled as written even where the pitch has another name.
   assert.equal(notation.timelineNoteName({ midi: 63, step: 'D', alter: 1, key_fifths: -4 }, 'letters'), 'D♯');
   assert.equal(notation.timelineNoteName({ midi: 63, step: 'D', alter: 1, key_fifths: -4 }, 'numbers'), '♯2');
@@ -228,6 +263,7 @@ test('falling notes are named as written, or from the pitch once corrected', () 
   assert.equal(notation.timelineNoteName({ ...note, midi: 68, key_fifths: -4 }, 'letters'), 'A♭');
   assert.equal(notation.timelineNoteName({ ...note, midi: 68 }, 'letters'), 'G♯');
   assert.equal(notation.timelineNoteName({ midi: 60 }, 'numbers'), '1');
+  assert.equal(notation.timelineNoteName({ midi: 60 }, 'solfege'), 'do');
 });
 
 test('a falling note is named once, across its tied pieces', () => {

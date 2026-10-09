@@ -10,6 +10,7 @@
 // box), moving the selection together, drawing, erasing.
 
 import { useRef, useState } from "react";
+import { useI18n } from "@/lib/i18n/client";
 import type { LabelItem, UnnamedNote } from "@/lib/labels";
 import type { Notation } from "@/lib/notation";
 import { itemKey, moveItems, newId, resolveLabel, type ItemKind, type SelectedItem, type SheetEdits } from "@/lib/edits";
@@ -82,6 +83,7 @@ export function AnnotationLayer({
   edits: SheetEdits;
   editor?: EditorHooks;
 }) {
+  const { m } = useI18n();
   const svgRef = useRef<SVGSVGElement>(null);
   const [draft, setDraft] = useState<number[] | null>(null);
   const [marquee, setMarquee] = useState<Marquee | null>(null);
@@ -426,7 +428,7 @@ export function AnnotationLayer({
         return (
           <g key={key} data-unnamed={key} className={`unnamed-note${focused ? " focused" : ""}`}
             onPointerDown={interactive ? (e) => addName(u, e) : undefined}>
-            <title>{interactive ? "Add this note's name" : "This note wasn't recognized, so it has no name"}</title>
+            <title>{interactive ? m.viewer.addName : m.viewer.notRecognized}</title>
             <circle cx={u.x} cy={u.y} r={r} className="unnamed-ring" />
             {/* The click target is the notehead alone: a chord's rings
                 overlap, and a click must name the note it lands on. */}
@@ -434,7 +436,7 @@ export function AnnotationLayer({
             {interactive && focused && (
               <g className="unnamed-tag">
                 <rect x={u.x + r + 1} y={u.y - nameSize * 0.75} width={nameSize * 3.2} height={nameSize * 1.5} rx={nameSize * 0.3} />
-                <text x={u.x + r + 1 + nameSize * 1.6} y={u.y + nameSize * 0.32} fontSize={nameSize * 0.95} textAnchor="middle">+ name</text>
+                <text x={u.x + r + 1 + nameSize * 1.6} y={u.y + nameSize * 0.32} fontSize={nameSize * 0.95} textAnchor="middle">{m.viewer.plusName}</text>
               </g>
             )}
           </g>

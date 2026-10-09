@@ -1,24 +1,25 @@
 import Link from "next/link";
+import { getI18n } from "@/lib/i18n/server";
+import { LanguagePicker } from "./language-picker";
 
 // Server component on purpose: it is static links, so it adds nothing to the
-// client bundle on any route.
-export function Footer() {
+// client bundle on any route. Only the language picker runs in the browser.
+export async function Footer() {
+  const { m, path } = await getI18n();
   return (
     <footer className="site-footer">
       <nav className="footer-links">
-        <Link href="/about">About</Link>
-        <Link href="/privacy">Privacy</Link>
-        <Link href="/terms">Terms</Link>
-        <Link href="/support">Support</Link>
+        <Link href={path("/about")}>{m.footer.about}</Link>
+        <Link href={path("/privacy")}>{m.footer.privacy}</Link>
+        <Link href={path("/terms")}>{m.footer.terms}</Link>
+        <Link href={path("/support")}>{m.footer.support}</Link>
         {/* Reachable from every page rather than only from inside About: a
             visitor who wants to report a badly-read sheet should not have to
             go looking for the address. */}
-        <a href="mailto:bettermusicsheet@gmail.com">Contact</a>
+        <a href="mailto:bettermusicsheet@gmail.com">{m.footer.contact}</a>
       </nav>
-      <div className="footer-note">
-        Note names are recognised automatically and are not always right — check
-        against your original before you rely on them.
-      </div>
+      <LanguagePicker />
+      <div className="footer-note">{m.footer.disclaimer}</div>
     </footer>
   );
 }

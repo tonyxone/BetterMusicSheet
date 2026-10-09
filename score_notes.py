@@ -218,7 +218,10 @@ def resolve_score_notes(pdf_path, omr_path, num_pages, page_omr_overrides=None):
             heads = load_sheet_heads(src, page)
             chords = load_chord_id_groups(src, page)
             staff_lines = load_staff_lines(src, page)
-            pic_w, pic_h = get_picture_size(src, page)
+            picture = get_picture_size(src, page)
+            if picture is None:
+                continue  # a page the book skipped: nothing on it was read
+            pic_w, pic_h = picture
             sx, sy = doc[page - 1].rect.width / pic_w, doc[page - 1].rect.height / pic_h
             merge_vector_pdf_noteheads(doc[page - 1], heads, staff_lines, sx, sy, page)
             regions, chord_meta = page_structure(root, staff_lines)

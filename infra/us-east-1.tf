@@ -237,6 +237,7 @@ module "serverless_us_east_1" {
   admin_table           = aws_dynamodb_table.admin.name
   sheets_table          = aws_dynamodb_table.music_sheet.name
   jobs_table            = aws_dynamodb_table.annotation_job.name
+  processed_sheet_table = aws_dynamodb_table.processed_sheet.name
   secret_parameter      = aws_ssm_parameter.backend_jwt_secret_us_east_1[0].arn
   cognito_region        = var.aws_region
   cognito_pool          = aws_cognito_user_pool.users.id
@@ -265,6 +266,7 @@ module "serverless_us_east_1" {
   depends_on = [
     aws_dynamodb_table.users, aws_dynamodb_table.subscriptions, aws_dynamodb_table.master_user,
     aws_dynamodb_table.admin, aws_dynamodb_table.music_sheet, aws_dynamodb_table.annotation_job,
+    aws_dynamodb_table.processed_sheet,
     aws_ecs_cluster_capacity_providers.us_east_1, aws_route_table_association.us_east_1,
   ]
 }

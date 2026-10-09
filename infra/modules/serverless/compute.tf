@@ -5,14 +5,18 @@ resource "aws_cloudwatch_log_group" "logs" {
 }
 
 resource "aws_lambda_function" "api" {
-  function_name                  = "${local.name}-api"
-  role                           = aws_iam_role.api.arn
-  package_type                   = "Image"
-  image_uri                      = var.api_image
-  architectures                  = ["x86_64"]
-  memory_size                    = 512
-  timeout                        = 25
-  reserved_concurrent_executions = 10
+  function_name = "${local.name}-api"
+  role          = aws_iam_role.api.arn
+  package_type  = "Image"
+  image_uri     = var.api_image
+  architectures = ["x86_64"]
+  memory_size   = 512
+  timeout       = 25
+  # Cold starts hold an instance for 2+ seconds each (a container image), so
+  # a page firing several requests at once already reached 7 of an earlier
+  # cap of 10 at only ~2 requests a second. 50 of the account's 1,000 is
+  # headroom, not cost: an idle reservation is free.
+  reserved_concurrent_executions = 50
   environment {
     # COGNITO_DOMAIN and the Stripe secrets are set here rather than in
     # local.environment because only the API serves sign-in and billing
@@ -197,9 +201,12 @@ resource "aws_apigatewayv2_stage" "api" {
   api_id      = aws_apigatewayv2_api.api.id
   name        = "$default"
   auto_deploy = true
+  # Also a ceiling on what abusive traffic can cost. Sized to the API
+  # Lambda's concurrency above, about 25x the busiest minute seen so far
+  # (122 requests, early October 2026); raise both together.
   default_route_settings {
-    throttling_burst_limit = 50
-    throttling_rate_limit  = 20
+    throttling_burst_limit = 100
+    throttling_rate_limit  = 50
   }
 }
 resource "aws_lambda_permission" "api" {

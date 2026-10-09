@@ -121,14 +121,37 @@ def _identity(job):
             f"Uploaded:   {location(job)}\n")
 
 
-def job_failed(job, error):
+def attempt_failed(job, error, crash=None, retrying=False):
+    """Log every failed attempt, not only the last. A sheet that succeeds on
+    its third try otherwise looks like a clean success, and the crashes before
+    it are bare tracebacks with no job id. Log only: the attempt that gives up
+    also sends job_failed's email."""
     try:
-        _log("job_failed", job, error=error, attempts=job.get("attempt_count"), stage=job.get("stage"))
+        _log("attempt_failed", job, attempt=int(job.get("attempt_count") or 0), error=error,
+             crash=crash, stage=job.get("stage"), retrying=retrying)
+    except Exception:
+        traceback.print_exc()
+
+
+def job_failed(job, error, crash=None):
+    try:
+        _log("job_failed", job, error=error, crash=crash, attempts=int(job.get("attempt_count") or 0), stage=job.get("stage"))
         _publish(f"Sheet failed: {job.get('sheet_name') or job.get('job_id')}",
                  "A sheet failed and the user was shown an error.\n\n" + _identity(job)
                  + f"Error:      {error}\n"
+                 + (f"Cause:      {crash}\n" if crash else "")
                  + f"Attempts:   {job.get('attempt_count', 0)}\n"
                  + f"Last stage: {job.get('stage')}\n")
+    except Exception:
+        traceback.print_exc()
+
+
+def job_reused(job, source_job_id, how):
+    """Log a sheet finished from an earlier one made from the same file (see
+    processed_sheets.py) - ``how`` is "copied" or "redrawn". No email: the
+    earlier sheet already reported how its reading went."""
+    try:
+        _log("job_reused", job, source_job_id=source_job_id, how=how)
     except Exception:
         traceback.print_exc()
 
@@ -137,7 +160,8 @@ def job_done(job, quality, output_key=None):
     """Log every finished sheet; alert when its recognition looks rough."""
     try:
         quality = quality or {}
-        _log("job_done", job, **{k: v for k, v in quality.items() if k != "top_warnings"})
+        _log("job_done", job, attempts=int(job.get("attempt_count") or 0),
+             **{k: v for k, v in quality.items() if k != "top_warnings"})
         if not quality.get("reasons"):
             return
         warnings = "".join(f"  {count:4}  {warning}\n" for warning, count in quality["top_warnings"])
