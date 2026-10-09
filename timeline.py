@@ -618,6 +618,22 @@ def _measure_regions(printed, resolved):
     return assigned, mismatched
 
 
+# Bars on a page that must fit the read meter, and the share that must, to
+# trust it despite a low-grade digit.
+METER_CONFIRM_MIN_BARS = 4
+METER_CONFIRM_RATIO = 0.8
+
+
+def meter_confirmed_by_bars(measures):
+    """True when enough regular bars add up exactly to the meter they were
+    read with. A misread meter does not do this: music in 3/4 read as 4/4
+    leaves most bars short."""
+    fits = [abs(m['content_length_beats'] - m['nominal_length_beats']) <= 1e-6
+            for m in measures
+            if not m['implicit'] and not m['label'].startswith('X') and m['nominal_length_beats']]
+    return len(fits) >= METER_CONFIRM_MIN_BARS and sum(fits) / len(fits) >= METER_CONFIRM_RATIO
+
+
 def prepare_score(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=None, resolved_notes=None):
     resolved = resolved_notes if resolved_notes is not None else resolve_score_notes(pdf_path, omr_path, num_pages, page_omr_overrides)
     printed = _printed_sources(mxl_path, num_pages, page_omr_overrides)
@@ -638,7 +654,11 @@ def prepare_score(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=No
                 unreliable_meter_pages.add(page)
         except Exception:
             continue
-    pdf_meter, meter_unreliable = None, False
+    # A weak digit grade is not the only evidence: bars that add up to the meter
+    # that was read confirm it.
+    unreliable_meter_pages -= {page for page in unreliable_meter_pages
+                               if meter_confirmed_by_bars([m for m, _ in printed if m['page'] == page])}
+    pdf_meter, meter_unreliable, meter_warned = None, False, False
     stats = {'notes_matched': 0, 'notes_unmatched': 0, 'pitch_corrections': 0,
              'measure_count_mismatch': 0, 'pages_without_regions': 0, 'measures_without_note_positions': 0}
     assigned, mismatched = _measure_regions(printed, resolved)
@@ -678,7 +698,12 @@ def prepare_score(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=No
                 # the printed one.
                 if abs(m['content_length_beats'] - pdf_meter) <= 1e-6:
                     m['warnings'][:] = [w for w in m['warnings'] if not w.startswith('Recognized duration differs')]
-        if meter_unreliable and pdf_meter is None:
+        # The doubt carries forward, but the warning only belongs where it shows:
+        # the first bar after the doubtful signature, and any bar whose notes
+        # don't add up to it. Repeating it on every bar flags a fine sheet.
+        disagrees = abs(m['content_length_beats'] - m['nominal_length_beats']) > 1e-6
+        if meter_unreliable and pdf_meter is None and (not meter_warned or disagrees):
+            meter_warned = True
             m['warnings'].append(
                 'The printed time signature could not be read confidently and none '
                 'was recoverable from the PDF; bar lengths here may be wrong.')
