@@ -160,6 +160,19 @@ export const en = {
     photosOneSheet: "{count} photos · one sheet",
     formats: "PDF, JPG, or PNG · up to {mb} MB",
     photosHint: "Several photos of one score become one sheet, a page each. A digital PDF gives the most accurate labels.",
+    qualityNote:
+      "<b>Upload a clear sheet.</b> A blurry, dark, low-resolution, cropped or crooked photo or scan may not be " +
+      "read at all, or may come back with wrong or missing labels. Lay the page flat and photograph it straight on, in good light.",
+    checkUnreadableAll:
+      "<b>We couldn't find any staff lines in this.</b> A blurry, dark, tilted or cut-off picture - or one that " +
+      "isn't sheet music - usually can't be read. A sharper photo taken straight on, or a digital PDF, will work better.",
+    checkUnreadablePages: {
+      one: "<b>We couldn't find staff lines on page {pages}.</b> That page will probably come back without labels. " +
+        "A sharper photo of it, taken straight on, will work better.",
+      other: "<b>We couldn't find staff lines on pages {pages}.</b> Those pages will probably come back without labels. " +
+        "A sharper photo of them, taken straight on, will work better.",
+    } satisfies Plural,
+    uploadAnyway: "Upload anyway",
     addMorePages: "Click or drop to add more pages, then put them in order below.",
     overLimit: "{size} MB · over the {limit} MB limit",
     ready: "{size} KB · ready to annotate",

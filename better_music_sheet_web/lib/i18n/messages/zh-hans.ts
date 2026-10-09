@@ -133,6 +133,13 @@ export const zhHans: Messages = {
     photosOneSheet: "{count} 张照片 · 一份乐谱",
     formats: "PDF、JPG 或 PNG · 最大 {mb} MB",
     photosHint: "同一首曲子的多张照片会合成一份乐谱，每张一页。电子版 PDF 的标注最准确。",
+    qualityNote: "<b>请上传清晰的乐谱。</b>模糊、昏暗、分辨率低、拍不全或歪斜的照片和扫描件可能无法识别，或标注出错、缺漏。拍照时请把乐谱放平，正对着拍，光线要充足。",
+    checkUnreadableAll: "<b>没有在这份文件里找到五线谱。</b>模糊、昏暗、歪斜或拍不全的图片，或者根本不是乐谱，通常都无法识别。换一张清晰、正对着拍的照片，或者用电子版 PDF，效果会更好。",
+    checkUnreadablePages: {
+      one: "<b>第 {pages} 页没有找到五线谱。</b>这样的页面很可能没有标注，重新拍清楚、正对着拍，效果会更好。",
+      other: "<b>第 {pages} 页没有找到五线谱。</b>这样的页面很可能没有标注，重新拍清楚、正对着拍，效果会更好。",
+    },
+    uploadAnyway: "仍然上传",
     addMorePages: "点击或拖入以添加更多页面，然后在下方排好顺序。",
     overLimit: "{size} MB · 超过 {limit} MB 上限",
     ready: "{size} KB · 可以开始标注",
