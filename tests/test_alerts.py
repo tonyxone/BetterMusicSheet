@@ -29,6 +29,16 @@ class TimelineQualityTests(unittest.TestCase):
     def test_informational_warnings_do_not_count(self):
         self.assertEqual(alerts.timeline_quality(timeline(informational=20))["reasons"], [])
 
+    def test_a_carried_warning_is_reported_once_not_per_measure(self):
+        doubt = "The printed time signature could not be read confidently and none was recoverable from the PDF."
+        data = timeline()
+        for measure in data["measures"]:
+            measure["warnings"].append(doubt)
+        quality = alerts.timeline_quality(data)
+        self.assertEqual(quality["problem_measures"], 0)
+        self.assertEqual(quality["reasons"], [])
+        self.assertEqual(quality["sheet_warnings"], [doubt])
+
     def test_a_short_piece_needs_several_problem_measures(self):
         self.assertEqual(alerts.timeline_quality(timeline(problem=4, total=4))["reasons"], [])
 

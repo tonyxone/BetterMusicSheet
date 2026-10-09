@@ -26,6 +26,13 @@ INFORMATIONAL_WARNINGS = (
     "Recovered note attacks omitted",
 )
 
+# Measure warnings inherited from an earlier doubt rather than found on the
+# measure itself. They are repeated on every later bar, so counting them per
+# measure would flag a whole sheet for one misread; they are reported once.
+CARRIED_WARNINGS = (
+    "The printed time signature could not be read confidently",
+)
+
 # A sheet is "rough" when any of these is crossed. Overridable per stack
 # without a release; the defaults were chosen against the local test pieces.
 PROBLEM_MEASURE_RATIO = float(os.environ.get("ALERT_PROBLEM_MEASURE_RATIO", "0.3"))
@@ -62,13 +69,15 @@ def timeline_quality(timeline):
     timeline = timeline or {}
     measures = timeline.get("measures") or []
     stats = timeline.get("stats") or {}
-    counts = {}
+    counts, carried = {}, {}
     problem_measures = 0
     for measure in measures:
         problems = [w for w in measure.get("warnings") or [] if not w.startswith(INFORMATIONAL_WARNINGS)]
-        problem_measures += bool(problems)
+        local = [w for w in problems if not w.startswith(CARRIED_WARNINGS)]
+        problem_measures += bool(local)
         for warning in problems:
-            counts[warning] = counts.get(warning, 0) + 1
+            target = counts if warning in local else carried
+            target[warning] = target.get(warning, 0) + 1
     matched, unmatched = stats.get("notes_matched", 0), stats.get("notes_unmatched", 0)
     notes = matched + unmatched
     quality = {
@@ -78,7 +87,8 @@ def timeline_quality(timeline):
         "notes_unmatched": unmatched,
         "pages_without_regions": stats.get("pages_without_regions", 0),
         "top_warnings": sorted(counts.items(), key=lambda item: -item[1])[:5],
-        "sheet_warnings": [w for w in timeline.get("warnings") or [] if not w.startswith(INFORMATIONAL_WARNINGS)],
+        "sheet_warnings": [w for w in timeline.get("warnings") or [] if not w.startswith(INFORMATIONAL_WARNINGS)]
+                          + [w for w in carried if w not in (timeline.get("warnings") or [])],
     }
     reasons = ["No playback timeline was produced, so practice mode is unavailable"] if missing else []
     if measures and problem_measures >= PROBLEM_MEASURE_MIN and problem_measures / len(measures) >= PROBLEM_MEASURE_RATIO:

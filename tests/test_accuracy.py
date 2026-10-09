@@ -182,6 +182,29 @@ class AccuracyTests(unittest.TestCase):
         self.assertTrue(weak['low_confidence'])
         self.assertFalse(strong['low_confidence'])
 
+    @staticmethod
+    def bars(contents, nominal=4.0):
+        return [{'content_length_beats': c, 'nominal_length_beats': nominal, 'implicit': False, 'label': str(i + 1)}
+                for i, c in enumerate(contents)]
+
+    def test_bars_that_fit_the_read_meter_confirm_a_low_grade_digit(self):
+        """67 of 73 bars in 4/4, as on the sheet that raised 73 false warnings."""
+        self.assertTrue(timeline.meter_confirmed_by_bars(self.bars([4.0] * 67 + [3.0, 5.0] * 3)))
+
+    def test_music_in_another_meter_does_not_confirm_a_misread(self):
+        """3/4 music read as 4/4 leaves nearly every bar short."""
+        self.assertFalse(timeline.meter_confirmed_by_bars(self.bars([3.0] * 20)))
+        self.assertFalse(timeline.meter_confirmed_by_bars(self.bars([3.0] * 12 + [4.0] * 8)))
+
+    def test_too_few_bars_cannot_confirm_a_meter(self):
+        self.assertFalse(timeline.meter_confirmed_by_bars(self.bars([4.0] * 3)))
+
+    def test_pickups_and_irregular_bars_are_ignored(self):
+        bars = self.bars([4.0] * 6)
+        bars[0].update(implicit=True, content_length_beats=1.0)
+        bars[1].update(label='X1', content_length_beats=2.0)
+        self.assertTrue(timeline.meter_confirmed_by_bars(bars))
+
     def test_detected_heads_never_placed_in_a_voice_are_flagged(self):
         """The failure a head count cannot see: every notehead found, none playable."""
         heads = [[[(6, i / 2, 1 + i % 2, None) for i in range(60)]]]
