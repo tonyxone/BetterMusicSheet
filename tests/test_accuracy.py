@@ -367,7 +367,7 @@ class AccuracyTests(unittest.TestCase):
         self.assertEqual(overrides[1]['omr'], str(retry[1]))
         # Isolation alone recovered the page, so the tuplet pass never runs.
         self.assertEqual(audiveris.call_count, 1)
-        self.assertEqual(audiveris.call_args.kwargs, {'sheets': [1]})
+        self.assertEqual(audiveris.call_args.kwargs, {'sheets': [1], 'constants': run.NO_MOVEMENTS})
 
     def tail_fixture(self):
         body = ATTR.replace('<beats>4</beats>', '<beats>7</beats>').replace('<beat-type>4', '<beat-type>8')
