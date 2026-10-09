@@ -137,6 +137,23 @@ class NotMusic(ValueError):
     processor.py hands NOT_MUSIC_MESSAGE to the reader instead of retrying."""
 
 
+class Unreadable(ValueError):
+    """Audiveris crashed on this upload at every resolution tried. Its crash is
+    deterministic, so retrying the same job cannot help: processor.py reports
+    this to the reader as a final answer (the operator is still alerted)."""
+
+
+UNREADABLE_MESSAGE = (
+    "We couldn't read the music on this sheet. We've been notified and will look "
+    "into it. A flat, evenly lit, straight-on photo or a PDF often reads better."
+)
+# Resolutions to read an upload at when the default one makes Audiveris crash,
+# which it does deterministically on some pages (a NullPointerException in its
+# STEMS step on a phone photo). A different resolution changes the staff scale
+# and page layout it builds, which is usually enough to avoid the bug.
+CRASH_FALLBACK_DPIS = (220, 400)
+
+
 # Audiveris caps a time signature's width below what a two-digit numeral
 # takes. Nuvole Bianche's 12/8 (Sibelius, the 1 and 2 touching) was skipped,
 # so every bar after it was expected in 4/4 and lost the chords past that
@@ -302,6 +319,7 @@ def recognize_book(pdf_path, work_dir, dpi=None, log=print):
     were read at."""
     started = time.monotonic()
     constants, runs, crashes, sheets = None, 0, 0, None
+    fallbacks = list(CRASH_FALLBACK_DPIS)
     while True:
         runs += 1
         try:
@@ -337,6 +355,13 @@ def recognize_book(pdf_path, work_dir, dpi=None, log=print):
                     sheets = kept
                 elif failed and not kept and all(failed.values()):
                     raise NotMusic(NOT_MUSIC_MESSAGE)
+                elif _a_sheet_crashed(work_dir, stem) and fallbacks and within_budget:
+                    # Reruns at this resolution only repeat a deterministic
+                    # crash; another resolution changes what Audiveris builds.
+                    dpi = fallbacks.pop(0)
+                    log(f"[1/3] Audiveris keeps crashing; reading the sheet again at {dpi} DPI ...")
+                elif _a_sheet_crashed(work_dir, stem) and crashes:
+                    raise Unreadable(UNREADABLE_MESSAGE)
                 else:
                     raise
         _clear_audiveris_output(work_dir, pdf_path.stem)

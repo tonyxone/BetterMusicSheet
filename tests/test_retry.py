@@ -212,7 +212,7 @@ class CrashRerunTests(unittest.TestCase):
         with patch.object(run, "run_audiveris", side_effect=self.audiveris(*outcomes)) as calls,                 patch.object(run, "number_pages") as self.numbered:
             try:
                 return run.recognize_book(self.pdf, self.work, log=log.append), calls.call_count, log
-            except (subprocess.CalledProcessError, run.SplitIntoMovements):
+            except (subprocess.CalledProcessError, run.SplitIntoMovements, run.Unreadable):
                 return None, calls.call_count, log
 
     def test_a_page_crash_is_read_again_at_once(self):
@@ -231,9 +231,17 @@ class CrashRerunTests(unittest.TestCase):
 
     def test_a_crash_on_every_page_is_still_a_crash(self):
         everywhere = "\n".join(STUB_CRASH.replace("input#2", f"input#{page}") for page in (1, 2, 3))
-        result, calls, _ = self.recognize(everywhere, everywhere, everywhere)
+        result, calls, _ = self.recognize(*[everywhere] * (1 + run.CRASH_RERUNS + len(run.CRASH_FALLBACK_DPIS)))
         self.assertIsNone(result)
-        self.assertEqual(calls, 1 + run.CRASH_RERUNS)
+        self.assertEqual(calls, 1 + run.CRASH_RERUNS + len(run.CRASH_FALLBACK_DPIS))
+        self.assertEqual([dpi for dpi, _ in self.runs[-2:]], list(run.CRASH_FALLBACK_DPIS))
+
+    def test_a_crash_that_survives_the_reruns_is_read_at_another_resolution(self):
+        everywhere = "\n".join(STUB_CRASH.replace("input#2", f"input#{page}") for page in (1, 2, 3))
+        result, calls, log = self.recognize(*[everywhere] * (1 + run.CRASH_RERUNS), "ok")
+        self.assertEqual(result, (self.work / "input.mxl", self.work / "input.omr", run.CRASH_FALLBACK_DPIS[0]))
+        self.assertEqual(self.runs[-1][0], run.CRASH_FALLBACK_DPIS[0])
+        self.assertIn(f"at {run.CRASH_FALLBACK_DPIS[0]} DPI", log[-1])
 
     def test_any_other_failure_is_not_rerun(self):
         result, calls, _ = self.recognize("java.lang.OutOfMemoryError", "ok")
@@ -294,3 +302,71 @@ class CrashRerunTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AudiverisCrashTests(unittest.TestCase):
+    """Audiveris sometimes crashes deterministically (a NullPointerException in
+    its STEMS step on a phone photo). Read again at other resolutions, and if
+    all crash, fail at once instead of retrying the identical job."""
+
+    def crash(self, directory):
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "input-1.log").write_text("WARN Book 2044 | Error processing stub java.lang.RuntimeException")
+        raise subprocess.CalledProcessError(1, "java")
+
+    def annotate(self, runner, directory):
+        import run
+        pdf = directory / "input.pdf"
+        pdf.write_bytes(b"")
+        with patch.object(run, "run_audiveris", side_effect=runner), \
+                patch.object(run.page_size, "shrink_oversized", return_value=(pdf, {})), \
+                patch.object(run, "count_pages", return_value=1), \
+                patch.object(run, "has_any_staff", side_effect=RuntimeError("past recognition")):
+            return run.annotate_pdf(pdf, directory / "out.pdf", directory / "work", log=lambda m: None)
+
+    def test_a_crash_is_read_again_at_another_resolution(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+
+            def runner(pdf, out_dir, dpi=None, **kwargs):
+                calls.append(dpi)
+                if dpi is None:
+                    self.crash(out_dir)
+                return out_dir / "a.mxl", out_dir / "a.omr"
+
+            with self.assertRaisesRegex(RuntimeError, "past recognition"):
+                self.annotate(runner, directory)
+        self.assertEqual(calls, [None] * (1 + run.CRASH_RERUNS) + [220])
+
+    def test_every_resolution_crashing_is_a_final_answer(self):
+        import run
+        calls = []
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+
+            def runner(pdf, out_dir, dpi=None, **kwargs):
+                calls.append(dpi)
+                self.crash(out_dir)
+
+            with self.assertRaises(run.Unreadable):
+                self.annotate(runner, directory)
+        self.assertEqual(calls, [None] * (1 + run.CRASH_RERUNS) + list(run.CRASH_FALLBACK_DPIS))
+
+    def test_an_unrelated_failure_is_still_retried_as_a_crash(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            def runner(pdf, out_dir, dpi=None, **kwargs):
+                raise subprocess.CalledProcessError(1, "java")
+
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.annotate(runner, Path(temporary))
+
+    def test_unreadable_is_reported_to_the_reader(self):
+        import run
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory / "options.json").write_text("{}")
+            with patch.object(processor, "generate", side_effect=run.Unreadable(run.UNREADABLE_MESSAGE)):
+                self.assertEqual(processor.main(directory), 2)
+            result = json.loads((directory / "result.json").read_text())
+        self.assertEqual(result, {"error": run.UNREADABLE_MESSAGE, "permanent": True})

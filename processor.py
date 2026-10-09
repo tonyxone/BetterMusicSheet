@@ -166,12 +166,12 @@ def redraw(pdf, directory, options, log, stats):
 def main(directory):
     """Run one job in `directory`; the exit status for worker.py. Anything
     other than a final answer below propagates, and is retried as a crash."""
-    from run import NotMusic
+    from run import NotMusic, Unreadable
     try:
         result = generate(directory / "source", directory, json.loads((directory / "options.json").read_text()))
         (directory / "result.json").write_text(json.dumps(result))
         return 0
-    except (InvalidSheet, NotMusic) as exc:
+    except (InvalidSheet, NotMusic, Unreadable) as exc:
         # A final answer the reader can act on - not a crash to retry. Without
         # NotMusic here, "no music notation was detected" never reached them:
         # the worker saw a crash, retried it three times, and showed its own
