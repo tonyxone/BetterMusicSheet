@@ -134,6 +134,23 @@ class NotMusic(ValueError):
     processor.py hands NOT_MUSIC_MESSAGE to the reader instead of retrying."""
 
 
+class Unreadable(ValueError):
+    """Audiveris crashed on this upload at every resolution tried. Its crash is
+    deterministic, so retrying the same job cannot help: processor.py reports
+    this to the reader as a final answer (the operator is still alerted)."""
+
+
+UNREADABLE_MESSAGE = (
+    "We couldn't read the music on this sheet. We've been notified and will look "
+    "into it. A flat, evenly lit, straight-on photo or a PDF often reads better."
+)
+# Resolutions to read an upload at when the default one makes Audiveris crash,
+# which it does deterministically on some pages (a NullPointerException in its
+# STEMS step on a phone photo). A different resolution changes the staff scale
+# and page layout it builds, which is usually enough to avoid the bug.
+CRASH_FALLBACK_DPIS = (220, 400)
+
+
 def run_audiveris(pdf_path, out_dir, dpi=None, sheets=None, switches=None, binarize=False):
     """Recognize ``pdf_path`` into ``out_dir``; returns the .mxl and .omr.
 
@@ -182,6 +199,19 @@ def run_audiveris(pdf_path, out_dir, dpi=None, sheets=None, switches=None, binar
     if not mxl.exists() or not omr.exists():
         raise RuntimeError(f"Audiveris did not produce expected output ({mxl}, {omr})")
     return mxl, omr
+
+
+def _stub_crashed(work_dir, stem):
+    """Whether Audiveris's log for this run shows it crashed inside a step
+    ("Error processing stub") - a bug in the engine, not a verdict on the page,
+    and one that repeats on every retry of the same input."""
+    logs = sorted(work_dir.glob(f"{stem}-*.log"))
+    if not logs:
+        return False
+    try:
+        return "Error processing stub" in logs[-1].read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
 
 
 def _no_system_found(work_dir, stem):
@@ -871,10 +901,23 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
     log(f"[1/3] Running Audiveris OMR on {pdf_path.name} ...")
     try:
         mxl, omr = run_audiveris(pdf_path, work_dir, dpi=dpi)
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, RuntimeError):
         if _no_system_found(work_dir, pdf_path.stem):
             raise NotMusic(NOT_MUSIC_MESSAGE)
-        raise
+        if not _stub_crashed(work_dir, pdf_path.stem):
+            raise
+        for fallback in CRASH_FALLBACK_DPIS:
+            log(f"[1/3] Audiveris crashed; reading again at {fallback} DPI ...")
+            retry_dir = work_dir / f"_crash_{fallback}"
+            try:
+                mxl, omr = run_audiveris(pdf_path, retry_dir, dpi=fallback)
+            except (subprocess.CalledProcessError, RuntimeError):
+                continue
+            # Later passes build on this recognition, at the resolution it used.
+            work_dir, dpi = retry_dir, fallback
+            break
+        else:
+            raise Unreadable(UNREADABLE_MESSAGE)
     num_pages = count_pages(pdf_path)
 
     if not has_any_staff(omr, num_pages):

@@ -5,6 +5,7 @@ after that failed. A failed sheet keeps its upload and can be read again
 (in-memory) mode, like test_delete_sheet.py.
 """
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -142,3 +143,71 @@ class NotMusicTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AudiverisCrashTests(unittest.TestCase):
+    """Audiveris sometimes crashes deterministically (a NullPointerException in
+    its STEMS step on a phone photo). Read again at other resolutions, and if
+    all crash, fail at once instead of retrying the identical job."""
+
+    def crash(self, directory):
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "input-1.log").write_text("WARN Book 2044 | Error processing stub java.lang.RuntimeException")
+        raise subprocess.CalledProcessError(1, "java")
+
+    def annotate(self, runner, directory):
+        import run
+        pdf = directory / "input.pdf"
+        pdf.write_bytes(b"")
+        with patch.object(run, "run_audiveris", side_effect=runner), \
+                patch.object(run.page_size, "shrink_oversized", return_value=(pdf, {})), \
+                patch.object(run, "count_pages", return_value=1), \
+                patch.object(run, "has_any_staff", side_effect=RuntimeError("past recognition")):
+            return run.annotate_pdf(pdf, directory / "out.pdf", directory / "work", log=lambda m: None)
+
+    def test_a_crash_is_read_again_at_another_resolution(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+
+            def runner(pdf, out_dir, dpi=None, **kwargs):
+                calls.append(dpi)
+                if dpi is None:
+                    self.crash(out_dir)
+                return out_dir / "a.mxl", out_dir / "a.omr"
+
+            with self.assertRaisesRegex(RuntimeError, "past recognition"):
+                self.annotate(runner, directory)
+        self.assertEqual(calls, [None, 220])
+
+    def test_every_resolution_crashing_is_a_final_answer(self):
+        import run
+        calls = []
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+
+            def runner(pdf, out_dir, dpi=None, **kwargs):
+                calls.append(dpi)
+                self.crash(out_dir)
+
+            with self.assertRaises(run.Unreadable):
+                self.annotate(runner, directory)
+        self.assertEqual(calls, [None, *run.CRASH_FALLBACK_DPIS])
+
+    def test_an_unrelated_failure_is_still_retried_as_a_crash(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            def runner(pdf, out_dir, dpi=None, **kwargs):
+                raise subprocess.CalledProcessError(1, "java")
+
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.annotate(runner, Path(temporary))
+
+    def test_unreadable_is_reported_to_the_reader(self):
+        import run
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory / "options.json").write_text("{}")
+            with patch.object(processor, "generate", side_effect=run.Unreadable(run.UNREADABLE_MESSAGE)):
+                self.assertEqual(processor.main(directory), 2)
+            result = json.loads((directory / "result.json").read_text())
+        self.assertEqual(result, {"error": run.UNREADABLE_MESSAGE, "permanent": True})
