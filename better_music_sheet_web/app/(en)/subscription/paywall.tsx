@@ -133,9 +133,9 @@ export function Paywall({ previewOnly = false }: { previewOnly?: boolean } = {})
     if (subscribed && !previewOnly) router.replace(path("/subscription"));
   }, [subscribed, previewOnly, router, path]);
   const searchParams = useSearchParams();
-  // Nothing is pre-selected: the visitor picks a billing period themselves.
-  // A link that names one (?plan=yearly) still arrives with it chosen.
-  const [chosen, setPlan] = useState<"monthly" | "yearly" | null>(planFromQuery(searchParams.get("plan")));
+  // Monthly is chosen to start with; a link that names a plan (?plan=yearly)
+  // arrives with that one chosen instead.
+  const [chosen, setPlan] = useState<"monthly" | "yearly">(planFromQuery(searchParams.get("plan")) ?? "monthly");
   const plan = previewOnly ? null : chosen;
   // In a preview the cards are only to read: no radio, no selection.
   const choice = (value: "monthly" | "yearly") => previewOnly ? {} : {

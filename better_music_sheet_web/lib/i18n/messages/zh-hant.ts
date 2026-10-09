@@ -134,6 +134,13 @@ export const zhHant: Messages = {
     photosOneSheet: "{count} 張照片 · 一份樂譜",
     formats: "PDF、JPG 或 PNG · 最大 {mb} MB",
     photosHint: "同一首曲子的多張照片會合成一份樂譜，每張一頁。電子版 PDF 的標註最準確。",
+    qualityNote: "<b>請上傳清晰的樂譜。</b>模糊、昏暗、解析度低、拍不全或歪斜的照片和掃描檔可能無法辨識，或標註出錯、缺漏。拍照時請把樂譜放平，正對著拍，光線要充足。",
+    checkUnreadableAll: "<b>沒有在這份檔案裡找到五線譜。</b>模糊、昏暗、歪斜或拍不全的圖片，或者根本不是樂譜，通常都無法辨識。換一張清晰、正對著拍的照片，或者用電子版 PDF，效果會更好。",
+    checkUnreadablePages: {
+      one: "<b>第 {pages} 頁沒有找到五線譜。</b>這樣的頁面很可能沒有標註，重新拍清楚、正對著拍，效果會更好。",
+      other: "<b>第 {pages} 頁沒有找到五線譜。</b>這樣的頁面很可能沒有標註，重新拍清楚、正對著拍，效果會更好。",
+    },
+    uploadAnyway: "仍然上傳",
     addMorePages: "點選或拖曳以加入更多頁面，然後在下方排好順序。",
     overLimit: "{size} MB · 超過 {limit} MB 上限",
     ready: "{size} KB · 可以開始標註",

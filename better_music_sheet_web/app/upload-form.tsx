@@ -10,9 +10,10 @@ import { clientApiFetch } from "@/lib/client-api";
 import { refreshSubscription } from "@/lib/subscription";
 import { resolveUploadAttempt } from "@/lib/upload-gate";
 import { addFiles, combinePhotos, isPhoto, moveFile, removeFile } from "@/lib/photo-pages";
+import { checkUpload, type UploadCheck } from "@/lib/staff-check";
 import { PremiumWindow } from "./(en)/subscription/premium-window";
 import { useI18n } from "@/lib/i18n/client";
-import { fmt, rich } from "@/lib/i18n/format";
+import { fmt, plural, rich } from "@/lib/i18n/format";
 import { translateKnown } from "@/lib/i18n/known-text";
 import type { Messages } from "@/lib/i18n/messages/en";
 
@@ -34,7 +35,7 @@ const LABEL_COLORS: { value: string; name: keyof Messages["upload"]["colours"] }
 export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
   const router = useRouter();
   const { user, openSignIn } = useAuth();
-  const { m, path } = useI18n();
+  const { m, path, tag, locale } = useI18n();
   const t = m.upload;
   // One PDF, or one or more photos of the same score in page order - see
   // lib/photo-pages.ts. Several photos are put together into one sheet.
@@ -53,6 +54,23 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
   const [error, setError] = useState<string | null>(null);
   const [atFreeLimit, setAtFreeLimit] = useState(false);
   const [plansOpen, setPlansOpen] = useState(false);
+  // Whether the chosen pages show staves recognition can read (lib/staff-
+  // check.ts), so a photo that will fail is caught now rather than minutes
+  // into processing. Kept with the files it was made for, so a result for
+  // an earlier choice is never shown against a newer one.
+  const [checked, setChecked] = useState<{ files: File[]; result: UploadCheck } | null>(null);
+  const check = checked?.files === files ? checked.result : null;
+  const unreadableAll = !!check?.unreadable.length && check.unreadable.length === check.checked;
+
+  useEffect(() => {
+    if (!files.length) return;
+    let cancelled = false;
+    checkUpload(files, () => cancelled)
+      .then((result) => { if (result && !cancelled) setChecked({ files, result }); })
+      // A file the check can't open is left to the upload to judge.
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [files]);
 
   // Uploading needs a signed-in account. Premium uploads freely; the free
   // plan keeps one sheet at a time (lib/upload-gate.ts). Both are checked
@@ -170,6 +188,21 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
             </div>
           )}
         </label>
+
+        {check && check.unreadable.length > 0 && (
+          <p className="upload-check" role="alert">
+            {unreadableAll
+              ? rich(t.checkUnreadableAll, { b: (text) => <strong>{text}</strong> })
+              // Filled in first: the page list sits inside the bold run.
+              : rich(plural(locale, check.unreadable.length, t.checkUnreadablePages, {
+                pages: new Intl.ListFormat(tag, { type: "conjunction" }).format(check.unreadable.map(String)),
+              }), { b: (text) => <strong>{text}</strong> })}
+          </p>
+        )}
+
+        <p className="upload-quality" role="note">
+          {rich(t.qualityNote, { b: (text) => <strong>{text}</strong> })}
+        </p>
 
         {photos ? (
           <PhotoPages files={files} onChange={setFiles} disabled={submitting} />
@@ -295,7 +328,8 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
             : t.uploadAndAnnotate
           }
         >
-          {preparing ? t.preparingPages : submitting ? t.uploading : !user && files.length ? t.signInToUpload : t.submit}
+          {preparing ? t.preparingPages : submitting ? t.uploading : !user && files.length ? t.signInToUpload
+            : unreadableAll ? t.uploadAnyway : t.submit}
         </button>
       </form>
       {atFreeLimit && (

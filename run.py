@@ -562,7 +562,7 @@ def reread_binarized(pdf_path, work_dir, omr_path, num_pages, dpi=None, log=prin
     log(f"[1b/3] Some staves look unrecognized; re-reading "
         f"the scan should take {describe_duration(estimated_seconds(pdf_path, dpi or DEFAULT_DPI))}:")
     try:
-        mxl, omr = run_audiveris(source, target, dpi=dpi)
+        mxl, omr = run_audiveris(source, target, dpi=dpi, constants=NO_MOVEMENTS)
     except (subprocess.CalledProcessError, RuntimeError):
         print("  the re-read failed; keeping the original recognition")
         return None
@@ -982,9 +982,13 @@ def retry_sparse_pages(pdf_path, work_dir, counts, sparse_pages, num_pages=None,
                 continue
             retry_dir = work_dir / f"_retry_p{page}_{index}"
             try:
-                mxl, omr = run_audiveris(pdf_path, retry_dir,
+                # A re-read is weighed against the book read as one piece, so
+                # it is read as one piece too.
+                mxl, omr = run_audiveris(pdf_path, retry_dir, constants=NO_MOVEMENTS,
                                          **({**variant, "binarize": True} if binarize else variant))
-            except subprocess.CalledProcessError:
+            except (subprocess.CalledProcessError, RuntimeError):
+                # A re-read is only ever a chance at a better page; the one
+                # already read stands if it fails, whatever the reason.
                 print(f"    {label}: Audiveris failed; trying the next approach")
                 continue
             override = {page: {'omr': str(omr), 'mxl': str(mxl)}}
