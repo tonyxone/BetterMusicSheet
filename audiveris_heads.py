@@ -50,12 +50,15 @@ def load_sheet_heads(omr_path, sheet_index):
         if key in seen:
             continue
         seen.add(key)
+        # Audiveris stores pitch as a one-decimal double; a head it could not
+        # snap to a line or space (rare, e.g. far off its staff) comes out
+        # fractional, such as "-11.9". Take the nearest step.
         pitch = head.get('pitch')
         heads.append({
             'staff': int(head.get('staff')),
             'shape': head.get('shape'),
             'id': head.get('id'),
-            'pitch': int(pitch) if pitch is not None else None,
+            'pitch': round(float(pitch)) if pitch is not None else None,
             'confidence': float(head.get('ctx-grade', head.get('grade', '0'))),
             'x': x, 'y': y, 'w': w, 'h': h,
             'cx': x + w / 2.0,
