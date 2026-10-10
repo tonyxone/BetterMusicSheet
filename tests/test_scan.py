@@ -203,6 +203,63 @@ class BinarizeTests(unittest.TestCase):
         self.assertEqual(self.levels(copy, 1), {0, 255})
 
 
+class EnlargeTests(unittest.TestCase):
+    """A picture coarser than the reading DPI is resampled to it (Lanczos)."""
+    scan_pdf = BinarizeTests.scan_pdf  # 200x100 px on a 150x75 pt page: 96 DPI
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def pictures(self, path, page=0):
+        with pymupdf.open(path) as doc:
+            return [(i["width"], i["height"]) for i in doc[page].get_image_info()], doc[page].rect
+
+    def test_a_small_picture_is_resampled_to_the_reading_dpi_on_the_same_page(self):
+        source = self.scan_pdf("sheet.pdf")
+        copy = scan.enlarge_small_pictures(source, self.path / "out", 300)
+        self.assertEqual(copy, self.path / "out" / "sheet.pdf")
+        pictures, rect = self.pictures(copy)
+        self.assertEqual(pictures, [(625, 312)])
+        self.assertEqual(rect, self.pictures(source)[1])
+
+    def test_a_picture_near_the_reading_dpi_is_left_alone(self):
+        source = self.scan_pdf("sheet.pdf")
+        self.assertEqual(scan.enlarge_small_pictures(source, self.path / "out", 100), source)
+
+    def test_a_vector_page_is_left_alone(self):
+        source = self.path / "vector.pdf"
+        with pymupdf.open() as doc:
+            page = doc.new_page(width=300, height=200)
+            for y in range(50, 100, 10):
+                page.draw_line((20, y), (280, y))
+            doc.save(source)
+        self.assertEqual(scan.enlarge_small_pictures(source, self.path / "out", 800), source)
+
+    def test_only_the_pages_being_read_are_enlarged(self):
+        source = self.scan_pdf("two.pdf", pages=2)
+        copy = scan.enlarge_small_pictures(source, self.path / "out", 300, pages=[2])
+        self.assertEqual(self.pictures(copy, 0)[0], [(200, 100)])
+        self.assertEqual(self.pictures(copy, 1)[0], [(625, 312)])
+
+    def test_a_turned_photo_is_measured_long_side_to_long_side(self):
+        # A landscape picture drawn a quarter turn onto a portrait page.
+        pix = pymupdf.Pixmap(pymupdf.csGRAY, 400, 300, bytes([255]) * 400 * 300, False)
+        with pymupdf.open() as doc:
+            page = doc.new_page(width=72, height=96)
+            page.insert_image(page.rect, pixmap=pix, rotate=90)
+            self.assertAlmostEqual(scan.picture_dpi(page), 300)
+
+    def test_reading_at_a_forced_dpi_reads_the_enlarged_copy(self):
+        source = self.scan_pdf("input.pdf")
+        with patch.object(run.subprocess, "run") as audiveris, self.assertRaises(RuntimeError):
+            run.run_audiveris(source, self.path / "work", dpi=300)  # it wrote no output
+        self.assertEqual(audiveris.call_args[0][0][-1], str(self.path / "work" / "enlarged" / "input.pdf"))
+
+
 class RereadTests(unittest.TestCase):
     def test_missing_staves_counts_against_the_fullest_system(self):
         groups = {1: [[1, 2], [3]], 2: [[1], [2]], 3: [[1, 2]]}

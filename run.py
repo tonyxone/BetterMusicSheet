@@ -166,12 +166,16 @@ def run_audiveris(pdf_path, out_dir, dpi=None, sheets=None, switches=None, binar
     """Recognize ``pdf_path`` into ``out_dir``; returns the .mxl and .omr.
 
     ``binarize`` has Audiveris read a black-and-white copy of the scanned pages
-    instead, made at the same DPI it will read them at - see scan.py.
+    instead, made at the same DPI it will read them at - see scan.py. At a
+    forced ``dpi`` a picture coarser than it is enlarged here first
+    (scan.enlarge_small_pictures).
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     source = pdf_path
+    if dpi is not None:
+        source = scan.enlarge_small_pictures(source, out_dir / "enlarged", dpi, sheets)
     if binarize:
-        source = scan.prepare_for_recognition(pdf_path, out_dir / "input", dpi, sheets)
+        source = scan.prepare_for_recognition(source, out_dir / "input", dpi, sheets)
     if sys.platform == "win32":
         cmd = [str(AUDIVERIS_EXE), "-batch", "-export", "-output", str(out_dir)]
     else:
