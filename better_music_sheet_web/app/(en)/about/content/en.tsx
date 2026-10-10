@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { BackButton } from "../../../back-button";
+import { ReleaseNumber } from "../release-number";
 
 export function AboutEn({ path }: { path: (p: string) => string }) {
   return (
@@ -97,6 +98,7 @@ export function AboutEn({ path }: { path: (p: string) => string }) {
         <a href="mailto:bettermusicsheet@gmail.com">bettermusicsheet@gmail.com</a>.
         A sheet that comes out wrong is genuinely useful to see.
       </p>
+      <ReleaseNumber label="Version" />
     </div>
   );
 }

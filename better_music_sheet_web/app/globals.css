@@ -926,6 +926,7 @@ button.history-row { width: 100%; font-family: inherit; cursor: pointer; text-al
   margin: 0 0 20px; padding: 10px 14px; border-radius: 10px; font-size: 0.9rem; line-height: 1.6;
   background: rgba(217, 164, 65, 0.12); color: var(--ink-soft);
 }
+.legal .about-release { margin-top: 40px; font-size: 0.82rem; color: var(--ink-soft); }
 .legal ul { margin: 0 0 12px 1.1rem; list-style: disc; }
 .legal li { margin-bottom: 8px; }
 .legal code {
@@ -1109,6 +1110,17 @@ textarea.sheet-inline-input { font-family: system-ui, -apple-system, "Segoe UI",
 .admin-tile { background: var(--card); border: 1px solid var(--paper-deep); border-radius: 14px; padding: 16px 18px; }
 .admin-tile-label { font-size: 13px; color: var(--ink-soft); }
 .admin-tile-value { font-size: 1.9rem; font-weight: 600; margin: 4px 0 2px; }
+.admin-tile-button { text-align: left; font: inherit; color: inherit; cursor: pointer; }
+.admin-tile-button:hover { border-color: var(--ink-soft); }
+.admin-tile-button.active { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.admin-filter-row th { padding: 6px 8px 10px; vertical-align: top; }
+.admin-col-filter {
+  display: block; width: 100%; min-width: 96px; padding: 5px 8px; border: 1px solid var(--paper-deep); border-radius: 8px;
+  background: var(--card); font: inherit; font-size: 12px; font-weight: 400; color: var(--ink-soft);
+}
+.admin-col-filter + .admin-col-filter { margin-top: 4px; }
+.admin-col-filter.set { border-color: var(--ink); color: var(--ink); }
+.admin-small-text { font-size: 13px; }
 .admin-heading { font-size: 1.2rem; margin: 8px 0 12px; }
 .admin-table-wrap { overflow-x: auto; background: var(--card); border: 1px solid var(--paper-deep); border-radius: 14px; }
 .admin-table { width: 100%; border-collapse: collapse; font-size: 14px; }

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { BackButton } from "../../../back-button";
+import { ReleaseNumber } from "../release-number";
 
 export function AboutKo({ path }: { path: (p: string) => string }) {
   return (
@@ -71,6 +72,7 @@ export function AboutKo({ path }: { path: (p: string) => string }) {
         <a href="mailto:bettermusicsheet@gmail.com">bettermusicsheet@gmail.com</a>
         으로 보내 주세요. 잘못 나온 악보는 저희에게 정말 큰 도움이 됩니다.
       </p>
+      <ReleaseNumber label="버전" />
     </div>
   );
 }

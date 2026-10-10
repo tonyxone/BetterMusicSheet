@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { BackButton } from "../../../back-button";
+import { ReleaseNumber } from "../release-number";
 
 export function AboutJa({ path }: { path: (p: string) => string }) {
   return (
@@ -71,6 +72,7 @@ export function AboutJa({ path }: { path: (p: string) => string }) {
         <a href="mailto:bettermusicsheet@gmail.com">bettermusicsheet@gmail.com</a>{" "}
         までお送りください。間違って読まれた楽譜は、私たちにとって本当に役立ちます。
       </p>
+      <ReleaseNumber label="バージョン" />
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { BackButton } from "../../../back-button";
+import { ReleaseNumber } from "../release-number";
 
 export function AboutZhHant({ path }: { path: (p: string) => string }) {
   return (
@@ -72,6 +73,7 @@ export function AboutZhHant({ path }: { path: (p: string) => string }) {
         <a href="mailto:bettermusicsheet@gmail.com">bettermusicsheet@gmail.com</a>
         。一份辨識出錯的樂譜對我們非常有幫助。
       </p>
+      <ReleaseNumber label="版本" />
     </div>
   );
 }

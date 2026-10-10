@@ -30,6 +30,16 @@ export type AdminUser = {
   last_upload_at: number | null;
 };
 
+/** Where a subscription stands; each one is in exactly one state. */
+export type AdminSubscriptionState = "active" | "trial" | "canceling" | "past_due" | "canceled";
+
+export type AdminSubscriptionRow = AdminSubscription & { user_id: string; state: AdminSubscriptionState };
+
+export type AdminSubscriptions = AdminPage<AdminSubscriptionRow> & {
+  /** Across every subscription, whatever the list is filtered to. */
+  counts: Record<AdminSubscriptionState, number>;
+};
+
 export type AdminUpload = {
   job_id: string;
   user_id: string;
@@ -61,6 +71,12 @@ export type AdminOverview = {
 
 /** One page of a list, and where it sits in the whole. */
 export type AdminPage<T> = { items: T[]; total: number; page: number; pages: number; page_size: number };
+
+/** How the uploads matching every filter but the result one came out:
+ * processed = done + warning + failed. */
+export type AdminUploads = AdminPage<AdminUpload> & {
+  summary: { processed: number; done: number; warning: number; failed: number };
+};
 
 type Failure = { error: string };
 
