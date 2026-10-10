@@ -829,6 +829,7 @@ def job_assets(job_id: str, user_id: str = Depends(get_current_user_id)):
         # Names still being worked out, or they failed: the upload alone,
         # which the reader can already view, mark up and download.
         return JSONResponse({"direct": IS_PRODUCTION, "pdf": None, "timeline": None, "labels": None,
+                             "musicxml": None,
                              "original": storage.presign_artifact(job, "input") if IS_PRODUCTION
                              else f"/api/sheets/{job_id}/original",
                              "original_type": original_type},
@@ -842,11 +843,16 @@ def job_assets(job_id: str, user_id: str = Depends(get_current_user_id)):
     # viewer draws itself so they can be moved and retyped. Null for sheets
     # annotated before it existed; the viewer then reads them out of the PDF.
     has_labels = job.get("storage_version") == 2 and bool(job.get("labels_key"))
+    # "musicxml" is the score as Audiveris read it, for notation software.
+    # Stored a little after the sheet is done (worker.store_recognition), and
+    # absent for sheets read before it was kept: null until then.
+    has_musicxml = job.get("storage_version") == 2 and bool(job.get("musicxml_key"))
     if not IS_PRODUCTION:
         return {"direct": False, "pdf": f"/api/sheets/{job_id}/download",
                 "timeline": f"/api/sheets/{job_id}/timeline",
                 "original": f"/api/sheets/{job_id}/original",
                 "labels": f"/api/sheets/{job_id}/labels" if has_labels else None,
+                "musicxml": f"/api/sheets/{job_id}/musicxml" if has_musicxml else None,
                 "original_type": original_type}
     stem = Path(job["sheet_name"]).stem
     disposition = _content_disposition("attachment", f"{stem} (annotated).pdf", f"{_ascii_stem(stem)} (annotated).pdf")
@@ -855,8 +861,15 @@ def job_assets(job_id: str, user_id: str = Depends(get_current_user_id)):
                          "timeline": storage.presign_artifact(job, "timeline"),
                          "original": storage.presign_artifact(job, "input"),
                          "labels": storage.presign_artifact(job, "labels") if has_labels else None,
+                         "musicxml": storage.presign_artifact(job, "musicxml", _musicxml_disposition(job))
+                         if has_musicxml else None,
                          "original_type": original_type},
                         headers={"Cache-Control": "no-store"})
+
+
+def _musicxml_disposition(job):
+    stem = Path(job["sheet_name"]).stem
+    return _content_disposition("attachment", f"{stem}.mxl", f"{_ascii_stem(stem)}.mxl")
 
 
 def new_artifact_response(job, kind, disposition=None):
@@ -864,8 +877,7 @@ def new_artifact_response(job, kind, disposition=None):
         result = storage.read_artifact(job, kind)
     except FileNotFoundError:
         raise HTTPException(404, "No playback timeline for this sheet.")
-    media_type = (storage.upload_media_type(job.get("sheet_name")) if kind == "input"
-                  else "application/pdf" if kind == "output" else "application/json")
+    media_type = storage.artifact_media_type(job, kind)
     if IS_PRODUCTION:
         return StreamingResponse(result["Body"].iter_chunks(chunk_size=65536),
             media_type=media_type,
@@ -986,6 +998,19 @@ def job_labels(job_id: str, user_id: str = Depends(get_current_user_id)):
     if job.get("storage_version") != 2 or not job.get("labels_key"):
         raise HTTPException(404, "No label data for this sheet.")
     return new_artifact_response(job, "labels")
+
+
+@app.get("/api/sheets/{job_id}/musicxml")
+def job_musicxml(job_id: str, user_id: str = Depends(get_current_user_id)):
+    """The score as Audiveris read it, compressed MusicXML (.mxl), for
+    MuseScore, Sibelius, Finale or Dorico. Local dev only in practice -
+    production hands out a presigned URL from /assets instead."""
+    job = with_sheet_name(_readable_job_or_404(job_id, user_id))
+    if job["status"] != "done":
+        raise HTTPException(409, f"job is '{job['status']}', not done yet")
+    if job.get("storage_version") != 2 or not job.get("musicxml_key"):
+        raise HTTPException(404, "No MusicXML for this sheet.")
+    return new_artifact_response(job, "musicxml", _musicxml_disposition(job))
 
 
 class EditsRequest(BaseModel):

@@ -1139,6 +1139,9 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
         log(f"Rhythm alignment unavailable; using resolved OMR labels: {e}")
     if stats is not None:
         stats["notes_named"] = len(resolved["notes"])
+        # The book as read, kept beside the sheet once it is done (worker.py).
+        # Pages re-read on their own count only in the names, not in these.
+        stats["musicxml"], stats["omr"] = str(mxl), str(omr)
     unnamed = []
     if labels_path is not None:
         try:

@@ -283,6 +283,10 @@ export const ja: Messages = {
       button: "ダウンロード ▾",
       customizedFile: "{stem}（カスタム）.pdf",
       annotatedFile: "{stem}（音名付き）.pdf",
+      musicxml: "MusicXML",
+      musicxmlDetail: "読み取った楽譜。MuseScore・Sibelius・Finaleで開けます（.mxl）",
+      musicxmlMissing: "この楽譜では利用できません",
+      musicxmlFile: "{stem}.mxl",
     },
   },
 

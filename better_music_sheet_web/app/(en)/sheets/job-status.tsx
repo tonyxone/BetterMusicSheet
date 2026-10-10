@@ -365,7 +365,7 @@ function CancelAnnotation({ jobId, sheetName, cancellingRef, inline = false }: {
   );
 }
 
-type DownloadKind = "original" | "annotated" | "customized";
+type DownloadKind = "original" | "annotated" | "customized" | "musicxml";
 
 function saveBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -397,6 +397,22 @@ function DownloadMenu({ jobId, sheetName, originalMissing, customizedRef, varian
   const [error, setError] = useState<DownloadKind | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const stem = (sheetName || jobId).replace(/\.[^.]+$/, "");
+  // The MusicXML is stored a few seconds after the names are done, so ask
+  // again each time the menu opens rather than once with the page. Until an
+  // answer arrives the option stays enabled; a click checks for itself.
+  const [musicxml, setMusicxml] = useState<"ready" | "missing" | "unknown">("unknown");
+
+  useEffect(() => {
+    if (!open || !annotatedReady) return;
+    let cancelled = false;
+    void fetchSheetAssets(jobId)
+      .then((assets) => {
+        // An older backend omits the field: that is not proof of absence.
+        if (!cancelled && assets && "musicxml" in assets) setMusicxml(assets.musicxml ? "ready" : "missing");
+      })
+      .catch(() => { /* Leave it as it was. */ });
+    return () => { cancelled = true; };
+  }, [open, annotatedReady, jobId]);
 
   useEffect(() => {
     if (!open) return;
@@ -425,13 +441,14 @@ function DownloadMenu({ jobId, sheetName, originalMissing, customizedRef, varian
         saveBlob(await build(), fmt(t.customizedFile, { stem }));
         return;
       }
-      const res = await fetchSheetFile(jobId, kind === "original" ? "original" : "pdf");
+      const res = await fetchSheetFile(jobId, kind === "annotated" ? "pdf" : kind);
       // Without this check a failed request still "downloads" - the error
       // body gets saved as a .pdf that won't open, which is how a server-side
       // 500 previously reached the user as a silently broken file.
       if (!res.ok) throw new Error(`download failed (${res.status})`);
       const blob = await res.blob();
-      saveBlob(blob, kind === "original" ? (sheetName || `${stem}.pdf`) : fmt(t.annotatedFile, { stem }));
+      saveBlob(blob, kind === "original" ? (sheetName || `${stem}.pdf`)
+        : kind === "musicxml" ? fmt(t.musicxmlFile, { stem }) : fmt(t.annotatedFile, { stem }));
     } catch (err) {
       console.error(`Downloading the ${kind} sheet failed:`, err);
       setError(kind);
@@ -452,6 +469,10 @@ function DownloadMenu({ jobId, sheetName, originalMissing, customizedRef, varian
     {
       kind: "original", label: t.original, disabled: originalMissing,
       detail: originalMissing ? m.sheet.originalNotStored : t.originalDetail,
+    },
+    {
+      kind: "musicxml", label: t.musicxml, disabled: !annotatedReady || musicxml === "missing",
+      detail: !annotatedReady ? t.annotatedPending : musicxml === "missing" ? t.musicxmlMissing : t.musicxmlDetail,
     },
   ];
 

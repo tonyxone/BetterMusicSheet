@@ -14,15 +14,20 @@ export type SheetAssets = {
   /** The placed note names as JSON (see lib/labels.ts); null for sheets
    * annotated before label export, and absent from older backends. */
   labels?: string | null;
+  /** The score as recognized, compressed MusicXML (.mxl), for notation
+   * software. Stored a little after the sheet is done, so null until then,
+   * and for sheets read before it was kept; absent from older backends. */
+  musicxml?: string | null;
 };
 
-export type SheetFileKind = "pdf" | "timeline" | "original" | "labels";
+export type SheetFileKind = "pdf" | "timeline" | "original" | "labels" | "musicxml";
 
 const LEGACY_PATHS: Record<SheetFileKind, string> = {
   pdf: "download?inline=1",
   timeline: "timeline",
   original: "original",
   labels: "labels",
+  musicxml: "musicxml",
 };
 
 export async function fetchSheetAssets(jobId: string): Promise<SheetAssets | null> {
