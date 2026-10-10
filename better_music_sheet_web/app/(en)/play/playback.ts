@@ -9,6 +9,16 @@ const SCHEDULER_INTERVAL_MS = 25;
 // Shared with the falling-note roll; retain the full opening descent.
 export const LEAD_IN_BEATS = 4;
 
+/** Velocity scale for a hand at a balance between -1 (the left hand alone)
+ * and 1 (the right alone); 0 plays both as written. A velocity, not a gain
+ * node: one sampler sounds both hands, and the quieter hand is played softer,
+ * as a pianist would. smplr's gain is velocity squared, so the square root
+ * makes the hand's level fall in step with the slider, to silence at the end. */
+export function handVelocityScale(balance: number, role: number) {
+  const cut = role === 1 ? Math.max(0, balance) : Math.max(0, -balance);
+  return Math.sqrt(1 - Math.min(1, cut));
+}
+
 export type PlayOptions = { fromBeat?: number; untilBeat?: number };
 export type PlaybackCallbacks = {
   onHighlight: (notes: TimelineNote[]) => void;
@@ -18,7 +28,9 @@ export type PlaybackCallbacks = {
 };
 
 export class Playback {
-  private schedule: { note: AudioNote; start: number; end: number }[] = [];
+  // A key struck by several written voices at once sounds once; `notes`
+  // keeps each, since the hands they belong to can be balanced differently.
+  private schedule: { midi: number; notes: AudioNote[]; start: number; end: number }[] = [];
   private timer: ReturnType<typeof setInterval> | null = null;
   private raf: number | null = null;
   private originTime = 0;
@@ -34,6 +46,7 @@ export class Playback {
   private lastOptions: PlayOptions = {};
   private lastSpeed = 1;
   private baseBpm: number | null = null;
+  private balance = 0;
   private clock: ReturnType<typeof tempoClock>;
 
   constructor(private timeline: Timeline, private synth: SynthEngine,
@@ -74,7 +87,8 @@ export class Playback {
     const scheduled = events
       .filter((n) => n.start_beat < this.windowEnd - 1e-9 && n.start_beat + n.duration_beats > this.windowStart + 1e-9)
       .map((n) => ({
-        note: n,
+        midi: n.midi,
+        notes: [n],
         start: this.clock.secondsAt(Math.max(n.start_beat, this.windowStart)) - this.startSeconds,
         end: this.clock.secondsAt(Math.min(n.start_beat + n.duration_beats, this.windowEnd)) - this.startSeconds,
       }))
@@ -85,13 +99,13 @@ export class Playback {
     this.schedule = [];
     const lastByPitch = new Map<number, typeof scheduled[number]>();
     for (const s of scheduled) {
-      const previous = lastByPitch.get(s.note.midi);
+      const previous = lastByPitch.get(s.midi);
       if (previous && Math.abs(previous.start - s.start) < 1e-8) {
         previous.end = Math.max(previous.end, s.end);
-        previous.note = { ...previous.note, velocity: Math.max(previous.note.velocity ?? 80, s.note.velocity ?? 80) };
+        previous.notes.push(...s.notes);
       } else {
         this.schedule.push(s);
-        lastByPitch.set(s.note.midi, s);
+        lastByPitch.set(s.midi, s);
       }
     }
     const lead = this.windowStart <= 1e-9
@@ -114,6 +128,12 @@ export class Playback {
     const beat = this.currentBeat;
     this.baseBpm = bpm;
     if (this.playing) this.play(this.lastSpeed, { ...this.lastOptions, fromBeat: beat });
+  }
+
+  /** Takes effect from the next notes scheduled; ones already sounding keep
+   * their level rather than being cut off mid-drag. */
+  setBalance(balance: number) {
+    this.balance = Math.max(-1, Math.min(1, balance));
   }
 
   pause() {
@@ -152,7 +172,8 @@ export class Playback {
       // resume a still-active event at the current audio time.
       const at = Math.max(this.ctx.currentTime, this.originTime + s.start);
       const until = this.originTime + s.end;
-      if (until > at) this.synth.noteOn(s.note.midi, at, until, s.note.velocity);
+      const velocity = Math.max(...s.notes.map((n) => (n.velocity ?? 80) * handVelocityScale(this.balance, n.role)));
+      if (until > at && velocity > 0) this.synth.noteOn(s.midi, at, until, velocity);
     }
     // The window includes trailing rests and every sustained voice.
     if (elapsed >= this.windowSeconds) {

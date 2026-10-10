@@ -30,10 +30,12 @@ import { EMPTY_EDITS, fetchEdits, type SheetEdits } from "@/lib/edits";
 import { loadLabels, type LabelSet } from "@/lib/labels";
 import { useNotation } from "@/lib/notation";
 import { usePreference } from "@/lib/preferences";
+import { useHandBalance } from "@/lib/hand-balance";
 import { AnnotationLayer } from "../../sheet-viewer/annotation-layer";
 import { tempoClock, tempoControl } from "./tempo";
 import { GRACE_SECONDS, SynthEngine, INSTRUMENTS, isInstrumentId, type InstrumentId } from "./synth";
-import { Playback } from "./playback";
+import { Playback, handVelocityScale } from "./playback";
+import { CSS_LEFT, CSS_RIGHT } from "./keyboard-layout";
 import { PracticeGate } from "./practice-gate";
 import { PageLoading } from "../../page-loading";
 import { useI18n } from "@/lib/i18n/client";
@@ -409,6 +411,9 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
   const [showKeyNames, setShowKeyNames] = usePreference("show_key_names", false);
   const [showNoteNames, setShowNoteNames] = usePreference("show_note_names", true);
   const [soundOn, setSoundOn] = usePreference("sound_on", true);
+  const [balance, changeBalance] = useHandBalance(jobId);
+  // Read when the player is built, without rebuilding ensurePlayback per drag.
+  const balanceRef = useRef(balance);
   const [savedInstrument, setSavedInstrument] = usePreference("instrument", "grand");
   // Stands in for the chosen instrument while it can't be loaded, without
   // changing the choice: the next sheet tries the reader's own again.
@@ -675,6 +680,7 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
         });
       }
       playbackRef.current.setTempo(baseBpm);
+      playbackRef.current.setBalance(balanceRef.current);
       return playbackRef.current;
     },
     [openSubscribePrompt, soundOn, baseBpm, instrument],
@@ -697,6 +703,11 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
   useEffect(() => {
     synthRef.current?.setMuted(!soundOn);
   }, [soundOn]);
+
+  useEffect(() => {
+    balanceRef.current = balance;
+    playbackRef.current?.setBalance(balance);
+  }, [balance]);
 
   const playWholePiece = useCallback(
     async (fromBeat?: number) => {
@@ -917,10 +928,11 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
         // Capped: a whole note held for its full written length just drones
         // while you're reading the next one.
         const seconds = beats > 0 ? Math.min(1.5, clock.secondsAt(n.start_beat + beats) - clock.secondsAt(n.start_beat)) : GRACE_SECONDS;
-        synth.noteOn(n.midi, at, at + Math.max(.02, seconds), n.velocity);
+        const velocity = (n.velocity ?? 80) * handVelocityScale(balance, n.role);
+        if (velocity > 0) synth.noteOn(n.midi, at, at + Math.max(.02, seconds), velocity);
       }
     }
-  }, [timeline, ensurePlayback, onsetBeats, beat, isLocked, openSubscribePrompt, speed, baseBpm]);
+  }, [timeline, ensurePlayback, onsetBeats, beat, isLocked, openSubscribePrompt, speed, baseBpm, balance]);
 
   const handleStepBack = useCallback(() => step(-1), [step]);
   const handleStepForward = useCallback(() => step(1), [step]);
@@ -1175,6 +1187,27 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
                 where the pressed styling is subtle. */}
             {soundOn ? <SpeakerOnIcon /> : <SpeakerOffIcon />}
           </button>
+
+          <label className="play-speed play-balance" title={t.handBalanceHint}>
+            {t.handBalance}
+            <span aria-hidden="true" style={{ color: CSS_LEFT }}>{t.leftHandShort}</span>
+            <input
+              type="range"
+              min={-1}
+              max={1}
+              step={0.05}
+              value={balance}
+              list="hand-balance-even"
+              aria-valuetext={balance === 0 ? t.handBalanceEven : fmt(t.handBalanceLevels, {
+                left: Math.round((1 - Math.max(0, balance)) * 100),
+                right: Math.round((1 + Math.min(0, balance)) * 100),
+              })}
+              onChange={(e) => changeBalance(Number(e.target.value))}
+              onDoubleClick={() => changeBalance(0)}
+            />
+            <datalist id="hand-balance-even"><option value={0} /></datalist>
+            <span aria-hidden="true" style={{ color: CSS_RIGHT }}>{t.rightHandShort}</span>
+          </label>
 
           <label className="play-speed">
             {t.bpm}
