@@ -40,7 +40,7 @@ export function bytes(value: number | null | undefined) {
   return value < 1024 * 1024 ? `${Math.max(1, Math.round(value / 1024))} KB` : `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
-type Tone = "good" | "bad" | "warn" | "info" | "muted";
+export type Tone = "good" | "bad" | "warn" | "info" | "muted";
 
 export function Badge({ tone, children }: { tone: Tone; children: React.ReactNode }) {
   return <span className={`admin-badge ${tone}`}>{children}</span>;
@@ -49,7 +49,7 @@ export function Badge({ tone, children }: { tone: Tone; children: React.ReactNod
 export function UploadStatus({ upload }: { upload: AdminUpload }) {
   const review = upload.status === "done" && !!upload.review_reasons?.length;
   const [tone, label]: [Tone, string] =
-    review ? ["warn", "Needs review"]
+    review ? ["warn", "Warning"]
     : upload.status === "done" ? ["good", "Done"]
     : upload.status === "failed" ? ["bad", "Failed"]
     : upload.status === "deleted" || upload.status === "deleting" ? ["muted", "Deleted"]
@@ -71,6 +71,7 @@ export function SubscriptionBadge({ subscription, master }: { subscription: Admi
     return <Badge tone="good">{subscription.status === "trialing" ? "Trial" : plan} · {store}</Badge>;
   }
   if (master) return <Badge tone="info">Master</Badge>;
+  if (subscription?.status === "past_due") return <Badge tone="bad">Past due</Badge>;
   if (subscription) return <Badge tone="muted">Ended</Badge>;
   return <Badge tone="muted">Free</Badge>;
 }
@@ -91,9 +92,12 @@ function FileButton({ jobId, which }: { jobId: string; which: "original" | "anno
 }
 
 /** Uploads as a table. `showOwner` adds who uploaded each one - for the lists
- * that span every account. */
-export function UploadsTable({ uploads, showOwner = false }: { uploads: AdminUpload[]; showOwner?: boolean }) {
-  if (!uploads.length) return <p className="admin-sub">No uploads.</p>;
+ * that span every account - and `filterRow` goes under the headings. */
+export function UploadsTable({ uploads, showOwner = false, filterRow }: {
+  uploads: AdminUpload[]; showOwner?: boolean; filterRow?: React.ReactNode;
+}) {
+  // With filters the table stays, so they can be loosened again.
+  if (!uploads.length && !filterRow) return <p className="admin-sub">No uploads.</p>;
   return (
     <div className="admin-table-wrap">
       <table className="admin-table">
@@ -102,6 +106,7 @@ export function UploadsTable({ uploads, showOwner = false }: { uploads: AdminUpl
             <th>Uploaded</th><th>Sheet</th>{showOwner && <th>Owner</th>}<th>Result</th>
             <th className="num">Time</th><th className="num">Size</th><th>Files</th>
           </tr>
+          {filterRow}
         </thead>
         <tbody>
           {uploads.map((upload) => (
@@ -131,6 +136,7 @@ export function UploadsTable({ uploads, showOwner = false }: { uploads: AdminUpl
           ))}
         </tbody>
       </table>
+      {!uploads.length && <p className="admin-sub admin-empty">No uploads match.</p>}
     </div>
   );
 }

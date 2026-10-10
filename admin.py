@@ -165,33 +165,92 @@ def overview():
     }
 
 
+SUBSCRIPTION_STATES = ("active", "trial", "canceling", "past_due", "canceled")
+
+
+def _subscription_state(view):
+    """Where a subscription stands, one state each so the counts add up:
+    paying, on a free trial, still Premium but not renewing, a failed renewal,
+    or no longer Premium at all."""
+    if view["premium"]:
+        if view["cancel_at_period_end"]:
+            return "canceling"
+        return "trial" if view["status"] == "trialing" else "active"
+    return "past_due" if view["status"] == "past_due" else "canceled"
+
+
+def _within(when, days, now):
+    """Whether `when` falls in the last `days` days; no limit when days is 0."""
+    return not days or (when or 0) >= now - days * DAY
+
+
 @router.get("/users")
-def users(q: str = "", page: int = 1, page_size: int = PAGE_SIZE):
-    """Accounts, newest first, one page at a time; `q` narrows them to user
-    ids containing it."""
+def users(q: str = "", joined: int = 0, plan: str = "", subscribed: int = 0, canceled: int = 0,
+          uploads: str = "", page: int = 1, page_size: int = PAGE_SIZE):
+    """Accounts, newest first, one page at a time. Each filter narrows one
+    column: `q` user ids containing it; `joined`, `subscribed` and `canceled`
+    to the last that many days; `plan` to "free", "master" or a subscription
+    state (see _subscription_state); `uploads` to "none", "some" or
+    "failed" (at least one failed)."""
     now = int(time.time())
     subscriptions = {s["user_id"]: s for s in db.all_subscriptions()}
     masters = db.all_master_users()
-    uploads = {}
+    jobs_by_user = {}
     for job in _jobs():
         if job.get("status") not in REMOVED:
-            uploads.setdefault(job["user_id"], []).append(job)
+            jobs_by_user.setdefault(job["user_id"], []).append(job)
     rows = []
     for user in db.all_accounts():
-        if not _matching(user["user_id"], q):
+        if not _matching(user["user_id"], q) or not _within(user.get("created_at"), joined, now):
             continue
-        mine = uploads.get(user["user_id"], [])
-        rows.append({
+        mine = jobs_by_user.get(user["user_id"], [])
+        subscription = _subscription_view(subscriptions.get(user["user_id"]), now)
+        master = user["user_id"] in masters
+        row = {
             "user_id": user["user_id"],
             "created_at": user.get("created_at"),
-            "master": user["user_id"] in masters,
-            "subscription": _subscription_view(subscriptions.get(user["user_id"]), now),
+            "master": master,
+            "subscription": subscription,
             "uploads": len(mine),
             "failed": sum(j.get("status") == "failed" for j in mine),
             "last_upload_at": max((j.get("created_at") or 0 for j in mine), default=None),
-        })
+        }
+        if plan:
+            # Read the way the Plan badge reads: a subscription that grants
+            # Premium wins over a master grant, and a master grant over one
+            # that ended.
+            state = _subscription_state(subscription) if subscription else None
+            shown = (state if subscription and subscription["premium"]
+                     else "master" if master else state or "free")
+            if shown != plan:
+                continue
+        if subscribed and not (subscription and _within(subscription["started_at"], subscribed, now)):
+            continue
+        if canceled and not (subscription and subscription["canceled_at"]
+                             and _within(subscription["canceled_at"], canceled, now)):
+            continue
+        if ((uploads == "none" and row["uploads"]) or (uploads == "some" and not row["uploads"])
+                or (uploads == "failed" and not row["failed"])):
+            continue
+        rows.append(row)
     rows.sort(key=lambda row: row["created_at"] or 0, reverse=True)
     return _page(rows, page, page_size)
+
+
+@router.get("/subscriptions")
+def subscriptions(state: str = "", page: int = 1, page_size: int = PAGE_SIZE):
+    """Every subscription ever started, newest first, with how many are in
+    each state; `state` narrows the list (not the counts) to one of them."""
+    now = int(time.time())
+    rows = []
+    for subscription in db.all_subscriptions():
+        view = _subscription_view(subscription, now)
+        rows.append({"user_id": subscription["user_id"], "state": _subscription_state(view), **view})
+    counts = {name: sum(row["state"] == name for row in rows) for name in SUBSCRIPTION_STATES}
+    if state:
+        rows = [row for row in rows if row["state"] == state]
+    rows.sort(key=lambda row: row["started_at"] or 0, reverse=True)
+    return {**_page(rows, page, page_size), "counts": counts}
 
 
 @router.get("/users/{user_id}/uploads")
@@ -202,23 +261,62 @@ def user_uploads(user_id: str):
     return [_job_view(job, names) for job in db.list_annotation_jobs(user_id)]
 
 
+MB = 1024 * 1024
+SIZES = {"small": (0, MB), "medium": (MB, 10 * MB), "large": (10 * MB, float("inf"))}
+
+
+def _outcome(job):
+    """How a finished upload came out - "done", "warning" (done, but emailed
+    as needing review) or "failed" - or None while it isn't finished."""
+    if job.get("status") == "failed":
+        return "failed"
+    if job.get("status") == "done":
+        return "warning" if job.get("review_reasons") else "done"
+    return None
+
+
 @router.get("/uploads")
-def uploads(status: str = None, q: str = "", page: int = 1, page_size: int = PAGE_SIZE):
-    """Every upload, newest first, one page at a time. `status` narrows it: a
-    job status, or "active" (not finished yet) or "review" (finished, but
-    emailed as needing review); `q` to owners whose user id contains it."""
+def uploads(status: str = None, q: str = "", sheet: str = "", owner: str = "", since: int = 0,
+            min_seconds: int = 0, size: str = "", page: int = 1, page_size: int = PAGE_SIZE):
+    """Every upload, newest first, one page at a time. Each filter narrows one
+    column: `status` a job status, "active" (not finished yet), or an outcome
+    (see _outcome; "review" is the older name for "warning"); `q` owners whose user id
+    contains it; `owner` "guest" or "account"; `sheet` sheet names or job ids
+    containing it; `since` the last that many days; `min_seconds` processing
+    times at least that long; `size` "small" (under 1 MB), "medium" or "large"
+    (over 10 MB).
+
+    `summary` counts how the uploads matching every filter but `status` came
+    out, so the totals stay put while the list is narrowed to one of them."""
+    now = int(time.time())
     accounts = {u["user_id"] for u in db.all_accounts()}
-    jobs = [j for j in _jobs() if _matching(j["user_id"], q)]
-    if status == "active":
-        jobs = [j for j in jobs if j.get("status") in ACTIVE]
-    elif status == "review":
-        jobs = [j for j in jobs if j.get("status") == "done" and j.get("review_reasons")]
-    elif status:
-        jobs = [j for j in jobs if j.get("status") == status]
-    jobs.sort(key=lambda j: j.get("created_at") or 0, reverse=True)
     names = _sheet_names()
-    listed = _page(jobs, page, page_size)
-    return {**listed, "items": [_job_view(job, names, accounts) for job in listed["items"]]}
+    jobs = []
+    for job in _jobs():
+        view = _job_view(job, names, accounts)
+        low, high = SIZES.get(size, (0, float("inf")))
+        if (not _matching(job["user_id"], q)
+                or (owner == "guest" and not view["guest"]) or (owner == "account" and view["guest"])
+                or (sheet and sheet.strip().lower() not in f"{view['sheet_name'] or ''} {job['job_id']}".lower())
+                or not _within(job.get("created_at"), since, now)
+                or (min_seconds and (view["seconds"] or 0) < min_seconds)
+                or (size and not low <= (job.get("size") or 0) < high)):
+            continue
+        jobs.append((job, view))
+    outcomes = [_outcome(job) for job, _ in jobs]
+    summary = {name: outcomes.count(name) for name in ("done", "warning", "failed")}
+    summary["processed"] = sum(summary.values())
+    if status == "active":
+        jobs = [(j, v) for j, v in jobs if j.get("status") in ACTIVE]
+    elif status in ("done", "warning", "review"):
+        # "done" is done without a warning, so it matches its summary count.
+        wanted = "warning" if status == "review" else status
+        jobs = [(j, v) for j, v in jobs if _outcome(j) == wanted]
+    elif status:
+        jobs = [(j, v) for j, v in jobs if j.get("status") == status]
+    jobs.sort(key=lambda pair: pair[0].get("created_at") or 0, reverse=True)
+    listed = _page([view for _, view in jobs], page, page_size)
+    return {**listed, "summary": summary}
 
 
 def _job_or_404(job_id):

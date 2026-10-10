@@ -475,6 +475,10 @@ jobs:
     if: ${{ !cancelled() && !failure() && (needs.deploy-legacy.result == 'success' || needs.deploy-serverless.result == 'success') && needs.preflight.outputs.deploy == 'true' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # History and tags: the About page shows the newest release tag
+          # (see better_music_sheet_web/next.config.ts).
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:

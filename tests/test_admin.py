@@ -23,7 +23,7 @@ GUEST = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 SUBSCRIBER = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 
 ROUTES = ["/api/admin/me", "/api/admin/overview", "/api/admin/users", f"/api/admin/users/{MEMBER}/uploads",
-          "/api/admin/uploads", "/api/admin/uploads?status=failed", "/api/admin/system",
+          "/api/admin/uploads", "/api/admin/uploads?status=failed", "/api/admin/subscriptions", "/api/admin/system",
           "/api/admin/uploads/member-done/files", "/api/admin/uploads/member-done/file/input"]
 
 
@@ -146,6 +146,62 @@ class DashboardDataTests(AdminTestCase):
             body = self.client.get(route, headers=token(ADMIN)).text
             for secret in ("member@example.com", "me@example.com", "Member Name", '"email"', '"display_name"'):
                 self.assertNotIn(secret, body, route)
+
+    def test_users_filtered_by_column(self):
+        def ids(route):
+            return {u["user_id"] for u in self.get(route)["items"]}
+        db.upsert_subscription(SUBSCRIBER, "trialing", "monthly", "stripe", self.now - 100, self.now + 1000, True,
+                               subscription_id="sub_f", started_at=self.now - 2 * 86400, canceled_at=self.now - 60)
+        self.assertEqual(ids("/api/admin/users?joined=7"), {MEMBER})
+        self.assertEqual(ids("/api/admin/users?plan=canceling"), {SUBSCRIBER})
+        self.assertEqual(ids("/api/admin/users?plan=free"), {MEMBER, ADMIN})
+        self.assertEqual(ids("/api/admin/users?subscribed=7"), {SUBSCRIBER})
+        self.assertEqual(ids("/api/admin/users?subscribed=1"), set())
+        self.assertEqual(ids("/api/admin/users?canceled=1"), {SUBSCRIBER})
+        self.assertEqual(ids("/api/admin/users?uploads=failed"), {MEMBER})
+        self.assertEqual(ids("/api/admin/users?uploads=none"), {SUBSCRIBER, ADMIN})
+        self.assertEqual(ids("/api/admin/users?plan=free&uploads=some"), {MEMBER})
+
+    def test_uploads_filtered_by_column_with_outcome_totals(self):
+        def ids(route):
+            return [u["job_id"] for u in self.get(route)["items"]]
+        db._annotation_jobs["member-done"]["size"] = 20 * 1024 * 1024
+        db._annotation_jobs["guest-done"]["updated_at"] += 600
+        everything = self.get("/api/admin/uploads")
+        # member-done, guest-done; member-rough; member-failed. Not the deleted one.
+        self.assertEqual(everything["summary"], {"done": 2, "warning": 1, "failed": 1, "processed": 4})
+        self.assertEqual(ids("/api/admin/uploads?status=done"), ["guest-done", "member-done"])
+        self.assertEqual(ids("/api/admin/uploads?status=warning"), ["member-rough"])
+        self.assertEqual(ids("/api/admin/uploads?owner=guest"), ["guest-done"])
+        self.assertEqual(len(ids("/api/admin/uploads?owner=account")), 4)
+        self.assertEqual(ids("/api/admin/uploads?sheet=ROUGH"), ["member-rough"])
+        recent = ids("/api/admin/uploads?since=1")  # The day-old ones sit right on the edge.
+        self.assertEqual((recent[0], "member-done" in recent), ("member-failed", False))
+        self.assertEqual(ids("/api/admin/uploads?min_seconds=300"), ["guest-done"])
+        self.assertEqual(ids("/api/admin/uploads?size=large"), ["member-done"])
+        # The totals follow every filter but the result one.
+        narrowed = self.get("/api/admin/uploads?owner=account&status=failed")
+        self.assertEqual(narrowed["summary"], {"done": 1, "warning": 1, "failed": 1, "processed": 3})
+        self.assertEqual([u["job_id"] for u in narrowed["items"]], ["member-failed"])
+
+    def test_subscriptions_counted_by_state(self):
+        later, earlier = self.now + 1000, self.now - 1000
+        for user_id, status, cancel, period_end in (
+                ("paying", "active", False, later), ("trying", "trialing", False, later),
+                ("leaving", "active", True, later), ("leaving-trial", "trialing", True, later),
+                ("lapsed", "active", True, earlier), ("gone", "canceled", False, earlier),
+                ("unpaid", "past_due", False, later)):
+            db.upsert_subscription(user_id, status, "monthly", "stripe", earlier, period_end, cancel,
+                                   subscription_id=f"sub_{user_id}", started_at=self.now - len(user_id))
+        listed = self.get("/api/admin/subscriptions")
+        self.assertEqual(listed["counts"], {"active": 1, "trial": 1, "canceling": 2, "past_due": 1, "canceled": 2})
+        states = {row["user_id"]: row["state"] for row in listed["items"]}
+        self.assertEqual((states["leaving-trial"], states["lapsed"]), ("canceling", "canceled"))
+        # Newest first; the filter narrows the list but not the counts.
+        self.assertEqual(listed["items"][0]["user_id"], "gone")
+        canceling = self.get("/api/admin/subscriptions?state=canceling")
+        self.assertEqual({row["user_id"] for row in canceling["items"]}, {"leaving", "leaving-trial"})
+        self.assertEqual(canceling["counts"], listed["counts"])
 
     def test_overview_counts(self):
         overview = self.get("/api/admin/overview")
