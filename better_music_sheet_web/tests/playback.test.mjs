@@ -253,9 +253,31 @@ test('unison voices strike one key once with the longest sustain and strongest d
   const x = player(score(notes)); x.p.play(1);
   assert.equal(x.p.schedule.length, 2);
   assert.equal(x.p.schedule[0].end, 3);
-  assert.equal(x.p.schedule[0].note.velocity, 80);
   assert.equal(x.p.notesAt(.1).length, 2, 'both written voices still highlight');
   assert.equal(x.p.schedule[1].start, .25, 'a later repeated note still attacks');
+  x.ctx.currentTime = x.p.originTime; x.p.tick();
+  assert.equal(x.sounds[0][3], 80);
+});
+
+test('the hand balance softens the other hand, to silence at the end', () => {
+  const struck = (balance) => {
+    const x = player(score([note(0, 1, 72, {velocity: 80}), note(0, 1, 48, {role: 1, velocity: 80})]));
+    x.p.setBalance(balance); x.p.play(1);
+    x.ctx.currentTime = x.p.originTime; x.p.tick();
+    return Object.fromEntries(x.sounds.map(([midi, , , velocity]) => [midi, Math.round(velocity)]));
+  };
+  assert.deepEqual(struck(0), {72: 80, 48: 80});
+  assert.deepEqual(struck(-1), {48: 80}, 'fully left silences the right hand');
+  assert.deepEqual(struck(1), {72: 80}, 'fully right silences the left hand');
+  // smplr's gain is velocity squared: halfway, the right hand at half level.
+  assert.deepEqual(struck(-.5), {72: 57, 48: 80});
+});
+
+test('a key both hands strike sounds at the louder hand after balancing', () => {
+  const x = player(score([note(0, 1, 60, {velocity: 52}), note(0, 1, 60, {role: 1, velocity: 80})]));
+  x.p.setBalance(1); x.p.play(1);
+  x.ctx.currentTime = x.p.originTime; x.p.tick();
+  assert.deepEqual(x.sounds.map((s) => s[3]), [52]);
 });
 
 test('seeking into overlapping same-pitch sustains does not stack attacks', () => {
