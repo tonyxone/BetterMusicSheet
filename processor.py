@@ -124,7 +124,12 @@ def generate(raw, directory, options):
                          notes_path=directory / "notes.json")
     # For the library's "606/634": notes named, out of the notes the sheet
     # prints - the latter only known for a vector PDF (None for a scan).
-    return {"count": count, "notes_named": stats.get("notes_named"), "notes_printed": expected}
+    # "recognition" is where the MusicXML and .omr were left, relative to
+    # ``directory``, so whoever stores them finds them wherever it now is.
+    recognition = {kind: os.path.relpath(stats[kind], directory)
+                   for kind in ("musicxml", "omr") if stats.get(kind)}
+    return {"count": count, "notes_named": stats.get("notes_named"), "notes_printed": expected,
+            "recognition": recognition}
 
 
 def redraw(pdf, directory, options, log, stats):

@@ -281,6 +281,10 @@ export const ko: Messages = {
       button: "다운로드 ▾",
       customizedFile: "{stem} (맞춤).pdf",
       annotatedFile: "{stem} (음이름).pdf",
+      musicxml: "MusicXML",
+      musicxmlDetail: "읽어 낸 악보. MuseScore, Sibelius, Finale에서 열 수 있어요 (.mxl)",
+      musicxmlMissing: "이 악보에서는 사용할 수 없어요",
+      musicxmlFile: "{stem}.mxl",
     },
   },
 

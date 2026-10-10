@@ -273,6 +273,10 @@ export const zhHans: Messages = {
       button: "下载 ▾",
       customizedFile: "{stem}（自定义）.pdf",
       annotatedFile: "{stem}（标注）.pdf",
+      musicxml: "MusicXML",
+      musicxmlDetail: "识别出的乐谱，可在 MuseScore、Sibelius、Finale 中打开（.mxl）",
+      musicxmlMissing: "此乐谱暂无此文件",
+      musicxmlFile: "{stem}.mxl",
     },
   },
 

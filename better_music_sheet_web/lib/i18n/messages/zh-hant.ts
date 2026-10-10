@@ -274,6 +274,10 @@ export const zhHant: Messages = {
       button: "下載 ▾",
       customizedFile: "{stem}（自訂）.pdf",
       annotatedFile: "{stem}（標註）.pdf",
+      musicxml: "MusicXML",
+      musicxmlDetail: "辨識出的樂譜，可在 MuseScore、Sibelius、Finale 中開啟（.mxl）",
+      musicxmlMissing: "此樂譜暫無此檔案",
+      musicxmlFile: "{stem}.mxl",
     },
   },
 

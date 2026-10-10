@@ -107,6 +107,14 @@ def republish(job_id, allow_edits=False, dry_run=False, runner=generate, reason=
         for kind in ("timeline", "labels", "notes"):
             path = directory / f"{kind}.json"
             keys[f"{kind}_key"] = storage.publish(attempt, kind, path) if path.exists() else None
+        # The reading itself, as the worker keeps it (worker.store_recognition);
+        # optional there too, so a failure only logs.
+        for kind, path in (result.get("recognition") or {}).items():
+            if kind in storage.OMR_FILES and (directory / path).is_file():
+                try:
+                    keys[f"{kind}_key"] = storage.publish(attempt, kind, directory / path)
+                except Exception:
+                    traceback.print_exc()
 
     now = int(time.time())
     reasons = [str(r) for r in (quality or {}).get("reasons") or []]

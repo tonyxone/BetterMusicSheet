@@ -190,6 +190,69 @@ def publish_notes(job, path):
         return None
 
 
+def set_aside_recognition(result, directory):
+    """Copies of the reading's MusicXML and .omr (processor.py's
+    "recognition"), moved out of the job's temporary directory before it is
+    deleted, for store_recognition. None when there are none, or on any
+    failure - a sheet never waits on or fails for these."""
+    kept = None
+    try:
+        paths = result.get("recognition") if isinstance(result, dict) else None
+        found = {kind: directory / path for kind, path in (paths or {}).items()
+                 if kind in storage.OMR_FILES and (directory / path).resolve().is_relative_to(directory.resolve())
+                 and (directory / path).is_file()}
+        if not found:
+            return None
+        kept = Path(tempfile.mkdtemp(prefix="recognition-"))
+        for kind, path in found.items():
+            shutil.copyfile(path, kept / kind)
+        return kept
+    except Exception:
+        traceback.print_exc()
+        if kept is not None:
+            shutil.rmtree(kept, ignore_errors=True)
+        return None
+
+
+def store_recognition(job, output_key, kept=None, source_id=None):
+    """Keep the reading beside a finished sheet: the copies set aside, or for
+    a sheet drawn from an earlier one's notes, that sheet's own. Runs on a
+    thread of its own after the sheet is done, so storing them can neither
+    hold up nor fail it. Not a daemon: a worker told to stop still finishes
+    these few uploads before it exits."""
+    if kept is None and source_id is None:
+        return None
+    thread = threading.Thread(target=_store_recognition, args=(job, output_key, kept, source_id),
+                              name=f"recognition-{job['job_id']}")
+    thread.start()
+    return thread
+
+
+def _store_recognition(job, output_key, kept, source_id):
+    try:
+        keys = {}
+        if kept is not None:
+            for kind in storage.OMR_FILES:
+                if (kept / kind).exists():
+                    try:
+                        keys[f"{kind}_key"] = storage.publish(job, kind, kept / kind)
+                    except Exception:
+                        traceback.print_exc()
+        else:
+            source = db.get_annotation_job(source_id)
+            if source:
+                keys = storage.copy_recognition(job, source, job["lease_owner"])
+        # Only onto the finished attempt that read it: a sheet deleted,
+        # retried or republished meanwhile keeps what it has.
+        if keys:
+            job_state.change(job["job_id"], {"status": "done", "output_key": output_key}, **keys)
+    except Exception:
+        traceback.print_exc()
+    finally:
+        if kept is not None:
+            shutil.rmtree(kept, ignore_errors=True)
+
+
 def offer_for_reuse(job_id):
     """Let later uploads of the same file reuse this finished sheet. After
     the sheet is done, so a failure here never touches it."""
@@ -299,6 +362,8 @@ def process_job(job_id, extend=lambda: None, runner=run_processor):
             raise RuntimeError("Worker stopping")
 
     heartbeat_thread = threading.Thread(target=keep_alive, daemon=True)
+    # Copies of the reading, until store_recognition takes them over.
+    recognition = None
     try:
         tick()
         heartbeat_thread.start()
@@ -323,6 +388,7 @@ def process_job(job_id, extend=lambda: None, runner=run_processor):
             # Drawn from an earlier sheet's notes (processed_sheets.py), not read.
             redrawn = bool(isinstance(result, dict) and result.get("redrawn") and job.get("redraw_from"))
             source = {"reused_from": job["redraw_from"]} if redrawn else {}
+            recognition = set_aside_recognition(result, directory)
             check()
             output_key = storage.publish(job, "output", directory / "annotated.pdf")
             timeline = directory / "timeline.json"
@@ -335,6 +401,8 @@ def process_job(job_id, extend=lambda: None, runner=run_processor):
             job_state.finish(job, status="done", labeled_groups=count, output_key=output_key, **notes,
                              timeline_key=timeline_key, labels_key=labels_key, notes_key=notes_key,
                              **source, stage="Complete", error=None)
+        store_recognition(job, output_key, recognition, job["redraw_from"] if redrawn else None)
+        recognition = None
         record_review(job, quality)
         if redrawn:
             # The earlier sheet already reported how its reading went.
@@ -365,6 +433,8 @@ def process_job(job_id, extend=lambda: None, runner=run_processor):
         finished.set()
         if heartbeat_thread.is_alive():
             heartbeat_thread.join(timeout=15)
+        if recognition is not None:
+            shutil.rmtree(recognition, ignore_errors=True)
 
 
 def task_protection(enabled):

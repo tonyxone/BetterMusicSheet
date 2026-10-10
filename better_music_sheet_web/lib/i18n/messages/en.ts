@@ -320,6 +320,10 @@ export const en = {
       button: "Download ▾",
       customizedFile: "{stem} (customized).pdf",
       annotatedFile: "{stem} (annotated).pdf",
+      musicxml: "MusicXML",
+      musicxmlDetail: "The notes as read, for MuseScore, Sibelius or Finale (.mxl)",
+      musicxmlMissing: "Not available for this sheet",
+      musicxmlFile: "{stem}.mxl",
     },
   },
 

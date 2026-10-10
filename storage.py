@@ -18,6 +18,7 @@ sheets they uploaded as a guest stay where they are.
 import hashlib
 import re
 import shutil
+import traceback
 import os
 from pathlib import Path
 
@@ -136,6 +137,20 @@ def content_sha256(job, version):
 
 # What a finished job keeps, and so what reusing one copies.
 REUSABLE = ("output", "timeline", "labels", "notes")
+# Audiveris's own reading, kept beside a finished sheet after it is done
+# (worker.py): the MusicXML readers can download, and the .omr book for
+# looking into a reading later. Never needed to show or play a sheet.
+OMR_FILES = ("musicxml", "omr")
+
+
+def _copy_artifact(job, source, kind, attempt):
+    key = f"jobs/{job['user_id']}/{job['job_id']}/attempts/{attempt}/{kind}"
+    if IS_PRODUCTION:
+        _s3_for(job).copy_object(Bucket=job_bucket(job), Key=key,
+                                 CopySource={"Bucket": job_bucket(source), "Key": source[f"{kind}_key"]})
+    else:
+        shutil.copyfile(_LOCAL_DIR / source[f"{kind}_key"], _local_path(key))
+    return key
 
 
 def copy_reused(job, source):
@@ -143,18 +158,22 @@ def copy_reused(job, source):
     return their keys as ``{kind}_key``. Copies rather than pointing at
     them, so each sheet stays self-contained: deleting either one never
     takes the other's files. Raises if the source's files are gone."""
+    keys = {f"{kind}_key": _copy_artifact(job, source, kind, "reused")
+            for kind in REUSABLE if source.get(f"{kind}_key")}
+    return {**keys, **copy_recognition(job, source, "reused")}
+
+
+def copy_recognition(job, source, attempt):
+    """The earlier sheet's MusicXML and .omr, copied as copy_reused copies
+    its results. Unlike those they are optional: one that can't be copied is
+    left out rather than raising."""
     keys = {}
-    for kind in REUSABLE:
-        source_key = source.get(f"{kind}_key")
-        if not source_key:
-            continue
-        key = f"jobs/{job['user_id']}/{job['job_id']}/attempts/reused/{kind}"
-        if IS_PRODUCTION:
-            _s3_for(job).copy_object(Bucket=job_bucket(job), Key=key,
-                                     CopySource={"Bucket": job_bucket(source), "Key": source_key})
-        else:
-            shutil.copyfile(_LOCAL_DIR / source_key, _local_path(key))
-        keys[f"{kind}_key"] = key
+    for kind in OMR_FILES:
+        if source.get(f"{kind}_key"):
+            try:
+                keys[f"{kind}_key"] = _copy_artifact(job, source, kind, attempt)
+            except Exception:
+                traceback.print_exc()
     return keys
 
 
@@ -174,7 +193,7 @@ def publish(job, kind, path):
     key = f"jobs/{job['user_id']}/{job['job_id']}/attempts/{job['lease_owner']}/{kind}"
     if IS_PRODUCTION:
         _s3_for(job).upload_file(str(path), job_bucket(job), key,
-                        ExtraArgs={"ContentType": "application/pdf" if kind == "output" else "application/json"})
+                                 ExtraArgs={"ContentType": artifact_media_type(job, kind)})
     else:
         shutil.copyfile(path, _local_path(key))
     return key
@@ -206,9 +225,7 @@ def presign_artifact(job, kind, disposition=None):
     # S3 holds, and a PDF labelled octet-stream cannot be rendered in a frame -
     # it downloads instead, named after the blob. Override the type here so old
     # and new objects behave the same.
-    params["ResponseContentType"] = (
-        upload_media_type(job.get("sheet_name")) if kind == "input"
-        else "application/pdf" if kind == "output" else "application/json")
+    params["ResponseContentType"] = artifact_media_type(job, kind)
     if disposition:
         params["ResponseContentDisposition"] = disposition
     return _s3_for(job).generate_presigned_url("get_object", Params=params, ExpiresIn=300)
@@ -306,6 +323,21 @@ def _safe_stem(sheet_name):
 
 _UPLOAD_MEDIA_TYPES = {".pdf": "application/pdf", ".jpg": "image/jpeg",
                        ".jpeg": "image/jpeg", ".png": "image/png"}
+
+
+_ARTIFACT_MEDIA_TYPES = {
+    "output": "application/pdf",
+    # Compressed MusicXML (.mxl), the type MusicXML's own spec registers.
+    "musicxml": "application/vnd.recordare.musicxml",
+    "omr": "application/zip",
+}
+
+
+def artifact_media_type(job, kind):
+    """What one of a sheet's stored files is; everything else is JSON."""
+    if kind == "input":
+        return upload_media_type(job.get("sheet_name"))
+    return _ARTIFACT_MEDIA_TYPES.get(kind, "application/json")
 
 
 def upload_media_type(sheet_name):
