@@ -487,6 +487,13 @@ export const en = {
     hideNoteNames: "Hide names on falling notes",
     mute: "Mute",
     unmute: "Unmute",
+    /** The left/right hand balance slider; L and R sit at its two ends. */
+    handBalance: "Hands",
+    leftHandShort: "L",
+    rightHandShort: "R",
+    handBalanceEven: "Both hands at the same level",
+    handBalanceLevels: "Left hand {left}%, right hand {right}%",
+    handBalanceHint: "Drag toward a hand to make the other one quieter. Double-click to even them out.",
     bpm: "BPM",
     baseTempo: "Base tempo in {unit}s per minute",
     /** For a unit with no name of its own, already plural. */
