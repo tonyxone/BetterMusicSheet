@@ -80,6 +80,10 @@ def text_spans(page):
 def time_signatures(page):
     """Read stacked time digits using baselines, not font bounding boxes.
 
+    Each mark carries the meter as written, ``num``/``den``, besides its
+    length in quarter-beats, ``beats``: 12/8 and 6/4 are the same length and
+    different signatures, and meter.py has to write one back into a book.
+
     Two encodings occur in practice. SMuFL fonts put the digits in the
     private-use range (U+E080-E089), which is unambiguous. MuseScore's own
     font instead maps them to plain ASCII digits, and those cannot be trusted
@@ -110,7 +114,9 @@ def time_signatures(page):
     rows, marks = {}, []
     for code, (x, y), font in chars:
         if code in (0xE08A, 0xE08B):
-            marks.append(dict(x=x, y=y, beats=4.0))
+            # Common time and cut time: 4/4 and 2/2, both four quarter-beats.
+            num, den = (4, 4) if code == 0xE08A else (2, 2)
+            marks.append(dict(x=x, y=y, beats=4.0, num=num, den=den))
             continue
         if 0xE080 <= code <= 0xE089:
             digit, ascii_source = str(code - 0xE080), False
@@ -139,7 +145,7 @@ def time_signatures(page):
             denominators = (2, 4, 8, 16) if upper['ascii'] else (1, 2, 4, 8, 16, 32)
             if 1 <= num <= 32 and den in denominators:
                 marks.append(dict(x=upper['x'], y=(upper['y'] + lower[0]['y']) / 2,
-                                  beats=num * 4 / den))
+                                  beats=num * 4 / den, num=num, den=den))
     return marks
 
 

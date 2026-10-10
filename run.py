@@ -162,6 +162,69 @@ CRASH_FALLBACK_DPIS = (220, 400)
 WIDE_TIME_SIGNATURES = {"org.audiveris.omr.sheet.time.TimeBuilder.maxTimeWidth": 3}
 
 
+def _audiveris_command():
+    """How to start Audiveris here: its own launcher on Windows; on Linux the
+    same app jars run directly with the system `java` (Audiveris.exe is a
+    jpackage launcher bundling a Windows JRE)."""
+    if sys.platform == "win32":
+        return [str(AUDIVERIS_EXE)]
+    return ["java", "-cp", str(AUDIVERIS_APP_DIR / "*"), "Audiveris"]
+
+
+def rerun_book(book_path, out_dir):
+    """Finish a saved book whose later steps were struck out (meter.patch_book):
+    Audiveris redoes only the steps a sheet is missing, then exports. Returns
+    the .mxl and the .omr, both in ``out_dir``."""
+    book_path, out_dir = Path(book_path), Path(out_dir)
+    cmd = _audiveris_command() + ["-batch", "-transcribe", "-export", "-output", str(out_dir)]
+    for name, value in WIDE_TIME_SIGNATURES.items():
+        cmd += ["-constant", f"{name}={value}"]
+    cmd += ["--", str(book_path)]
+    subprocess.run(cmd, check=True)
+    mxl = out_dir / f"{book_path.stem}.mxl"
+    if not mxl.exists() or not book_path.exists():
+        raise RuntimeError(f"Audiveris did not produce expected output ({mxl}, {book_path})")
+    return mxl, book_path
+
+
+def exported_note_count(mxl_path):
+    """How many notes a MusicXML export holds - what a chord Audiveris could
+    not place in its bar's rhythm is missing from."""
+    import musicxml
+    notes, _ = musicxml.load_score_notes(str(mxl_path))
+    return len(notes)
+
+
+def correct_meter(pdf_path, work_dir, mxl, omr, num_pages, log=print):
+    """Where Audiveris misread a printed time signature (see meter.py), rewrite
+    it in the book and have Audiveris redo the rhythm with the right meter.
+    Returns the (.mxl, .omr) to go on with: the corrected pass if it kept at
+    least as many notes, else the original. Best-effort: any failure here
+    leaves the original pass in place."""
+    import meter
+    try:
+        corrections = meter.meter_corrections(pdf_path, omr, num_pages)
+    except Exception as e:
+        log(f"[1/3] Time-signature check skipped: {e}")
+        return mxl, omr
+    if not corrections:
+        return mxl, omr
+    log(f"[1/3] Audiveris misread a time signature ({meter.describe(corrections)}); "
+        "correcting it and re-reading the rhythm ...")
+    try:
+        book, out_dir = meter.prepare_corrected_book(omr, work_dir, corrections)
+        new_mxl, new_omr = rerun_book(book, out_dir)
+        before, after = exported_note_count(mxl), exported_note_count(new_mxl)
+    except Exception as e:
+        log(f"[1/3] Re-reading the rhythm failed; keeping the first reading: {e}")
+        return mxl, omr
+    if after < before:
+        log(f"[1/3] The corrected meter kept fewer notes ({after} vs {before}); keeping the first reading")
+        return mxl, omr
+    log(f"[1/3] Corrected meter: {after} notes in the export, up from {before}")
+    return new_mxl, new_omr
+
+
 def run_audiveris(pdf_path, out_dir, dpi=None, sheets=None, switches=None, binarize=False, constants=None):
     """Recognize ``pdf_path`` into ``out_dir``; returns the .mxl and .omr.
 
@@ -176,13 +239,7 @@ def run_audiveris(pdf_path, out_dir, dpi=None, sheets=None, switches=None, binar
         source = scan.enlarge_small_pictures(source, out_dir / "enlarged", dpi, sheets)
     if binarize:
         source = scan.prepare_for_recognition(source, out_dir / "input", dpi, sheets)
-    if sys.platform == "win32":
-        cmd = [str(AUDIVERIS_EXE), "-batch", "-export", "-output", str(out_dir)]
-    else:
-        # Audiveris.exe is a jpackage launcher bundling a Windows JRE; on Linux
-        # run the same app jars directly with the system `java` instead.
-        cmd = ["java", "-cp", str(AUDIVERIS_APP_DIR / "*"), "Audiveris",
-               "-batch", "-export", "-output", str(out_dir)]
+    cmd = _audiveris_command() + ["-batch", "-export", "-output", str(out_dir)]
     if dpi is not None:
         # Audiveris's default 300dpi PDF rasterization can be too coarse for
         # dense/small engraving (16th-note runs etc.), causing it to miss
@@ -1115,6 +1172,13 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
                 mxl, omr = reread
                 # The page re-reads below compare against, and re-read, this pass.
                 work_dir, binarized = Path(omr).parent, True
+        # A misread meter empties bars book-wide (every later page reuses it),
+        # which the page re-reads below would otherwise spend minutes on, page
+        # by page, when the whole book is set right in seconds.
+        corrected = correct_meter(pdf_path, work_dir, mxl, omr, num_pages, log)
+        if corrected != (mxl, omr):
+            mxl, omr = corrected
+            work_dir = Path(omr).parent  # the pass the page re-reads compare against
         counts, sparse = find_sparse_pages(omr, num_pages, mxl, pdf_path)
         if sparse:
             # The first honest moment to say a score will take a while: which

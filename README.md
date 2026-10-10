@@ -66,6 +66,16 @@ per-note (x, y) positions in the PDF's own pixel space, plus the label text
 output.pdf
 ```
 
+Between stages (1) and (2) the book is checked against the PDF's own text
+layer for a misread time signature (`meter.py`). Audiveris classifies a
+signature's ink as a shape rather than reading its digits, and a two-digit
+numeral can come out as a low-grade single digit (a printed 12/8 read as 7/8);
+it then expects too little music per bar and drops the chords past the limit,
+on every later page too. Where the engraving states a different meter and
+Audiveris's own digit grade is weak, the meter is rewritten in the `.omr` and
+Audiveris redoes just its RHYTHMS step on the book - seconds, against the
+minutes a page-by-page re-read costs.
+
 A fourth, optional stage runs alongside it for the Play page: `timeline.py`
 joins the rhythm read out of `book.mxl` (`musicxml.py`) with the notehead and
 barline geometry already read out of `book.omr`, producing a JSON file of
