@@ -1002,6 +1002,29 @@ textarea.sheet-inline-input { font-family: system-ui, -apple-system, "Segoe UI",
    its left edge instead of centring it off-screen. */
 .sheet-editor .sheet-page { flex: none; width: calc(100% * var(--zoom)); max-width: calc(900px * var(--zoom)); }
 .sheet-editor-head { flex: none; position: relative; z-index: 5; background: var(--card); }
+/* The head is a container so the toolbar folds by the width of the (resizable)
+   box, not the window: too narrow, and everything but Edit sheet / Done moves
+   into the "..." menu. */
+.sheet-editor-head { container-type: inline-size; }
+.bar-statuses { display: contents; }
+.view-more { display: none; position: relative; margin-left: auto; }
+.bar-end .view-more { margin-left: 0; }
+.view-more-panel {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; width: max-content; max-width: calc(100cqi - 20px);
+  display: flex; flex-direction: column; align-items: flex-end; gap: 10px; padding: 10px;
+  background: var(--card); border: 1px solid var(--paper-deep); border-radius: 12px;
+  box-shadow: 0 14px 40px rgba(46, 33, 23, 0.16);
+}
+.view-more-panel .editor-status { text-align: right; }
+@container (max-width: 940px) {
+  .view-inline { display: none !important; }
+  .view-more { display: inline-flex; }
+}
+/* The pager takes its own room in the toolbar. */
+@container (max-width: 1080px) {
+  .has-pager .view-inline { display: none !important; }
+  .has-pager .view-more { display: inline-flex; }
+}
 /* Wraps on a phone rather than pushing the zoom controls off the card. */
 .bar-end { margin-left: auto; display: inline-flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
 .zoom-controls { display: inline-flex; align-items: center; gap: 2px; }
@@ -1010,6 +1033,22 @@ textarea.sheet-inline-input { font-family: system-ui, -apple-system, "Segoe UI",
 .reset-menu { position: relative; display: inline-flex; }
 .reset-menu-list { min-width: 290px; }
 .editor-hint { font-size: 12.5px; }
+/* Swipe mode: one page at a time (the others stay mounted, hidden), turned
+   with the pager. Sideways finger moves are the page turn's while the page
+   fits the width. */
+.sheet-page.off { display: none; }
+.sheet-editor-scroll.swipe-lock { touch-action: pan-y pinch-zoom; overflow-x: hidden; }
+.page-pager {
+  display: inline-flex; align-items: center; gap: 2px; padding: 2px;
+  background: var(--card); border: 1px solid var(--paper-deep); border-radius: 999px;
+}
+.page-pager .editor-btn { border-radius: 999px; border-color: transparent; }
+/* A phone's toolbar has Edit sheet, the pager and "..." on one row. */
+@container (max-width: 420px) {
+  .page-pager .editor-btn.icon { padding: 7px 4px; }
+  .page-pager .page-pager-count { min-width: 38px; }
+}
+.page-pager-count { min-width: 52px; text-align: center; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink); }
 /* Drag the sheet around like a hand tool (see sheet-editor.tsx). */
 .sheet-editor.pannable .sheet-pages, .sheet-editor.pannable .annotation-layer { cursor: grab !important; }
 .sheet-editor.panning .sheet-editor-scroll, .sheet-editor.panning .sheet-pages, .sheet-editor.panning .annotation-layer {
@@ -1048,6 +1087,8 @@ textarea.sheet-inline-input { font-family: system-ui, -apple-system, "Segoe UI",
 @media (max-width: 640px) {
   .editor-btn span { display: none; }
 }
+/* The "..." panel has room for the words. */
+.view-more-panel .editor-btn span { display: inline; }
 
 /* Download: one button, three versions. */
 .download-menu { position: relative; }
@@ -1067,6 +1108,26 @@ textarea.sheet-inline-input { font-family: system-ui, -apple-system, "Segoe UI",
 /* The handle sits outside the scrolling box, so it stays put while the sheet
    scrolls beneath it. */
 .preview-resize-wrap { position: relative; }
+/* Full window: the same preview pinned over the page, below modals (z 50).
+   Its own drag height gives way, and 100% zoom fits the window's width. */
+.preview-resize-wrap.full-window {
+  position: fixed; inset: 0; z-index: 40; background: var(--card);
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+.full-window .preview-resize { height: 100% !important; min-height: 0; border-radius: 0; }
+.full-window .resize-handle { display: none; }
+/* main is its own stacking layer under the sticky header (z 10); lift it
+   while the sheet fills the window, or the header covers the toolbar. */
+main:has(.full-window) { z-index: 45; }
+/* Filling the window, 100% shows the whole page: as wide as fits both the
+   width and the height (less the pages' own padding), zooming from there. */
+.full-window .sheet-editor-scroll { container-type: size; }
+.full-window .sheet-editor .sheet-page {
+  max-width: none;
+  width: calc(min(100%, (100cqh - 36px) * var(--page-aspect, 0.77)) * var(--zoom));
+}
+.editor-btn.close-full { background: var(--ink); border-color: var(--ink); color: #fff; }
+.editor-btn.close-full:hover:not(:disabled) { background: #000; border-color: #000; }
 /* keyboard-flat.tsx: the keyboard without WebGL. Keys are placed in percent
    by the same fractions as the note roll's lanes. */
 .keyboard-flat { overflow: hidden; }

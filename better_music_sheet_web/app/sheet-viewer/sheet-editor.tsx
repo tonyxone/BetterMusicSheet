@@ -21,6 +21,7 @@ import { photoAsPdf } from "@/lib/photo-pages";
 import { loadLabels, stillUnnamed, type LabelItem, type LabelSet } from "@/lib/labels";
 import { correctionsForRetype, EMPTY_EDITS, isEmptyEdits, resolveLabel, useSheetEdits, type LabelEdit, type SaveState, type SheetEdits } from "@/lib/edits";
 import { fromNumbered, fromSolfege, useNotation } from "@/lib/notation";
+import { usePreference, type Preferences } from "@/lib/preferences";
 import type { Timeline } from "@/lib/timeline";
 import type { SheetVariant } from "../sheet-toggle";
 import { NotationToggle } from "../notation-toggle";
@@ -67,6 +68,44 @@ function withLabelEdit(labels: Record<string, LabelEdit>, id: string, edit: Labe
 
 const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
 
+/** Show ``el`` dragged ``mx`` sideways - only a little past the first and
+ * last page - and return how far it moved. */
+function dragPage(el: HTMLElement | null, mx: number, atFirst: boolean, atLast: boolean) {
+  const dx = (mx > 0 && atFirst) || (mx < 0 && atLast) ? mx / 4 : mx;
+  if (el) {
+    el.style.transition = "none";
+    el.style.transform = `translateX(${dx}px)`;
+  }
+  return dx;
+}
+
+/** Spring a dragged page back to where it was. */
+function settlePage(el: HTMLElement | null) {
+  if (!el || !el.style.transform) return;
+  el.style.transition = "transform 0.2s ease-out";
+  el.style.transform = "";
+  el.addEventListener("transitionend", () => { el.style.transition = ""; }, { once: true });
+}
+
+/** Turn from a page shown dragged: it snaps home as the next one comes. */
+function turnFrom(el: HTMLElement | null, turn: () => void) {
+  if (el) {
+    el.style.transition = "";
+    el.style.transform = "";
+  }
+  turn();
+}
+
+/** Let go of a page dragged ``dx`` over ``ms``: a quick flick or a pull
+ * across a good part of the ``width`` turns to page ``target``, if there is
+ * one; anything less springs back. */
+function releaseDrag(el: HTMLElement | null, dx: number, ms: number, width: number,
+  target: number, count: number, goTo: (page: number) => void) {
+  const fast = Math.abs(dx) / Math.max(1, ms) > 0.3 && Math.abs(dx) > 25;
+  if (target >= 1 && target <= count && (fast || Math.abs(dx) > width * 0.18)) turnFrom(el, () => goTo(target));
+  else settlePage(el);
+}
+
 function savedZoom() {
   try {
     const z = Number(localStorage.getItem(ZOOM_KEY));
@@ -76,8 +115,7 @@ function savedZoom() {
   }
 }
 
-
-export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
+export function SheetEditor({ jobId, variant, exportRef, variantToggle, fullWindow = false, onFullWindow }: {
   jobId: string;
   variant: SheetVariant;
   /** Filled in once the sheet has loaded, for the page's Download menu. */
@@ -85,6 +123,9 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
   /** The page's Annotated/Original switch, shown beside the Letter/簡 one:
    * both choose how this sheet is drawn. */
   variantToggle?: ReactNode;
+  /** The preview fills the window (the page around it owns that state). */
+  fullWindow?: boolean;
+  onFullWindow?: (on: boolean) => void;
 }) {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -107,6 +148,9 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
   const inlineRef = useRef<InlineTarget | null>(null);
   const inlineBefore = useRef<SheetEdits | null>(null);
   const [resetOpen, setResetOpen] = useState(false);
+  // On a narrow box the view controls fold into a "..." menu (globals.css).
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef<HTMLDivElement>(null);
   // A reset can wipe a lot at once, so it offers its own undo, in or out of
   // edit mode.
   const [resetNotice, setResetNotice] = useState<string | null>(null);
@@ -122,8 +166,20 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
   // Dragging the sheet around with the mouse, like a hand tool. Outside edit
   // mode a plain drag pans; in edit mode a drag draws or selects, so there
   // it takes the space bar held down, or the middle button.
-  const panStart = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
+  // In swipe mode a mostly sideways drag drags the page instead ("page"),
+  // decided once the pointer has moved a little ("undecided").
+  const panStart = useRef<{
+    x: number; y: number; left: number; top: number; t: number;
+    mode: "pan" | "undecided" | "page"; dx: number;
+  } | null>(null);
   const [panning, setPanning] = useState(false);
+  // Scroll down through every page, or show one at a time and swipe across:
+  // the reader's setting, kept with their account (lib/preferences.ts).
+  const [pageMode, setPageMode] = usePreference("page_mode", "scroll");
+  const [pageCount, setPageCount] = useState(0);
+  const [page, setPage] = useState(1);
+  // Which way the last page turn went, for the slide-in; 0 for none.
+  const turnDir = useRef(0);
   const [spaceHeld, setSpaceHeld] = useState(false);
 
   useEffect(() => {
@@ -183,23 +239,17 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
   const unnamed = useMemo(() => stillUnnamed(showNames ? loaded?.labels?.unnamed ?? [] : [], doc?.texts ?? [])
     .sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x), [showNames, loaded, doc]);
   const [focusedUnnamed, setFocusedUnnamed] = useState<string | null>(null);
+  // Set by "Show next" and cleared once that note is scrolled to: one page
+  // at a time, its page has to be showing first.
+  const unnamedJump = useRef<string | null>(null);
   const showNextUnnamed = useCallback(() => {
     if (!unnamed.length) return;
     const at = unnamed.findIndex((u) => unnamedKey(u) === focusedUnnamed);
-    const next = unnamedKey(unnamed[(at + 1) % unnamed.length]);
+    const target = unnamed[(at + 1) % unnamed.length];
+    const next = unnamedKey(target);
+    unnamedJump.current = next;
     setFocusedUnnamed(next);
-    // Centred in the sheet's own box. scrollIntoView would scroll the page
-    // too, tucking the toolbar under the site header.
-    const box = scrollRef.current;
-    const ring = box?.querySelector(`[data-unnamed="${CSS.escape(next)}"]`);
-    if (!box || !ring) return;
-    const r = ring.getBoundingClientRect();
-    const b = box.getBoundingClientRect();
-    box.scrollTo({
-      top: box.scrollTop + r.top + r.height / 2 - (b.top + b.height / 2),
-      left: box.scrollLeft + r.left + r.width / 2 - (b.left + b.width / 2),
-      behavior: "smooth",
-    });
+    setPage(target.page);
   }, [unnamed, focusedUnnamed]);
 
   useEffect(() => {
@@ -296,7 +346,10 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
     // mode pans instead of drawing or selecting.
     e.preventDefault();
     e.stopPropagation();
-    panStart.current = { x: e.clientX, y: e.clientY, left: scroller.scrollLeft, top: scroller.scrollTop };
+    panStart.current = {
+      x: e.clientX, y: e.clientY, left: scroller.scrollLeft, top: scroller.scrollTop, t: e.timeStamp,
+      mode: swiping && e.button === 0 && !editing ? "undecided" : "pan", dx: 0,
+    };
     e.currentTarget.setPointerCapture(e.pointerId);
     setPanning(true);
   }
@@ -305,14 +358,30 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
     const start = panStart.current;
     const scroller = start && scrollRef.current;
     if (!start || !scroller) return;
-    scroller.scrollLeft = start.left - (e.clientX - start.x);
-    scroller.scrollTop = start.top - (e.clientY - start.y);
+    const mx = e.clientX - start.x;
+    const my = e.clientY - start.y;
+    if (start.mode === "undecided") {
+      if (Math.abs(mx) < 6 && Math.abs(my) < 6) return;
+      const room = sidewaysRoom(scroller);
+      const canPan = room > 1 && (mx > 0 ? start.left > 1 : start.left < room - 1);
+      start.mode = Math.abs(mx) >= Math.abs(my) && !canPan ? "page" : "pan";
+    }
+    if (start.mode === "page") {
+      start.dx = dragShownPage(mx);
+      return;
+    }
+    scroller.scrollLeft = start.left - mx;
+    scroller.scrollTop = start.top - my;
   }
 
-  function onPanEnd() {
-    if (!panStart.current) return;
+  function onPanEnd(e: React.PointerEvent<HTMLDivElement>) {
+    const start = panStart.current;
+    if (!start) return;
     panStart.current = null;
     setPanning(false);
+    if (start.mode !== "page") return;
+    if (e.type === "pointercancel") settleShownPage();
+    else releasePage(start.dx, e.timeStamp - start.t);
   }
 
   // Space held while editing turns the pointer into a hand for as long as it
@@ -341,6 +410,220 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
       window.removeEventListener("blur", release);
     };
   }, [editing]);
+
+  // ---- pages -----------------------------------------------------------------
+
+  const swiping = pageMode === "swipe" && pageCount > 1;
+  const shownPage = Math.min(Math.max(1, page), Math.max(1, pageCount));
+  const pageRef = useRef(shownPage);
+  const countRef = useRef(pageCount);
+  useEffect(() => {
+    pageRef.current = shownPage;
+    countRef.current = pageCount;
+  }, [shownPage, pageCount]);
+
+  /** How far the sheet pans sideways. Only a zoomed-in page counts: names
+   * drawn just past a page's edge widen the box a little too, and that must
+   * not stop a swipe from turning the page. */
+  const sidewaysRoom = (box: HTMLElement) => (zoomRef.current > 1 ? box.scrollWidth - box.clientWidth : 0);
+
+  const goToPage = useCallback((n: number) => {
+    const next = Math.min(Math.max(1, n), countRef.current);
+    if (next === pageRef.current) return;
+    turnDir.current = next > pageRef.current ? 1 : -1;
+    setPage(next);
+  }, []);
+
+  // Dragging the page sideways, by finger or mouse: it follows the drag and
+  // turns once let go far or fast enough (see dragPage, below).
+  const shownPageEl = () =>
+    scrollRef.current?.querySelector<HTMLElement>(`.sheet-page[data-page="${pageRef.current}"]`) ?? null;
+  const dragShownPage = (mx: number) =>
+    dragPage(shownPageEl(), mx, pageRef.current <= 1, pageRef.current >= countRef.current);
+  const settleShownPage = () => settlePage(shownPageEl());
+  const releasePage = (dx: number, ms: number) => releaseDrag(shownPageEl(), dx, ms,
+    scrollRef.current?.clientWidth ?? 0, pageRef.current + (dx < 0 ? 1 : -1), countRef.current, goToPage);
+
+  function changePageMode(next: Preferences["page_mode"]) {
+    if (next === pageMode) return;
+    const scroller = scrollRef.current;
+    if (next === "swipe" && scroller) {
+      // Open on the page that was being read: the first one still showing
+      // below the top third of the box.
+      const line = scroller.getBoundingClientRect().top + scroller.clientHeight / 3;
+      const pages = [...scroller.querySelectorAll<HTMLElement>(".sheet-page")];
+      const reading = pages.find((el) => el.getBoundingClientRect().bottom > line);
+      if (reading) setPage(Number(reading.dataset.page));
+    }
+    turnDir.current = 0;
+    setPageMode(next);
+    setMoreOpen(false);
+  }
+
+  // A new page starts at its top, sliding in from the side it was swiped
+  // from; back to scrolling, the box lands on the page that was showing.
+  const wasSwiping = useRef(swiping);
+  useLayoutEffect(() => {
+    const scroller = scrollRef.current;
+    const el = scroller?.querySelector<HTMLElement>(`.sheet-page[data-page="${shownPage}"]`);
+    const modeChanged = wasSwiping.current !== swiping;
+    wasSwiping.current = swiping;
+    if (!scroller || !el) return;
+    if (swiping) {
+      scroller.scrollTop = 0;
+      scroller.scrollLeft = 0;
+      const dir = turnDir.current;
+      turnDir.current = 0;
+      if (dir && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        el.animate([{ transform: `translateX(${dir * 30}%)`, opacity: 0.2 }, { transform: "none", opacity: 1 }],
+          { duration: 220, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" });
+      }
+    } else if (modeChanged) {
+      scroller.scrollTop += el.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 12;
+    }
+  }, [shownPage, swiping]);
+
+  // "Show next": centred in the sheet's own box, once its page is showing.
+  // scrollIntoView would scroll the page too, tucking the toolbar under the
+  // site header.
+  useEffect(() => {
+    const key = unnamedJump.current;
+    const box = scrollRef.current;
+    if (!key || !box) return;
+    unnamedJump.current = null;
+    const ring = box.querySelector(`[data-unnamed="${CSS.escape(key)}"]`);
+    if (!ring) return;
+    const r = ring.getBoundingClientRect();
+    const b = box.getBoundingClientRect();
+    box.scrollTo({
+      top: box.scrollTop + r.top + r.height / 2 - (b.top + b.height / 2),
+      left: box.scrollLeft + r.left + r.width / 2 - (b.left + b.width / 2),
+      behavior: "smooth",
+    });
+  }, [focusedUnnamed, shownPage]);
+
+  // The arrow keys turn pages, unless they are moving a selection or a
+  // caret.
+  useEffect(() => {
+    if (!swiping) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable)) return;
+      if (editing && visibleSelection.length) return;
+      e.preventDefault();
+      goToPage(pageRef.current + (e.key === "ArrowRight" ? 1 : -1));
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [swiping, editing, visibleSelection, goToPage]);
+
+  // Made for a quick flick at the piano: a finger swiped sideways drags the
+  // page (see dragPage), and a rough flick the browser first took for a
+  // scroll still turns it. Zoomed in, the sheet
+  // pans sideways itself until it reaches an edge. In edit mode a finger
+  // draws, so the pager turns pages.
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller || !swiping || editing) return;
+    const box = scroller;
+    let start: { x: number; y: number; t: number } | null = null;
+    // "drag": the page follows the finger; "pass": the browser scrolls, and
+    // only the whole gesture is judged once it ends.
+    let mode: "undecided" | "drag" | "pass" = "undecided";
+    let dx = 0;
+    const el = () => box.querySelector<HTMLElement>(`.sheet-page[data-page="${pageRef.current}"]`);
+    function onStart(e: TouchEvent) {
+      if (e.touches.length !== 1) {
+        start = null;
+        settlePage(el());
+        return;
+      }
+      start = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: e.timeStamp };
+      mode = "undecided";
+      dx = 0;
+    }
+    function onMove(e: TouchEvent) {
+      if (!start) return;
+      if (e.touches.length !== 1) {
+        start = null;
+        settlePage(el());
+        return;
+      }
+      const mx = e.touches[0].clientX - start.x;
+      const my = e.touches[0].clientY - start.y;
+      if (mode === "undecided") {
+        if (Math.abs(mx) < 10 && Math.abs(my) < 10) return;
+        const room = sidewaysRoom(box);
+        const canPan = room > 1 && (mx > 0 ? box.scrollLeft > 1 : box.scrollLeft < room - 1);
+        mode = Math.abs(mx) >= Math.abs(my) && !canPan ? "drag" : "pass";
+      }
+      if (mode !== "drag") return;
+      if (e.cancelable) e.preventDefault();
+      dx = dragPage(el(), mx, pageRef.current <= 1, pageRef.current >= countRef.current);
+    }
+    function onEnd(e: TouchEvent) {
+      if (!start) return;
+      const from = start;
+      start = null;
+      const touch = e.changedTouches[0];
+      const mx = touch ? touch.clientX - from.x : dx;
+      const my = touch ? touch.clientY - from.y : 0;
+      const ms = Math.max(1, e.timeStamp - from.t);
+      const target = pageRef.current + (mx < 0 ? 1 : -1);
+      if (mode === "drag") {
+        releaseDrag(el(), dx, ms, box.clientWidth, pageRef.current + (dx < 0 ? 1 : -1), countRef.current, goToPage);
+      } else if (mode === "pass" && target >= 1 && target <= countRef.current && sidewaysRoom(box) <= 1
+        && ms < 400 && Math.abs(mx) > 50 && Math.abs(mx) > Math.abs(my) * 1.5) {
+        turnFrom(el(), () => goToPage(target));
+      }
+    }
+    function onCancel() {
+      start = null;
+      settlePage(el());
+    }
+    box.addEventListener("touchstart", onStart, { passive: true });
+    box.addEventListener("touchmove", onMove, { passive: false });
+    box.addEventListener("touchend", onEnd);
+    box.addEventListener("touchcancel", onCancel);
+    return () => {
+      box.removeEventListener("touchstart", onStart);
+      box.removeEventListener("touchmove", onMove);
+      box.removeEventListener("touchend", onEnd);
+      box.removeEventListener("touchcancel", onCancel);
+    };
+  }, [swiping, editing, goToPage, sheetShown]);
+
+  // A trackpad's two-finger swipe turns the page too, once per gesture: the
+  // momentum that follows doesn't turn it again.
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller || !swiping) return;
+    const box = scroller;
+    let sum = 0;
+    let quietTimer: ReturnType<typeof setTimeout> | undefined;
+    let spent = false;
+    function onWheel(e: WheelEvent) {
+      if (e.ctrlKey || Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+      const room = sidewaysRoom(box);
+      if (room > 1 && (e.deltaX > 0 ? box.scrollLeft < room - 1 : box.scrollLeft > 1)) return;
+      e.preventDefault();
+      clearTimeout(quietTimer);
+      quietTimer = setTimeout(() => { sum = 0; spent = false; }, 250);
+      if (spent) return;
+      sum += e.deltaX;
+      if (Math.abs(sum) > 60) {
+        spent = true;
+        goToPage(pageRef.current + (sum > 0 ? 1 : -1));
+      }
+    }
+    box.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      box.removeEventListener("wheel", onWheel);
+      clearTimeout(quietTimer);
+    };
+  }, [swiping, goToPage, sheetShown]);
 
   const stepZoom = (direction: 1 | -1) => {
     const z = zoomRef.current;
@@ -530,6 +813,33 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
     return () => window.removeEventListener("keydown", onKey);
   }, [editing, visibleSelection, undo, redo, nudge, deleteSelection, openInlineFor]);
 
+  useEffect(() => {
+    if (!moreOpen) return;
+    function onDown(e: PointerEvent) {
+      if (!moreRef.current?.contains(e.target as Node)) setMoreOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setMoreOpen(false);
+    }
+    document.addEventListener("pointerdown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [moreOpen]);
+
+  // Esc leaves the full window, unless something smaller is open to close
+  // first, or edit mode is using Esc itself.
+  useEffect(() => {
+    if (!fullWindow || !onFullWindow || editing || moreOpen || resetOpen || inline) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onFullWindow!(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [fullWindow, onFullWindow, editing, moreOpen, resetOpen, inline]);
+
   // ---- rendering -------------------------------------------------------------
 
   if (loadError) {
@@ -634,7 +944,8 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
         title={t.zoomOutTitle} aria-label={t.zoomOut}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14" /></svg>
       </button>
-      <button type="button" className="editor-btn zoom-level" onClick={() => zoomTo(1)} title={t.fitWidth}>
+      <button type="button" className="editor-btn zoom-level" onClick={() => zoomTo(1)}
+        title={fullWindow ? t.fitPage : t.fitWidth}>
         {Math.round(zoom * 100)}%
       </button>
       <button type="button" className="editor-btn icon" onClick={() => stepZoom(1)} disabled={zoom >= MAX_ZOOM}
@@ -667,6 +978,76 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
     </div>
   );
 
+  const viewControls = (
+    <>
+      {showNames && <NotationToggle value={notation} onChange={setNotation} />}
+      {variantToggle}
+      {pageCount > 1 && (
+        <div className="sheet-toggle" role="group" aria-label={t.pageLayout}>
+          {([["scroll", t.scrollPages, t.scrollPagesTitle], ["swipe", t.swipePages, t.swipePagesTitle]] as const).map(([id, label, title]) => (
+            <button key={id} type="button" className={`sheet-toggle-option${pageMode === id ? " active" : ""}`}
+              aria-pressed={pageMode === id} title={title} onClick={() => changePageMode(id)}>
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+      {zoomControls}
+      {onFullWindow && !fullWindow && (
+        <button type="button" className="editor-btn" onClick={() => { setMoreOpen(false); onFullWindow(true); }}
+          title={t.fullWindowTitle}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg>
+          <span>{t.fullWindow}</span>
+        </button>
+      )}
+    </>
+  );
+  // Always in sight while the sheet fills the window, never folded away.
+  const closeFull = fullWindow && onFullWindow && (
+    <button type="button" className="editor-btn close-full" onClick={() => onFullWindow(false)}
+      title={t.closeFullWindowTitle} aria-label={t.closeFullWindowTitle}>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+      {t.closeFullWindow}
+    </button>
+  );
+  const statuses = !editing && variant === "annotated" && !labelsLive && (
+    <span className="editor-status">{t.namesFixed}</span>
+  );
+  // Shown instead of the inline view controls when the box is too narrow
+  // for them beside the other buttons.
+  const viewMenu = (
+    <div className="view-more" ref={moreRef}>
+      <button type="button" className="editor-btn icon" aria-haspopup="true" aria-expanded={moreOpen}
+        title={t.viewOptions} aria-label={t.viewOptions} onClick={() => setMoreOpen((v) => !v)}>
+        <svg viewBox="0 0 24 24" aria-hidden="true" style={{ strokeWidth: 3 }}><path d="M5 12h.01M12 12h.01M19 12h.01" /></svg>
+      </button>
+      {moreOpen && (
+        <div className="view-more-panel" role="group" aria-label={t.viewOptions}>
+          {statuses}
+          {viewControls}
+        </div>
+      )}
+    </div>
+  );
+
+  // In the toolbar beside Edit sheet, where it is always in sight.
+  const pager = swiping && (
+    <div className="page-pager" role="group" aria-label={t.pageLayout}>
+      <button type="button" className="editor-btn icon" disabled={shownPage <= 1} onClick={() => goToPage(shownPage - 1)}
+        title={t.prevPage} aria-label={t.prevPage}>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg>
+      </button>
+      <span className="page-pager-count" aria-live="polite"
+        aria-label={fmt(t.pageOf, { n: shownPage, total: pageCount })}>
+        {shownPage} / {pageCount}
+      </span>
+      <button type="button" className="editor-btn icon" disabled={shownPage >= pageCount} onClick={() => goToPage(shownPage + 1)}
+        title={t.nextPage} aria-label={t.nextPage}>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" /></svg>
+      </button>
+    </div>
+  );
+
   const showSub = !!edits.notice || (editing && (visibleSelection.length > 0 || tool === "select"));
 
   return (
@@ -674,8 +1055,9 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
       {/* Outside the scrolling area, so zooming and scrolling the sheet
           never move or scale the tools; the selection line stays under the
           toolbar however many rows the toolbar wraps onto. */}
-      <div className="sheet-editor-head">
-        <div className="sheet-editor-bar">
+      <div className={`sheet-editor-head${pager ? " has-pager" : ""}`}>
+        {/* "view-inline" parts give way to the "..." menu when narrow. */}
+        <div className={`sheet-editor-bar${editing ? " view-inline" : ""}`}>
           {!editing ? (
             <>
               <button type="button" className="editor-btn primary" onClick={() => setEditing(true)}
@@ -683,22 +1065,16 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l1-4L16 5l3 3L8 19z" /></svg>
                 {t.editSheet}
               </button>
-              {!isEmptyEdits(doc) && <span className="editor-status">{t.showingChanges}</span>}
-              {variant === "annotated" && !labelsLive && <span className="editor-status">{t.namesFixed}</span>}
-              <div className="bar-end">
-                {showNames && <NotationToggle value={notation} onChange={setNotation} />}
-                {variantToggle}
-                {zoomControls}
-              </div>
+              <span className="view-inline bar-statuses">{statuses}</span>
+              {pager}
+              <div className="bar-end view-inline">{viewControls}</div>
+              {viewMenu}
+              {closeFull}
             </>
           ) : (
             // How the sheet is shown, on a row of its own above the tools
             // that change it.
-            <div className="bar-end">
-              {showNames && <NotationToggle value={notation} onChange={setNotation} />}
-              {variantToggle}
-              {zoomControls}
-            </div>
+            <div className="bar-end">{viewControls}</div>
           )}
         </div>
         {editing && (
@@ -741,7 +1117,10 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
             </div>
             <span className="editor-status" aria-live="polite">{saveText[edits.saveState]}</span>
             <div className="bar-end">
+              {pager}
+              {viewMenu}
               <button type="button" className="editor-btn primary" onClick={stopEditing}>{t.done}</button>
+              {closeFull}
             </div>
           </div>
         )}
@@ -826,7 +1205,7 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
       </div>
 
       <div
-        className="sheet-editor-scroll"
+        className={`sheet-editor-scroll${swiping && zoom <= 1 && !editing ? " swipe-lock" : ""}`}
         ref={scrollRef}
         style={{ "--zoom": zoom } as CSSProperties}
         onPointerDownCapture={onPanStart}
@@ -838,6 +1217,8 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle }: {
       >
       <PdfPages
         pdfData={base}
+        currentPage={swiping ? shownPage : undefined}
+        onPageCount={setPageCount}
         renderScale={Math.min(4, Math.max(2, Math.round(renderZoom * 4) / 2))}
         renderOverlay={(page) => (
           <>

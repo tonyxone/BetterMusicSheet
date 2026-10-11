@@ -514,6 +514,16 @@ function PreviewPanel({ jobId, variant, customizedRef, variantToggle }: {
   const resizeRef = useRef<HTMLDivElement>(null);
   const { m } = useI18n();
   const dragState = useRef({ startY: 0, startH: 0 });
+  // The sheet pinned over the whole window, page scroll locked behind it.
+  const [fullWindow, setFullWindow] = useState(false);
+
+  useEffect(() => {
+    if (!fullWindow) return;
+    const html = document.documentElement;
+    const before = html.style.overflow;
+    html.style.overflow = "hidden";
+    return () => { html.style.overflow = before; };
+  }, [fullWindow]);
 
   useEffect(() => {
     const saved = parseInt(localStorage.getItem(PREVIEW_H_KEY) || "", 10);
@@ -546,9 +556,10 @@ function PreviewPanel({ jobId, variant, customizedRef, variantToggle }: {
   }
 
   return (
-    <div className="preview-resize-wrap">
+    <div className={`preview-resize-wrap${fullWindow ? " full-window" : ""}`}>
       <div className="preview-resize scrolling" ref={resizeRef}>
-        <SheetEditor jobId={jobId} variant={variant} exportRef={customizedRef} variantToggle={variantToggle} />
+        <SheetEditor jobId={jobId} variant={variant} exportRef={customizedRef} variantToggle={variantToggle}
+          fullWindow={fullWindow} onFullWindow={setFullWindow} />
       </div>
       <div className="resize-handle" title={m.sheet.dragToResize} onPointerDown={onPointerDown}>
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">

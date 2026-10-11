@@ -12,7 +12,7 @@
 // elsewhere fights React over the DOM; here React owns the visible canvases
 // and only their pixels are replaced.
 
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { isMissingBrowserFeature } from "@/lib/browser-support";
 import { openPdf, type PdfDoc } from "@/lib/pdfjs";
 import { useI18n } from "@/lib/i18n/client";
@@ -44,6 +44,8 @@ export function PdfPages({
   onPageClick,
   containerRef,
   renderScale = DEFAULT_RENDER_SCALE,
+  currentPage,
+  onPageCount,
 }: {
   pdfData: ArrayBuffer;
   /** Drawn inside each page's positioning box, above the canvas. */
@@ -52,6 +54,9 @@ export function PdfPages({
   containerRef?: RefObject<HTMLDivElement | null>;
   /** Device pixels per PDF point to rasterize at. */
   renderScale?: number;
+  /** Show only this page (1-based); the others stay mounted, just hidden. */
+  currentPage?: number;
+  onPageCount?: (count: number) => void;
 }) {
   const { m } = useI18n();
   const [pages, setPages] = useState<PageInfo[]>([]);
@@ -90,6 +95,10 @@ export function PdfPages({
       cancelled = true;
     };
   }, [pdfData]);
+
+  useEffect(() => {
+    onPageCount?.(pages.length);
+  }, [pages, onPageCount]);
 
   // Second pass: the canvases exist in the DOM now, so rasterize into them -
   // and again whenever the scale changes. Each page is drawn offscreen and
@@ -168,8 +177,10 @@ export function PdfPages({
       {pages.map((page) => (
         <div
           key={page.pageNumber}
-          className="sheet-page"
+          className={`sheet-page${currentPage && page.pageNumber !== currentPage ? " off" : ""}`}
           data-page={page.pageNumber}
+          // Its proportions, for layouts that fit the whole page in a box.
+          style={{ "--page-aspect": page.widthPt / page.heightPt } as CSSProperties}
           onClick={onPageClick ? (e) => onPageClick(page, e) : undefined}
         >
           <canvas
