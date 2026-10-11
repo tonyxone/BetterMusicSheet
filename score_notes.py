@@ -3,17 +3,17 @@
 Audiveris measure/voice/slot relations establish identity; PDF clefs correct
 written pitch. Confidence grades are recognition scores, not probabilities.
 """
-from collections import defaultdict
+from collections import defaultdict, deque
 from fractions import Fraction
 
 import pymupdf
 from audiveris_heads import (
     _parse_sheet, load_sheet_heads, load_chord_id_groups, load_staff_lines,
-    load_omr_clefs, load_key_timeline, load_alter_map, get_picture_size,
+    load_omr_clefs, load_key_timeline, load_alter_map, get_picture_size, load_binary_image,
 )
 from labels import PITCH_REF, step_of, octave_of
 from pdf_marks import octave_intervals, metronome_marks
-from scan import is_scanned, ottava_intervals
+from scan import _Bitmap, is_scanned, ottava_intervals
 
 STEP = {'C': 0, 'D': 2, 'E': 4, 'F': 5, 'G': 7, 'A': 9, 'B': 11}
 ALTER = {'SHARP': 1, 'FLAT': -1, 'NATURAL': 0, 'DOUBLE_SHARP': 2, 'DOUBLE_FLAT': -2}
@@ -34,6 +34,36 @@ PDF_ACCIDENTALS = {0xE260: 'FLAT', 0xE261: 'NATURAL', 0xE262: 'SHARP',
 NEAR_STAFF_SPACES = 4.25
 MAX_LEDGER_SPACES = 7.0
 LEDGER_CLEARANCE = 1.5
+# Two notes of a chord a 2nd apart cannot share a column, so one is printed a
+# head-width to the side. On a stemless whole-note chord Audiveris often keeps
+# the column and drops the head beside it: on one scan (Merry Christmas Mr.
+# Lawrence, page 1) nine of them, a third of the left hand's chords short a
+# note. Hollow heads only - a black head always has a stem, and Audiveris
+# finds those through it.
+DISPLACED_SHAPES = ('WHOLE_NOTE', 'NOTEHEAD_VOID')
+# How far beside its neighbour a displaced head sits, in head widths: it
+# touches it, give or take the engraver's spacing.
+DISPLACED_OFFSET = (.7, 1.25)
+# How closely the picture beside a head must repeat that head's own pixels,
+# as intersection over union. On the scan above every real one scored .77 to
+# .95, and nothing else above .42.
+DISPLACED_MATCH = .7
+# Half the thickness of a staff or ledger line, in staff spaces. Those rows
+# are left out of the comparison: a head on a line and its neighbour in a
+# space are crossed by lines in different places.
+LINE_HALF_THICKNESS = .12
+# A hollow head walls in white. Recognition sometimes calls a beam, a filled
+# blob or bare staff a hollow head, and a beam's pixels repeat beside it just
+# as well, so the seed and its neighbour must both enclose a hole of at least
+# this share of their box: a half note's slanted one is about 5%. The walls
+# are looked for this share of a head's height beyond its box, which a
+# recognized box, or a neighbour's found by offset, may cut a little short.
+HOLE_AREA = .02
+HOLE_PAD = .15
+# How far past a box, in head widths, an unbroken row of ink must run on both
+# sides to be a beam or a thickened staff line rather than part of a head.
+STROKE_REACH = .25
+_INK_BIT = bytes(1 if v == 0 else 0 for v in range(256))
 
 
 def _smufl_glyphs(page, table):
@@ -168,6 +198,118 @@ def merge_vector_pdf_noteheads(page, heads, staff_lines, sx, sy, page_number):
     return added
 
 
+def _ink_row(bitmap, x, y, width):
+    """One row of a picture as an integer, one bit per inked pixel."""
+    if not 0 <= y < bitmap.height:
+        return 0
+    left, right = max(0, x), min(bitmap.width, x + width)
+    if right <= left:
+        return 0
+    row = bitmap.samples[y * bitmap.width + left:y * bitmap.width + right]
+    return int.from_bytes(row.translate(_INK_BIT), 'big') << (8 * (x + width - right))
+
+
+def _likeness(template, candidate, skipped):
+    """Intersection over union of two equal-height stacks of ink rows,
+    leaving out the rows in ``skipped``."""
+    both = either = 0
+    for r, (a, b) in enumerate(zip(template, candidate)):
+        if r not in skipped:
+            both += (a & b).bit_count()
+            either += (a | b).bit_count()
+    return both / either if either else 0
+
+
+def _looks_hollow(bitmap, x, y, w, h, line_rows):
+    """Whether the picture shows a hollow head in this box: white pixels near
+    its middle walled in by ink, that no white path joins to a little beyond
+    the box. A smudge or a filled head has none, and neither has bare staff -
+    shapes recognition sometimes calls a hollow head.
+
+    A stack of beams crossed by stems walls in slivers of white too, so a box
+    a stroke runs straight through is not a head either: across a head's
+    middle its hole breaks every row, apart from staff and ledger lines."""
+    reach = round(w * STROKE_REACH)
+    for py in range(y + round(h * .3), y + round(h * .7) + 1):
+        if py not in line_rows and all(bitmap.ink(px, py) for px in range(x - reach, x + w + reach)):
+            return False
+    pad = max(2, round(h * HOLE_PAD))
+    left, top, right, bottom = x - pad, y - pad, x + w + pad, y + h + pad
+    outside = set()
+    queue = deque((px, py) for px in range(left, right) for py in (top, bottom - 1))
+    queue.extend((px, py) for py in range(top, bottom) for px in (left, right - 1))
+    while queue:
+        px, py = queue.popleft()
+        if (px, py) in outside or not (left <= px < right and top <= py < bottom) or bitmap.ink(px, py):
+            continue
+        outside.add((px, py))
+        queue.extend(((px + 1, py), (px - 1, py), (px, py + 1), (px, py - 1)))
+    hole = sum(not bitmap.ink(px, py) and (px, py) not in outside
+               for px in range(x + round(w * .2), x + round(w * .8))
+               for py in range(y + round(h * .2), y + round(h * .8)))
+    return hole >= max(3, w * h * HOLE_AREA)
+
+
+def displaced_noteheads(bitmap, heads, staff_lines):
+    """Hollow heads printed beside a recognized one, a 2nd above or below it,
+    that recognition missed - see DISPLACED_SHAPES.
+
+    Each recognized hollow head is its own template: the page prints a chord's
+    heads alike, so the one Audiveris kept shows what its missing neighbour
+    looks like on this very picture, scan noise and all. A neighbour is taken
+    where the picture one head-width over repeats it."""
+    found = []
+    present = [(h['staff'], h['cx'], h['cy'], h['w']) for h in heads]
+    for head in heads:
+        ys = staff_lines.get(head['staff'])
+        if head['shape'] not in DISPLACED_SHAPES or head.get('pitch') is None or not ys or len(ys) != 5:
+            continue
+        ys = sorted(ys)
+        interline = (ys[4] - ys[0]) / 4
+        x, y, w, h = round(head['x']), round(head['y']), round(head['w']), round(head['h'])
+        half = max(1, round(interline * LINE_HALF_THICKNESS))
+        lines = {round(ys[2] + k * interline) for k in range(-9, 10)}
+        line_rows = {line + d for line in lines for d in range(-half, half + 1)}
+        template = [_ink_row(bitmap, x, y + r, w) for r in range(h)]
+        hollow = None
+        for step in (-1, 1):
+            dy = round(step * interline / 2)
+            skipped = {r for r in range(h) if y + r in line_rows or y + dy + r in line_rows}
+            for side in (-1, 1):
+                score, offset = max(
+                    (_likeness(template, [_ink_row(bitmap, x + side * off, y + dy + r, w) for r in range(h)], skipped), off)
+                    for off in range(round(w * DISPLACED_OFFSET[0]), round(w * DISPLACED_OFFSET[1]) + 1))
+                if score < DISPLACED_MATCH:
+                    continue
+                cx, cy = head['cx'] + side * offset, head['cy'] + step * interline / 2
+                if any(staff == head['staff'] and abs(ox - cx) < ow / 2 and abs(oy - cy) < interline / 2
+                       for staff, ox, oy, ow in present):
+                    continue
+                if hollow is None:
+                    hollow = _looks_hollow(bitmap, x, y, w, h, line_rows)
+                if not hollow or not _looks_hollow(bitmap, x + side * offset, y + dy, w, h, line_rows):
+                    continue
+                present.append((head['staff'], cx, cy, head['w']))
+                found.append({'staff': head['staff'], 'shape': head['shape'], 'pitch': head['pitch'] + step,
+                              'confidence': round(score, 3), 'neighbour': head['id'],
+                              'x': head['x'] + side * offset, 'y': head['y'] + step * interline / 2,
+                              'w': head['w'], 'h': head['h'], 'cx': cx, 'cy': cy})
+    return found
+
+
+def merge_displaced_noteheads(bitmap, heads, chords, staff_lines, page_number):
+    """Append the heads displaced_noteheads finds, each in its neighbour's
+    chord - a 2nd is only ever printed sideways within one chord - so it
+    takes that chord's measure, voice and onset."""
+    found = displaced_noteheads(bitmap, heads, staff_lines)
+    for index, head in enumerate(found):
+        head['id'] = f'displaced-head-{page_number}-{index}'
+        if head['neighbour'] in chords:
+            chords[head['id']] = chords[head['neighbour']]
+        heads.append(head)
+    return len(found)
+
+
 def page_structure(root, staff_lines):
     """One printed region per system stack, not one per part measure."""
     regions, chord_meta = [], {}
@@ -224,6 +366,9 @@ def resolve_score_notes(pdf_path, omr_path, num_pages, page_omr_overrides=None):
             pic_w, pic_h = picture
             sx, sy = doc[page - 1].rect.width / pic_w, doc[page - 1].rect.height / pic_h
             merge_vector_pdf_noteheads(doc[page - 1], heads, staff_lines, sx, sy, page)
+            binary = load_binary_image(src, page)
+            if binary is not None:
+                merge_displaced_noteheads(_Bitmap.from_png(binary), heads, chords, staff_lines, page)
             regions, chord_meta = page_structure(root, staff_lines)
             for r in regions:
                 box = r['bbox_px']
