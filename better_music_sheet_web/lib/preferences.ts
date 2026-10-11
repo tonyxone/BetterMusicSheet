@@ -31,6 +31,8 @@ export type Preferences = {
   roll_open: boolean;
   /** The sheet's share of the space it splits with the piano roll. */
   split: number;
+  /** The sheet preview: every page down one column, or one at a time. */
+  page_mode: "scroll" | "swipe";
 };
 
 export type PreferenceKey = keyof Preferences;
@@ -54,6 +56,7 @@ const VALID: { [K in PreferenceKey]: (v: unknown) => boolean } = {
   sheet_open: (v) => typeof v === "boolean",
   roll_open: (v) => typeof v === "boolean",
   split: (v) => typeof v === "number" && v >= 0 && v <= 1,
+  page_mode: (v) => v === "scroll" || v === "swipe",
 };
 
 /** Only the settings that are well-formed - whatever was stored or sent. */

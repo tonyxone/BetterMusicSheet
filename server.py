@@ -325,6 +325,8 @@ class Preferences(BaseModel):
     roll_open: Optional[bool] = None
     # The sheet's share of the space it splits with the piano roll.
     split: Optional[float] = Field(None, ge=0, le=1)
+    # The sheet preview: every page down one column, or one at a time.
+    page_mode: Optional[Literal["scroll", "swipe"]] = None
 
 
 @app.get("/api/me/preferences")

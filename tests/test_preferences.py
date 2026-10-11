@@ -48,7 +48,7 @@ class PreferencesTests(unittest.TestCase):
     def test_every_setting_round_trips(self):
         everything = {"sheet_view": "annotated", "notation": "solfege", "instrument": "cp80", "speed": 1.3,
                       "show_key_names": True, "show_note_names": False, "sound_on": False,
-                      "sheet_open": False, "roll_open": True, "split": 0.62}
+                      "sheet_open": False, "roll_open": True, "split": 0.62, "page_mode": "swipe"}
         self.assertEqual(self.put(everything).json(), {"preferences": everything})
 
     def test_settings_belong_to_their_own_account(self):
@@ -58,7 +58,7 @@ class PreferencesTests(unittest.TestCase):
 
     def test_nonsense_is_refused_and_nothing_saved(self):
         for body in ({"sheet_view": "both"}, {"notation": "tab"}, {"speed": 9}, {"speed": 0},
-                     {"split": 1.5}, {"instrument": "Grand Piano!"}, {"theme": "dark"}):
+                     {"split": 1.5}, {"instrument": "Grand Piano!"}, {"page_mode": "flip"}, {"theme": "dark"}):
             self.assertEqual(self.put(body).status_code, 422, body)
         self.assertEqual(self.client.get("/api/me/preferences", headers=signed_in()).json(), {"preferences": {}})
 
