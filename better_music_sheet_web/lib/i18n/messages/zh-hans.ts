@@ -305,7 +305,6 @@ export const zhHans: Messages = {
 
   editor: {
     save: {
-      saved: "所有更改已保存",
       saving: "正在保存…",
       offline: "离线——重新连接后会保存更改",
       error: "暂时无法保存——正在重试",

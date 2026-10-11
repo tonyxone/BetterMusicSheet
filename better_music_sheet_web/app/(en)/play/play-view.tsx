@@ -245,12 +245,13 @@ function PauseIcon() {
 
 /** Three dots: the universal "more" glyph, for the options disclosure that
  * only appears once a narrow viewport can't fit the full transport. */
-function MoreIcon() {
+// Sliders, as on the sheet preview's view options: what's behind it adjusts
+// how the piece plays and shows.
+function OptionsIcon() {
   return (
-    <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true">
-      <circle cx="5" cy="12" r="1.9" />
-      <circle cx="12" cy="12" r="1.9" />
-      <circle cx="19" cy="12" r="1.9" />
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" aria-hidden="true">
+      <path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4" />
     </svg>
   );
 }
@@ -1128,7 +1129,7 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
           aria-label={optionsOpen ? t.hideOptions : t.moreOptions}
           onClick={() => setOptionsOpen((v) => !v)}
         >
-          <MoreIcon />
+          <OptionsIcon />
         </button>
 
         <div id="play-options" className={`play-options${optionsOpen ? " open" : ""}`}>
