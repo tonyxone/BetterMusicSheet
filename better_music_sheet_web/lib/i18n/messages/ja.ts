@@ -315,7 +315,6 @@ export const ja: Messages = {
 
   editor: {
     save: {
-      saved: "すべての変更を保存しました",
       saving: "保存中…",
       offline: "オフラインです。再接続すると変更が保存されます",
       error: "まだ保存できていません。再試行しています",

@@ -133,7 +133,9 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle, fullWind
   const t = m.editor;
   const edits = useSheetEdits(jobId, t);
   const saveText: Record<SaveState, string> = {
-    saved: t.save.saved, saving: t.save.saving, unsaved: t.save.saving, offline: t.save.offline, error: t.save.error,
+    // Saved is the usual state, so it says nothing; only a pending or failed
+    // save is worth the reader's attention.
+    saved: "", saving: t.save.saving, unsaved: t.save.saving, offline: t.save.offline, error: t.save.error,
   };
   const { doc, update, undo, redo, current } = edits;
 
@@ -1017,9 +1019,9 @@ export function SheetEditor({ jobId, variant, exportRef, variantToggle, fullWind
   // for them beside the other buttons.
   const viewMenu = (
     <div className="view-more" ref={moreRef}>
-      <button type="button" className="editor-btn icon" aria-haspopup="true" aria-expanded={moreOpen}
+      <button type="button" className="editor-btn icon primary" aria-haspopup="true" aria-expanded={moreOpen}
         title={t.viewOptions} aria-label={t.viewOptions} onClick={() => setMoreOpen((v) => !v)}>
-        <svg viewBox="0 0 24 24" aria-hidden="true" style={{ strokeWidth: 3 }}><path d="M5 12h.01M12 12h.01M19 12h.01" /></svg>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4" /></svg>
       </button>
       {moreOpen && (
         <div className="view-more-panel" role="group" aria-label={t.viewOptions}>

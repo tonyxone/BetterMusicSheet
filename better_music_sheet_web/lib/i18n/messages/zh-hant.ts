@@ -306,7 +306,6 @@ export const zhHant: Messages = {
 
   editor: {
     save: {
-      saved: "所有變更已儲存",
       saving: "正在儲存…",
       offline: "離線——重新連線後會儲存變更",
       error: "暫時無法儲存——正在重試",

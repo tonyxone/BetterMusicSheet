@@ -353,7 +353,6 @@ export const en = {
 
   editor: {
     save: {
-      saved: "All changes saved",
       saving: "Saving…",
       offline: "Offline — changes will save when you reconnect",
       error: "Couldn't save yet — retrying",

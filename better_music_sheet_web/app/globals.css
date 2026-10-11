@@ -723,6 +723,14 @@ details.options[open] summary::before { content: "▾ "; }
 .icon-toggle.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .icon-toggle.on:hover { background: var(--accent-deep); border-color: var(--accent-deep); }
 .icon-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* The options button is red and round like the play buttons beside it, not
+   an outline: it opens a panel rather than switching something on. */
+.icon-toggle.play-options-toggle {
+  width: 38px; height: 38px; border-radius: 999px;
+  background: var(--accent); border-color: var(--accent); color: #fff;
+}
+.icon-toggle.play-options-toggle:hover,
+.icon-toggle.play-options-toggle[aria-expanded="true"] { background: var(--accent-deep); border-color: var(--accent-deep); color: #fff; }
 .play-status { font-size: 14px; color: var(--ink); display: flex; align-items: center; gap: 8px; }
 .play-status.subtle { color: var(--ink-soft); }
 .play-clear {
@@ -1016,6 +1024,7 @@ textarea.sheet-inline-input { font-family: system-ui, -apple-system, "Segoe UI",
   box-shadow: 0 14px 40px rgba(46, 33, 23, 0.16);
 }
 .view-more-panel .editor-status { text-align: right; }
+.view-more > .editor-btn[aria-expanded="true"] { background: var(--accent-deep); border-color: var(--accent-deep); }
 @container (max-width: 940px) {
   .view-inline { display: none !important; }
   .view-more { display: inline-flex; }

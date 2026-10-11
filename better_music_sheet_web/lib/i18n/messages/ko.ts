@@ -313,7 +313,6 @@ export const ko: Messages = {
 
   editor: {
     save: {
-      saved: "모든 변경 사항이 저장되었습니다",
       saving: "저장하는 중…",
       offline: "오프라인 - 다시 연결되면 변경 사항이 저장됩니다",
       error: "아직 저장하지 못했습니다 - 다시 시도하는 중",
