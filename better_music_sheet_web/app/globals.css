@@ -1137,6 +1137,8 @@ textarea.sheet-inline-input { font-family: system-ui, -apple-system, "Segoe UI",
 .admin-caret { display: inline-block; width: 16px; color: var(--ink-soft); }
 .admin-expanded > td { background: var(--paper); padding: 12px; }
 .admin-expanded .admin-table-wrap { border-radius: 10px; }
+.admin-subheading { font-size: 14px; font-weight: 600; margin: 0 0 8px; }
+.admin-expanded .admin-sub + .admin-subheading, .admin-expanded .admin-table-wrap + .admin-subheading { margin-top: 18px; }
 .admin-sub { font-size: 12px; color: var(--ink-soft); margin-top: 2px; }
 .admin-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; word-break: break-all; }
 .admin-error-text { color: var(--danger); font-size: 13px; }

@@ -280,3 +280,61 @@ def cancel_subscription():
                    "Apple ID settings. Open Subscriptions there and choose Cancel Subscription.",
         "url": MANAGE_SUBSCRIPTIONS_URL,
     })
+
+
+# Apple answers transaction history 20 at a time. A sandbox subscription
+# renews every few minutes, so its history can run long; this is plenty for
+# a real one (40 years of monthly renewals).
+_HISTORY_PAGES = 25
+
+
+def _payment(transaction):
+    """One Apple transaction as the admin dashboard lists it, or None for one
+    that cost nothing - a free trial."""
+    price = transaction.get("price") or 0
+    if not price:
+        return None
+    revoked = transaction.get("revocationDate")
+    product = transaction.get("productId")
+    return {
+        "id": transaction.get("transactionId"),
+        "platform": "apple",
+        "paid_at": _timestamp(transaction.get("purchaseDate")),
+        "created_at": _timestamp(transaction.get("purchaseDate")),
+        # Apple prices are in thousandths of the currency, whatever it is.
+        "amount": price / 1000,
+        # A refund through Apple is always the whole transaction.
+        "refunded": price / 1000 if revoked else 0,
+        "currency": (transaction.get("currency") or "USD").lower(),
+        "status": "refunded" if revoked else "paid",
+        "plan": "monthly" if product == APPLE_PRODUCT_MONTHLY else "yearly" if product == APPLE_PRODUCT_YEARLY else None,
+        # Apple's history can't tell a switch between products from a
+        # resubscription (both are a PURCHASE); `plan` shows which it was.
+        "plan_change": False,
+        "period_start": _timestamp(transaction.get("purchaseDate")),
+        "period_end": _timestamp(transaction.get("expiresDate")),
+    }
+
+
+def payments(original_transaction_id):
+    """What the subscription has been charged through Apple, newest first
+    (Get Transaction History). Apple keeps the history per Apple ID, so only
+    this subscription's own transactions are kept."""
+    rows, revision = [], None
+    for _ in range(_HISTORY_PAGES):
+        path = (f"/inApps/v2/history/{quote(str(original_transaction_id), safe='')}"
+                f"?productType=AUTO_RENEWABLE&sort=DESCENDING")
+        if revision:
+            path += f"&revision={quote(str(revision), safe='')}"
+        page = _apple_get(path)
+        for signed in page.get("signedTransactions") or []:
+            transaction = _decode_jws(signed, "transaction")
+            if transaction.get("originalTransactionId") == original_transaction_id:
+                row = _payment(transaction)
+                if row:
+                    rows.append(row)
+        revision = page.get("revision")
+        if not page.get("hasMore") or not revision:
+            break
+    rows.sort(key=lambda row: row["paid_at"] or 0, reverse=True)
+    return rows

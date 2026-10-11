@@ -30,6 +30,36 @@ export type AdminUser = {
   last_upload_at: number | null;
 };
 
+/** One charge for a subscription, as the store that billed it has it. */
+export type AdminPayment = {
+  id: string;
+  platform: "stripe" | "apple";
+  /** Null for a charge that hasn't been paid (see status). */
+  paid_at: number | null;
+  created_at: number | null;
+  /** In the currency's own units - dollars, not cents. */
+  amount: number;
+  refunded: number;
+  /** Lower-case ISO code, e.g. "usd". */
+  currency: string;
+  /** "unpaid": a renewal still awaiting payment, or one the store gave up on. */
+  status: "paid" | "refunded" | "unpaid";
+  plan: "monthly" | "yearly" | null;
+  /** A prorated charge for moving between plans. */
+  plan_change: boolean;
+  /** The time this charge pays for. */
+  period_start: number | null;
+  period_end: number | null;
+};
+
+export type AdminPayments = {
+  payments: AdminPayment[];
+  /** Parts of the history that couldn't be read. */
+  notes: string[];
+  /** The store couldn't be read at all. */
+  error: string | null;
+};
+
 /** Where a subscription stands; each one is in exactly one state. */
 export type AdminSubscriptionState = "active" | "trial" | "canceling" | "past_due" | "canceled";
 

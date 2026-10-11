@@ -261,6 +261,30 @@ def user_uploads(user_id: str):
     return [_job_view(job, names) for job in db.list_annotation_jobs(user_id)]
 
 
+@router.get("/users/{user_id}/payments")
+def user_payments(user_id: str):
+    """What the account has paid for its subscription, newest first, read
+    from the store that billed it - so a refund or a failed renewal shows as
+    the store has it. Nothing is asked of a store for an account that never
+    subscribed. A store that can't be read is `error`, not a failed request,
+    so the rest of the expanded row still shows."""
+    subscription = db.get_subscription(user_id)
+    if subscription is None or not subscription.get("subscription_id"):
+        return {"payments": [], "notes": [], "error": None}
+    try:
+        # Imported here: a missing billing library or setting shouldn't take
+        # the rest of the dashboard down with it.
+        if subscription.get("platform") == "apple":
+            import apple_billing
+            rows, notes = apple_billing.payments(subscription["subscription_id"]), []
+        else:
+            import stripe_billing
+            rows, notes = stripe_billing.payments(user_id, subscription.get("subscription_id"))
+    except HTTPException as exc:
+        return {"payments": [], "notes": [], "error": str(exc.detail)}
+    return {"payments": rows, "notes": notes, "error": None}
+
+
 MB = 1024 * 1024
 SIZES = {"small": (0, MB), "medium": (MB, 10 * MB), "large": (10 * MB, float("inf"))}
 

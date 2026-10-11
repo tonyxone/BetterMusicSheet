@@ -3,11 +3,13 @@
 The part that matters most is the first test class: to anyone but an admin,
 every admin route must look exactly like a route that doesn't exist.
 """
+import base64
 import importlib
+import json
 import sys
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -16,6 +18,8 @@ import auth
 import config
 import db
 import server
+import stripe_billing
+from stripe.error import APIConnectionError, InvalidRequestError
 
 ADMIN = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 MEMBER = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
@@ -23,6 +27,7 @@ GUEST = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 SUBSCRIBER = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 
 ROUTES = ["/api/admin/me", "/api/admin/overview", "/api/admin/users", f"/api/admin/users/{MEMBER}/uploads",
+          f"/api/admin/users/{MEMBER}/payments",
           "/api/admin/uploads", "/api/admin/uploads?status=failed", "/api/admin/subscriptions", "/api/admin/system",
           "/api/admin/uploads/member-done/files", "/api/admin/uploads/member-done/file/input"]
 
@@ -270,6 +275,153 @@ class IsolationTests(AdminTestCase):
     def test_an_unreadable_apple_revocation_date_never_fails_a_sync(self):
         self.assertEqual(apple_billing._ended_at({"revocationDate": "junk"}, 100), 100)
         self.assertIsNone(apple_billing._ended_at({"revocationDate": "junk"}, None))
+
+
+def invoice(invoice_id, status, amount, created, period, reason="subscription_cycle", price="price_monthly",
+            refunded=0):
+    """A Stripe invoice the way Invoice.list returns it, charge expanded."""
+    paid = status == "paid"
+    return {"id": invoice_id, "status": status, "amount_due": amount, "amount_paid": amount if paid else 0,
+            "currency": "usd", "created": created, "billing_reason": reason,
+            "status_transitions": {"paid_at": created + 3600 if paid else None},
+            "charge": {"id": f"ch_{invoice_id}", "amount_refunded": refunded} if paid else None,
+            "customer_email": "sub@example.com",
+            "lines": {"data": [{"period": {"start": period[0], "end": period[1]}, "price": {"id": price}}]}}
+
+
+def listing(items):
+    found = MagicMock()
+    found.auto_paging_iter.return_value = iter(items)
+    return found
+
+
+def signed(payload):
+    encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
+    return f"header.{encoded}.signature"
+
+
+class PaymentTests(AdminTestCase):
+    def payments(self, user_id=SUBSCRIBER):
+        response = self.client.get(f"/api/admin/users/{user_id}/payments", headers=token(ADMIN))
+        self.assertEqual(response.status_code, 200)
+        return response.json()
+
+    def stripe(self, invoices_by_subscription, searched=("sub_old", "sub_new")):
+        mocked = MagicMock()
+        mocked.Subscription.search.return_value = listing([{"id": sid} for sid in searched])
+
+        def invoices(subscription, **_):
+            found = invoices_by_subscription[subscription]
+            if isinstance(found, Exception):
+                raise found
+            return listing(found)
+        mocked.Invoice.list.side_effect = invoices
+        settings = patch.multiple(stripe_billing, STRIPE_SECRET_KEY="sk_test_x",
+                                  STRIPE_PRICE_MONTHLY="price_monthly", STRIPE_PRICE_YEARLY="price_yearly")
+        settings.start()
+        self.addCleanup(settings.stop)
+        patcher = patch.object(stripe_billing, "stripe", mocked)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return mocked
+
+    def test_every_paid_month_across_every_stripe_subscription_newest_first(self):
+        db.upsert_subscription(SUBSCRIBER, "active", "monthly", "stripe", self.now - 10, self.now + 1000, False,
+                               subscription_id="sub_new")
+        day = 86400
+        old, new = self.now - 100 * day, self.now - 40 * day
+        mocked = self.stripe({
+            "sub_old": [invoice("in_old_trial", "paid", 0, old, (old, old + 7 * day), reason="subscription_create"),
+                        invoice("in_old_1", "paid", 199, old + 7 * day, (old + 7 * day, old + 37 * day),
+                                refunded=199)],
+            "sub_new": [invoice("in_new_2", "open", 199, new + 30 * day, (new + 30 * day, new + 60 * day)),
+                        invoice("in_new_1", "paid", 199, new, (new, new + 30 * day), refunded=50),
+                        invoice("in_new_up", "paid", 1500, new + day, (new + day, new + 30 * day),
+                                reason="subscription_update", price="price_yearly"),
+                        invoice("in_draft", "draft", 199, new + 60 * day, (0, 0))],
+        })
+        body = self.payments()
+        self.assertEqual(body["error"], None)
+        rows = body["payments"]
+        # The $0 trial and the draft aren't payments; the rest come newest first.
+        self.assertEqual([r["id"] for r in rows], ["in_new_2", "in_new_up", "in_new_1", "in_old_1"])
+        self.assertEqual([(r["amount"], r["refunded"], r["status"]) for r in rows],
+                         [(1.99, 0, "unpaid"), (15.0, 0, "paid"), (1.99, 0.5, "paid"), (1.99, 1.99, "refunded")])
+        self.assertEqual([(r["plan"], r["plan_change"]) for r in rows],
+                         [("monthly", False), ("yearly", True), ("monthly", False), ("monthly", False)])
+        self.assertEqual((rows[2]["paid_at"], rows[2]["period_start"], rows[2]["period_end"]),
+                         (new + 3600, new, new + 30 * day))
+        self.assertIsNone(rows[0]["paid_at"])
+        self.assertEqual(mocked.Subscription.search.call_args.kwargs["query"], f"metadata['user_id']:'{SUBSCRIBER}'")
+        self.assertNotIn("sub@example.com", json.dumps(body))
+
+    def test_the_recorded_subscription_counts_before_search_finds_it(self):
+        db.upsert_subscription(SUBSCRIBER, "trialing", "monthly", "stripe", self.now, self.now + 1000, False,
+                               subscription_id="sub_just_now")
+        self.stripe({"sub_just_now": [invoice("in_1", "paid", 199, self.now, (self.now, self.now + 1))]},
+                    searched=())
+        self.assertEqual([r["id"] for r in self.payments()["payments"]], ["in_1"])
+
+    def test_a_subscription_stripe_cannot_see_is_a_note(self):
+        # e.g. a test-mode subscription recorded in the production table.
+        db.upsert_subscription(SUBSCRIBER, "trialing", "monthly", "stripe", self.now, self.now + 1000, False,
+                               subscription_id="sub_test_mode")
+        self.stripe({"sub_test_mode": InvalidRequestError("No such subscription", "subscription")}, searched=())
+        with self.assertLogs("stripe_billing", "WARNING"):
+            body = self.payments()
+        self.assertEqual(body["payments"], [])
+        self.assertIn("sub_test_mode", body["notes"][0])
+
+    def test_stripe_unreachable_is_an_error_in_the_answer(self):
+        db.upsert_subscription(SUBSCRIBER, "active", "monthly", "stripe", self.now, self.now + 1000, False,
+                               subscription_id="sub_new")
+        mocked = self.stripe({})
+        mocked.Subscription.search.side_effect = APIConnectionError("down")
+        with self.assertLogs("stripe_billing", "WARNING"):
+            body = self.payments()
+        self.assertEqual(body["payments"], [])
+        self.assertIn("couldn't reach Stripe", body["error"])
+
+    def test_an_account_that_never_subscribed_asks_no_store(self):
+        mocked = self.stripe({})
+        self.assertEqual(self.payments(MEMBER), {"payments": [], "notes": [], "error": None})
+        mocked.Subscription.search.assert_not_called()
+
+    def test_apple_payments_come_from_its_transaction_history(self):
+        db.upsert_subscription(SUBSCRIBER, "expired", "monthly", "apple", self.now - 10, self.now - 5, False,
+                               subscription_id="1000")
+        ms = 1000
+
+        def transaction(tid, price, when, original="1000", **extra):
+            return signed({"transactionId": tid, "originalTransactionId": original, "price": price,
+                           "currency": "USD", "productId": "apple_monthly", "purchaseDate": when * ms,
+                           "expiresDate": (when + 30 * 86400) * ms, **extra})
+        pages = [
+            {"signedTransactions": [transaction("1003", 1990, self.now - 10, revocationDate=self.now * ms),
+                                    transaction("2001", 1990, self.now - 20, original="2000")],
+             "hasMore": True, "revision": "next"},
+            {"signedTransactions": [transaction("1002", 1990, self.now - 40 * 86400),
+                                    transaction("1000", 0, self.now - 47 * 86400, offerType=1)],
+             "hasMore": False, "revision": "end"},
+        ]
+        products = patch.multiple(apple_billing, APPLE_PRODUCT_MONTHLY="apple_monthly",
+                                  APPLE_PRODUCT_YEARLY="apple_yearly")
+        with products, patch.object(apple_billing, "_apple_get", side_effect=pages) as get:
+            rows = self.payments()["payments"]
+        # Another subscription on the same Apple ID and the free trial are left out.
+        self.assertEqual([(r["id"], r["amount"], r["status"], r["plan"]) for r in rows],
+                         [("1003", 1.99, "refunded", "monthly"), ("1002", 1.99, "paid", "monthly")])
+        self.assertEqual(rows[1]["paid_at"], self.now - 40 * 86400)
+        self.assertIn("/inApps/v2/history/1000?", get.call_args_list[0].args[0])
+        self.assertIn("revision=next", get.call_args_list[1].args[0])
+
+    def test_apple_unreachable_is_an_error_in_the_answer(self):
+        db.upsert_subscription(SUBSCRIBER, "active", "monthly", "apple", self.now, self.now + 5, False,
+                               subscription_id="1000")
+        failure = apple_billing.HTTPException(502, "Apple App Store Server API request failed (HTTP 500).")
+        with patch.object(apple_billing, "_apple_get", side_effect=failure):
+            body = self.payments()
+        self.assertEqual((body["payments"], body["error"]), ([], failure.detail))
 
 
 if __name__ == "__main__":
