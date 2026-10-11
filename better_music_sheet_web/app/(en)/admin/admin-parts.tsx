@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { adminGet, openUploadFile, type AdminSubscription, type AdminUpload } from "@/lib/admin";
+import { adminGet, openUploadFile, type AdminPayment, type AdminSubscription, type AdminUpload } from "@/lib/admin";
 
 /** Load an admin route; `reload` fetches it again. While reloading, the last
  * answer stays on screen rather than blanking the tab. */
@@ -38,6 +38,20 @@ export function duration(seconds: number | null | undefined) {
 export function bytes(value: number | null | undefined) {
   if (!value) return "—";
   return value < 1024 * 1024 ? `${Math.max(1, Math.round(value / 1024))} KB` : `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+export function money(amount: number, currency: string) {
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency: currency.toUpperCase() }).format(amount);
+  } catch {
+    // An unknown code - show it as is rather than fail the row.
+    return `${amount} ${currency.toUpperCase()}`;
+  }
+}
+
+/** A day, without the time - for the span a payment covers. */
+function day(value: number | null | undefined) {
+  return value ? new Date(value * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "—";
 }
 
 export type Tone = "good" | "bad" | "warn" | "info" | "muted";
@@ -138,6 +152,65 @@ export function UploadsTable({ uploads, showOwner = false, filterRow }: {
       </table>
       {!uploads.length && <p className="admin-sub admin-empty">No uploads match.</p>}
     </div>
+  );
+}
+
+function PaymentStatus({ payment }: { payment: AdminPayment }) {
+  if (payment.status === "refunded") return <Badge tone="muted">Refunded</Badge>;
+  if (payment.status === "unpaid") return <Badge tone="bad">Unpaid</Badge>;
+  return (
+    <>
+      <Badge tone="good">Paid</Badge>
+      {payment.refunded > 0 && <div className="admin-sub">{money(payment.refunded, payment.currency)} refunded</div>}
+    </>
+  );
+}
+
+/** What each currency adds up to once refunds are taken off. */
+function netTotals(payments: AdminPayment[]) {
+  const totals = new Map<string, number>();
+  for (const p of payments) {
+    if (p.status === "unpaid") continue;
+    totals.set(p.currency, (totals.get(p.currency) ?? 0) + p.amount - p.refunded);
+  }
+  return [...totals].map(([currency, amount]) => money(amount, currency)).join(" + ");
+}
+
+/** Every charge for one account's subscription, newest first. */
+export function PaymentsTable({ payments }: { payments: AdminPayment[] }) {
+  if (!payments.length) return <p className="admin-sub">No payments yet.</p>;
+  const paid = payments.filter((p) => p.status !== "unpaid").length;
+  return (
+    <>
+      <div className="admin-table-wrap">
+        <table className="admin-table">
+          <thead>
+            <tr><th>Paid</th><th className="num">Amount</th><th>Plan</th><th>Source</th><th>Covers</th><th>Status</th></tr>
+          </thead>
+          <tbody>
+            {payments.map((p) => (
+              <tr key={p.id}>
+                <td className="nowrap">
+                  {date(p.paid_at ?? p.created_at)}
+                  {!p.paid_at && <div className="admin-sub">Billed, not paid</div>}
+                </td>
+                <td className="num nowrap">{money(p.amount, p.currency)}</td>
+                <td className="nowrap">
+                  {p.plan === "yearly" ? "Yearly" : p.plan === "monthly" ? "Monthly" : "—"}
+                  {p.plan_change && <div className="admin-sub">Plan change, prorated</div>}
+                </td>
+                <td className="nowrap">{p.platform === "apple" ? "Apple" : "Stripe"}</td>
+                <td className="nowrap">{day(p.period_start)} – {day(p.period_end)}</td>
+                <td><PaymentStatus payment={p} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="admin-sub">
+        {paid} {paid === 1 ? "payment" : "payments"}{paid ? ` · ${netTotals(payments)} in total` : ""}
+      </p>
+    </>
   );
 }
 

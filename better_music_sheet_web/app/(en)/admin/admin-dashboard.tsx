@@ -4,10 +4,10 @@ import { Fragment, useEffect, useState } from "react";
 import { useAuth } from "../../auth-context";
 import { clientApiFetch } from "@/lib/client-api";
 import type {
-  AdminOverview, AdminPage, AdminSubscriptionState, AdminSubscriptions, AdminSystem, AdminUpload, AdminUploads, AdminUser,
+  AdminOverview, AdminPage, AdminPayments, AdminSubscriptionState, AdminSubscriptions, AdminSystem, AdminUpload, AdminUploads, AdminUser,
 } from "@/lib/admin";
 import {
-  Badge, LoadState, Pager, SubscriptionBadge, UploadsTable, date, duration, useAdminData, type Tone,
+  Badge, LoadState, Pager, PaymentsTable, SubscriptionBadge, UploadsTable, date, duration, useAdminData, type Tone,
 } from "./admin-parts";
 
 const TABS = [
@@ -141,6 +141,19 @@ function UserUploads({ userId }: { userId: string }) {
   return <UploadsTable uploads={data} />;
 }
 
+function UserPayments({ userId }: { userId: string }) {
+  const { data, error, loading } = useAdminData<AdminPayments>(`/users/${encodeURIComponent(userId)}/payments`);
+  const failure = error ?? data?.error;
+  if (failure) return <p className="admin-error-text">{failure}</p>;
+  if (!data) return <p className="admin-sub">{loading ? "Loading payments…" : ""}</p>;
+  return (
+    <>
+      <PaymentsTable payments={data.payments} />
+      {data.notes.map((note) => <p key={note} className="admin-sub">{note}</p>)}
+    </>
+  );
+}
+
 const WITHIN: Option[] = [
   { id: "", label: "Any time" },
   { id: "1", label: "Last 24 hours" },
@@ -263,7 +276,17 @@ function UsersTab() {
                     </tr>
                     {expanded && (
                       <tr className="admin-expanded">
-                        <td colSpan={6}><UserUploads userId={u.user_id} /></td>
+                        <td colSpan={6}>
+                          {/* Only an account that has subscribed has a store to ask. */}
+                          {s && (
+                            <>
+                              <h3 className="admin-subheading">Payments</h3>
+                              <UserPayments userId={u.user_id} />
+                              <h3 className="admin-subheading">Uploads</h3>
+                            </>
+                          )}
+                          <UserUploads userId={u.user_id} />
+                        </td>
                       </tr>
                     )}
                   </Fragment>

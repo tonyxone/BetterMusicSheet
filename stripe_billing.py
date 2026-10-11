@@ -4,6 +4,7 @@ Configuration is checked at the point of use so an API instance can serve
 non-billing routes without Stripe credentials configured.
 """
 import logging
+import re
 import time
 
 import stripe
@@ -294,3 +295,94 @@ def _ended_in_stripe(subscription_id):
     except StripeError:
         return None
     return current if _value(current, "status") in ("canceled", "incomplete_expired") else None
+
+
+# Stripe counts most currencies in hundredths, these in whole units, and these
+# in thousandths (https://docs.stripe.com/currencies#zero-decimal).
+_ZERO_DECIMAL = {"bif", "clp", "djf", "gnf", "jpy", "kmf", "krw", "mga", "pyg", "rwf", "ugx", "vnd", "vuv",
+                 "xaf", "xof", "xpf"}
+_THREE_DECIMAL = {"bhd", "jod", "kwd", "omr", "tnd"}
+# Why an invoice was raised. A plan change is a prorated top-up, so the
+# dashboard marks it; the rest are just the subscription billing as usual.
+_PLAN_CHANGE = "subscription_update"
+_SEARCHABLE_ID = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _major(amount, currency):
+    digits = 0 if currency in _ZERO_DECIMAL else 3 if currency in _THREE_DECIMAL else 2
+    return (amount or 0) / 10 ** digits
+
+
+def _payment(invoice, prices):
+    """One invoice as the admin dashboard lists it, or None for one that
+    never asked for money: a free trial's $0 invoice, a draft, a voided one."""
+    status = _value(invoice, "status")
+    due, paid = _value(invoice, "amount_due", 0), _value(invoice, "amount_paid", 0)
+    if status in ("draft", "void") or not (due or paid):
+        return None
+    currency = _value(invoice, "currency", "usd")
+    charge = _value(invoice, "charge")
+    # Expanded, the charge says how much went back; a bare id says nothing.
+    refunded = _value(charge, "amount_refunded", 0) if not isinstance(charge, str) else 0
+    lines = _value(_value(invoice, "lines", {}), "data", [])
+    starts = [_value(_value(line, "period", {}), "start") for line in lines]
+    ends = [_value(_value(line, "period", {}), "end") for line in lines]
+    price_ids = [_value(_value(line, "price", {}), "id") for line in lines]
+    plan = next((plan for plan, price in prices.items() if price in price_ids), None)
+    if status == "paid":
+        state = "refunded" if paid and refunded >= paid else "paid"
+    else:
+        # open (awaiting payment or a retry) or uncollectible (gave up).
+        state = "unpaid"
+    return {
+        "id": _value(invoice, "id"),
+        "platform": "stripe",
+        "paid_at": _value(_value(invoice, "status_transitions", {}), "paid_at") if status == "paid" else None,
+        "created_at": _value(invoice, "created"),
+        "amount": _major(paid if status == "paid" else due, currency),
+        "refunded": _major(refunded, currency),
+        "currency": currency,
+        "status": state,
+        "plan": plan,
+        "plan_change": _value(invoice, "billing_reason") == _PLAN_CHANGE,
+        "period_start": min((s for s in starts if s), default=None),
+        "period_end": max((e for e in ends if e), default=None),
+    }
+
+
+def payments(user_id, subscription_id=None):
+    """What the account has been charged through Stripe, newest first, plus
+    notes on anything that couldn't be read.
+
+    Every Stripe subscription the account has had counts, not just the one
+    on record: a subscriber who left and came back has two. They are found by
+    the user_id each carries in its metadata (see create_checkout). Search
+    lags new subscriptions by about a minute, so the recorded one is added if
+    it hasn't shown up yet."""
+    _configure_api()
+    # Only to name each payment's plan; a missing price just leaves it blank.
+    prices = {plan: price for plan, price in (("monthly", STRIPE_PRICE_MONTHLY), ("yearly", STRIPE_PRICE_YEARLY))
+              if price}
+    notes = []
+    try:
+        ids = []
+        if _SEARCHABLE_ID.match(user_id):
+            found = stripe.Subscription.search(query=f"metadata['user_id']:'{user_id}'", limit=100)
+            ids = [_value(s, "id") for s in found.auto_paging_iter()]
+        if subscription_id and subscription_id not in ids:
+            ids.append(subscription_id)
+        rows = []
+        for sid in ids:
+            try:
+                invoices = stripe.Invoice.list(subscription=sid, limit=100, expand=["data.charge"])
+                rows.extend(row for row in (_payment(inv, prices) for inv in invoices.auto_paging_iter()) if row)
+            except InvalidRequestError as exc:
+                # Typically a test-mode subscription recorded by a local
+                # server sharing the production table - the live key can't
+                # see it.
+                logger.warning("Stripe could not list invoices for %s: %s", sid, exc)
+                notes.append(f"Stripe has no subscription {sid} under this key (a test-mode one, perhaps).")
+    except StripeError as exc:
+        raise _stripe_failed("list payments", exc) from exc
+    rows.sort(key=lambda row: row["paid_at"] or row["created_at"] or 0, reverse=True)
+    return rows, notes
