@@ -115,6 +115,20 @@ class DashboardDataTests(AdminTestCase):
         self.assertEqual(uploads[2]["sheet_name"], "member-done.pdf")
         self.assertEqual(uploads[2]["seconds"], 60)
 
+    def test_processing_time_ends_when_the_job_finished_not_when_it_was_last_touched(self):
+        """A republish, a review note or a delete moves updated_at hours or
+        days after the job ended; the time column once showed that gap."""
+        queued = self.now - 86400
+        add_job(self, "republished", MEMBER, "done", queued, queued_at=queued, finished_at=queued + 150,
+                updated_at=queued + 11 * 3600, republished_at=queued + 11 * 3600)
+        uploads = {u["job_id"]: u for u in self.get(f"/api/admin/users/{MEMBER}/uploads")}
+        self.assertEqual(uploads["republished"]["seconds"], 150)
+        self.assertEqual(uploads["republished"]["republished_at"], queued + 11 * 3600)
+        # A row from before finished_at existed still reads updated_at.
+        self.assertEqual(uploads["member-done"]["seconds"], 60)
+        # The overview's median is the same figure.
+        self.assertEqual(self.get("/api/admin/overview")["uploads"]["median_seconds_30d"], 60)
+
     def test_uploads_filter_and_mark_guests_but_never_list_the_demo(self):
         everything = self.get("/api/admin/uploads")["items"]
         self.assertNotIn("demo", [u["job_id"] for u in everything])

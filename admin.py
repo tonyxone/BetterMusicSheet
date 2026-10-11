@@ -76,8 +76,20 @@ def _subscription_view(subscription, now):
     }
 
 
+def processing_seconds(job):
+    """Queue to finish, so it includes waiting for a worker to start; None
+    until the job is done. Ends at finished_at, set once when the job ended -
+    updated_at moves again with every later touch (a review note, a hand
+    republish, a delete), which once showed day-old sheets as 9-13 hour
+    jobs. Rows from before finished_at existed fall back to updated_at."""
+    queued = job.get("queued_at")
+    ended = job.get("finished_at") or job.get("updated_at")
+    if job.get("status") != "done" or not queued or not ended:
+        return None
+    return max(ended - queued, 0)
+
+
 def _job_view(job, sheet_names, accounts=None):
-    queued, updated = job.get("queued_at"), job.get("updated_at")
     view = {
         "job_id": job["job_id"],
         "user_id": job["user_id"],
@@ -87,9 +99,9 @@ def _job_view(job, sheet_names, accounts=None):
         "error": job.get("error"),
         "review_reasons": job.get("review_reasons"),
         "created_at": job.get("created_at"),
-        "updated_at": updated,
-        # Queue to finish, so it includes waiting for a worker to start.
-        "seconds": updated - queued if job.get("status") == "done" and queued and updated else None,
+        "updated_at": job.get("updated_at"),
+        "republished_at": job.get("republished_at"),
+        "seconds": processing_seconds(job),
         "size": job.get("size"),
         "attempts": job.get("attempt_count"),
         "region": storage.job_region(job) if config.IS_PRODUCTION else None,
@@ -136,7 +148,7 @@ def overview():
     recent = [j for j in jobs if (j.get("created_at") or 0) >= now - 30 * DAY]
     done = [j for j in recent if j.get("status") == "done"]
     failed = [j for j in recent if j.get("status") == "failed"]
-    seconds = [j["updated_at"] - j["queued_at"] for j in done if j.get("queued_at") and j.get("updated_at")]
+    seconds = [s for s in (processing_seconds(j) for j in done) if s is not None]
     premium = [s for s in subscriptions if s["premium"]]
     return {
         "users": {
