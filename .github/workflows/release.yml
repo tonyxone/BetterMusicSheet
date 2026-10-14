@@ -82,9 +82,27 @@ jobs:
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Fetch Audiveris (Linux build)
+        env:
+          # The folder holding the one build to ship, e.g. s3://audiveris/.
+          # It holds exactly one tarball, named for its version; earlier
+          # builds are moved into its archive/ folder, which this never reads.
+          FOLDER: ${{ vars.AUDIVERIS_S3_URI }}
         run: |
+          location="${FOLDER#s3://}"
+          bucket="${location%%/*}"
+          prefix="${location#"$bucket"}"
+          prefix="${prefix#/}"
+          builds=$(aws s3api list-objects-v2 --bucket "$bucket" --prefix "$prefix" --delimiter / \
+            --query "Contents[?ends_with(Key, '.tar.gz')].Key" --output text)
+          # The CLI prints "None" for no match.
+          [ "$builds" = None ] && builds=
+          if [ "$(wc -w <<<"$builds")" != 1 ]; then
+            echo "Expected exactly one Audiveris build in $FOLDER, found: ${builds:-none}"
+            exit 1
+          fi
           mkdir -p tools/Audiveris/Audiveris/app
-          aws s3 cp "${{ vars.AUDIVERIS_S3_URI }}" - | tar xz -C tools/Audiveris/Audiveris/app
+          aws s3 cp "s3://$bucket/$builds" - | tar xz -C tools/Audiveris/Audiveris/app
+          echo "Audiveris: s3://$bucket/$builds" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build and push image
         id: image

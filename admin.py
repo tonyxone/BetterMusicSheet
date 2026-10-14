@@ -6,23 +6,30 @@ listed in the admin table (see db.is_admin). A visitor, a guest, an expired
 or forged token and an ordinary account all get the same answer, so nothing
 here even confirms the dashboard exists.
 
-Read-only on purpose: nothing here changes a user, a job or a subscription.
+Read-only on purpose, with one exception: an admin may have a sheet read
+again (reprocess.py), which passes the new reading on to every sheet made
+from the same file. Nothing here changes a user or a subscription, and no
+reader's own edits are ever touched.
+
 People appear by user id only (owner decision): no name or email is shown,
 returned or even read for it - see db.all_accounts.
 And isolated: an error in any route here is that one request's 500, and
 server.py still serves everything else if this module can't even be loaded.
 """
+import json
 import os
 import statistics
 import time
 import traceback
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Body, Depends, Header, HTTPException
 from fastapi.responses import FileResponse
 
 import config
 import db
+import reprocess
+import republish
 import storage
 from auth import get_signed_in_user_id
 
@@ -76,8 +83,33 @@ def _subscription_view(subscription, now):
     }
 
 
-def _job_view(job, sheet_names, accounts=None):
-    queued, updated = job.get("queued_at"), job.get("updated_at")
+def _reprocess_view(job):
+    """How the admin's last request to read this sheet again went (see
+    reprocess.py), or None if there never was one."""
+    if not job.get("reprocess_state"):
+        return None
+    result = job.get("reprocess_result") or {}
+    return {
+        "state": job["reprocess_state"],
+        "requested_at": job.get("reprocess_requested_at"),
+        "finished_at": job.get("reprocess_finished_at"),
+        "error": job.get("reprocess_error"),
+        # The other sheets made from the same file, and how each was updated.
+        "updated": result.get("updated") or [],
+        "failed": result.get("failed") or [],
+    }
+
+
+def _seconds(job):
+    """Queue to finish, so it includes waiting for a worker to start. From
+    finished_at: a review note or a republish moves updated_at later, so a
+    republished job from before finished_at was recorded has no time."""
+    queued = job.get("queued_at")
+    finished = job.get("finished_at") or (None if job.get("republished_at") else job.get("updated_at"))
+    return finished - queued if job.get("status") == "done" and queued and finished else None
+
+
+def _job_view(job, sheet_names, accounts=None, copies=None):
     view = {
         "job_id": job["job_id"],
         "user_id": job["user_id"],
@@ -87,13 +119,18 @@ def _job_view(job, sheet_names, accounts=None):
         "error": job.get("error"),
         "review_reasons": job.get("review_reasons"),
         "created_at": job.get("created_at"),
-        "updated_at": updated,
-        # Queue to finish, so it includes waiting for a worker to start.
-        "seconds": updated - queued if job.get("status") == "done" and queued and updated else None,
+        "updated_at": job.get("updated_at"),
+        "seconds": _seconds(job),
         "size": job.get("size"),
         "attempts": job.get("attempt_count"),
         "region": storage.job_region(job) if config.IS_PRODUCTION else None,
+        "republished_at": job.get("republished_at"),
+        "reprocess": _reprocess_view(job),
     }
+    if copies is not None:
+        # Other sheets still made from the same file: who reading this one
+        # again would also update.
+        view["copies"] = max(0, copies.get(job.get("content_sha256"), 0) - 1) if job.get("content_sha256") else 0
     if accounts is not None:
         # Only signed-in accounts have a users row (see db.py).
         view["guest"] = job["user_id"] not in accounts
@@ -118,6 +155,16 @@ def _matching(user_id, q):
     return not q or q.strip().lower() in user_id.lower()
 
 
+def _copies(jobs):
+    """How many sheets still there were made from each file, by its hash."""
+    counts = {}
+    for job in jobs:
+        digest = job.get("content_sha256")
+        if digest and job.get("status") not in REMOVED:
+            counts[digest] = counts.get(digest, 0) + 1
+    return counts
+
+
 def _sheet_names():
     return {sheet["music_sheet_id"]: sheet.get("sheet_name") for sheet in db.all_music_sheets()}
 
@@ -136,7 +183,7 @@ def overview():
     recent = [j for j in jobs if (j.get("created_at") or 0) >= now - 30 * DAY]
     done = [j for j in recent if j.get("status") == "done"]
     failed = [j for j in recent if j.get("status") == "failed"]
-    seconds = [j["updated_at"] - j["queued_at"] for j in done if j.get("queued_at") and j.get("updated_at")]
+    seconds = [s for s in map(_seconds, done) if s is not None]
     premium = [s for s in subscriptions if s["premium"]]
     return {
         "users": {
@@ -258,7 +305,8 @@ def user_uploads(user_id: str):
     """Everything the account uploaded, newest first - deleted ones included,
     marked as such, since "they deleted it" is worth knowing too."""
     names = {s["music_sheet_id"]: s.get("sheet_name") for s in db.list_music_sheets(user_id)}
-    return [_job_view(job, names) for job in db.list_annotation_jobs(user_id)]
+    copies = _copies(db.all_annotation_jobs())
+    return [_job_view(job, names, copies=copies) for job in db.list_annotation_jobs(user_id)]
 
 
 @router.get("/users/{user_id}/payments")
@@ -316,8 +364,9 @@ def uploads(status: str = None, q: str = "", sheet: str = "", owner: str = "", s
     accounts = {u["user_id"] for u in db.all_accounts()}
     names = _sheet_names()
     jobs = []
+    copies = _copies(db.all_annotation_jobs())
     for job in _jobs():
-        view = _job_view(job, names, accounts)
+        view = _job_view(job, names, accounts, copies)
         low, high = SIZES.get(size, (0, float("inf")))
         if (not _matching(job["user_id"], q)
                 or (owner == "guest" and not view["guest"]) or (owner == "account" and view["guest"])
@@ -367,6 +416,35 @@ def upload_files(job_id: str):
     return {"direct": False,
             "original": f"/api/admin/uploads/{job_id}/file/input" if _local_file(job, "input") else None,
             "annotated": f"/api/admin/uploads/{job_id}/file/output" if done and _local_file(job, "output") else None}
+
+
+@router.post("/uploads/{job_id}/reprocess", status_code=202)
+def reprocess_upload(job_id: str, reason: str = Body("", embed=True, max_length=300),
+                     admin_id: str = Depends(require_admin)):
+    """Read a finished or failed sheet again with today's pipeline, and pass
+    the new reading on to every other sheet made from the same file. A
+    worker does it (reprocess.py); this only asks, and answers at once.
+    Every reader keeps their own edits. 409 when it can't be read again."""
+    try:
+        job = reprocess.request(job_id, admin_id, reason.strip() or None)
+    except republish.Refused as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if config.SERVERLESS:
+        try:
+            import boto3
+            boto3.client("sqs").send_message(QueueUrl=os.environ["JOB_QUEUE_URL"],
+                                             MessageBody=json.dumps(reprocess.message(job_id)))
+        except Exception as exc:
+            traceback.print_exc()
+            # Asked, but no worker will hear of it; let it be asked again.
+            import job_state
+            job_state.change(job_id, {"reprocess_owner": job["reprocess_owner"]}, reprocess_state="failed",
+                             reprocess_error="Couldn't reach the workers. Try again.")
+            raise HTTPException(503, "Couldn't reach the workers. Try again.") from exc
+    else:
+        import server
+        server.enqueue_local(("reprocess", job_id))
+    return _job_view(_job_or_404(job_id), _sheet_names(), copies=_copies(db.all_annotation_jobs()))
 
 
 def _local_file(job, kind):

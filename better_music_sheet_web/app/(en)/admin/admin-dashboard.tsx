@@ -7,7 +7,8 @@ import type {
   AdminOverview, AdminPage, AdminPayments, AdminSubscriptionState, AdminSubscriptions, AdminSystem, AdminUpload, AdminUploads, AdminUser,
 } from "@/lib/admin";
 import {
-  Badge, LoadState, Pager, PaymentsTable, SubscriptionBadge, UploadsTable, date, duration, useAdminData, type Tone,
+  Badge, LoadState, Pager, PaymentsTable, SubscriptionBadge, UploadsTable, date, duration, useAdminData,
+  useReloadWhileReprocessing, type Tone,
 } from "./admin-parts";
 
 const TABS = [
@@ -135,10 +136,11 @@ function OverviewTab() {
 }
 
 function UserUploads({ userId }: { userId: string }) {
-  const { data, error, loading } = useAdminData<AdminUpload[]>(`/users/${encodeURIComponent(userId)}/uploads`);
+  const { data, error, loading, reload } = useAdminData<AdminUpload[]>(`/users/${encodeURIComponent(userId)}/uploads`);
+  useReloadWhileReprocessing(data, reload);
   if (error) return <p className="admin-error-text">{error}</p>;
   if (!data) return <p className="admin-sub">{loading ? "Loading uploads…" : ""}</p>;
-  return <UploadsTable uploads={data} />;
+  return <UploadsTable uploads={data} onChanged={reload} />;
 }
 
 function UserPayments({ userId }: { userId: string }) {
@@ -415,6 +417,7 @@ const UPLOAD_FILTERS = ["since", "sheet", "q", "owner", "status", "min_seconds",
 function UploadsTab() {
   const { filters, set, any, clear, setPage, query: search } = useFilters(UPLOAD_FILTERS);
   const { data, error, loading, reload } = useAdminData<AdminUploads>(`/uploads${search}`);
+  useReloadWhileReprocessing(data?.items, reload);
   const filterRow = (
     <tr className="admin-filter-row">
       <th><ColumnSelect label="upload time" value={filters.since} options={WITHIN} onChange={set("since")} /></th>
@@ -443,7 +446,7 @@ function UploadsTab() {
           ))}
         </div>
       )}
-      {data && <UploadsTable uploads={data.items} showOwner filterRow={filterRow} />}
+      {data && <UploadsTable uploads={data.items} showOwner filterRow={filterRow} onChanged={reload} />}
       {data && <Pager page={data.page} pages={data.pages} total={data.total} noun="uploads" onPage={setPage} />}
     </section>
   );

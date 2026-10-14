@@ -28,6 +28,13 @@ data "aws_iam_policy_document" "github_deploy" {
     actions   = ["s3:GetObject"]
     resources = ["arn:aws:s3:::audiveris/*"]
   }
+  # The release takes the one build at the top of the bucket, whatever
+  # version it is named for, so it has to list the bucket to find it.
+  statement {
+    sid       = "FindAudiverisBundle"
+    actions   = ["s3:ListBucket"]
+    resources = ["arn:aws:s3:::audiveris"]
+  }
   statement {
     sid       = "PublishWebUi"
     actions   = ["s3:PutObject", "s3:DeleteObject", "s3:ListBucket"]

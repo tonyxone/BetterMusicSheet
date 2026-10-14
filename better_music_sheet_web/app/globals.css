@@ -1213,6 +1213,10 @@ main:has(.full-window) { z-index: 45; }
 .admin-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; word-break: break-all; }
 .admin-error-text { color: var(--danger); font-size: 13px; }
 .admin-link { border: none; background: none; padding: 0; font: inherit; color: var(--accent); cursor: pointer; text-decoration: underline; }
+.admin-reprocess { max-width: 520px; white-space: normal; }
+.admin-row-open > td, .admin-row-detail > td { background: var(--paper-deep); }
+.admin-reprocess-reason { width: 100%; margin: 6px 0; padding: 6px 10px; font: inherit; font-size: 13px; border: 1px solid var(--paper-deep); border-radius: 8px; background: var(--paper); color: var(--ink); }
+.admin-reprocess-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .admin-badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
 .admin-badge.good { background: var(--success-bg); color: var(--success); }
 .admin-badge.bad { background: var(--danger-bg); color: var(--danger); }

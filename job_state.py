@@ -215,7 +215,7 @@ def reused(job, version, **fields):
     # next_check_at: the controller frees the upload slot again should the
     # release below not happen, exactly as for a job a worker finished.
     if not change(job["job_id"], {"status": "uploading"}, status="done", input_version=version,
-                  queued_at=now, stage="Complete", error=None, next_check_at=now, **fields):
+                  queued_at=now, finished_at=now, stage="Complete", error=None, next_check_at=now, **fields):
         return False
     release(job)
     return True

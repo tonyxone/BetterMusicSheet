@@ -143,7 +143,7 @@ REUSABLE = ("output", "timeline", "labels", "notes")
 OMR_FILES = ("musicxml", "omr")
 
 
-def _copy_artifact(job, source, kind, attempt):
+def copy_artifact(job, source, kind, attempt):
     key = f"jobs/{job['user_id']}/{job['job_id']}/attempts/{attempt}/{kind}"
     if IS_PRODUCTION:
         _s3_for(job).copy_object(Bucket=job_bucket(job), Key=key,
@@ -158,7 +158,7 @@ def copy_reused(job, source):
     return their keys as ``{kind}_key``. Copies rather than pointing at
     them, so each sheet stays self-contained: deleting either one never
     takes the other's files. Raises if the source's files are gone."""
-    keys = {f"{kind}_key": _copy_artifact(job, source, kind, "reused")
+    keys = {f"{kind}_key": copy_artifact(job, source, kind, "reused")
             for kind in REUSABLE if source.get(f"{kind}_key")}
     return {**keys, **copy_recognition(job, source, "reused")}
 
@@ -171,7 +171,7 @@ def copy_recognition(job, source, attempt):
     for kind in OMR_FILES:
         if source.get(f"{kind}_key"):
             try:
-                keys[f"{kind}_key"] = _copy_artifact(job, source, kind, attempt)
+                keys[f"{kind}_key"] = copy_artifact(job, source, kind, attempt)
             except Exception:
                 traceback.print_exc()
     return keys

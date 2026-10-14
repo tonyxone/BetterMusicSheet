@@ -18,6 +18,7 @@ Production runs go through tools/republish_prod.py, which loads production's
 configuration before this module is imported.
 """
 import json
+import os
 import tempfile
 import time
 import traceback
@@ -57,7 +58,8 @@ def log_event(event):
     effort - the sheet is already republished by the time this runs."""
     line = json.dumps(event, default=str)
     print(line, flush=True)
-    if not IS_PRODUCTION:
+    # A worker's stdout already is that log group (reprocess.py runs there).
+    if not IS_PRODUCTION or os.environ.get("ECS_AGENT_URI"):
         return
     try:
         import boto3
@@ -116,15 +118,41 @@ def republish(job_id, allow_edits=False, dry_run=False, runner=generate, reason=
                 except Exception:
                     traceback.print_exc()
 
-    now = int(time.time())
     reasons = [str(r) for r in (quality or {}).get("reasons") or []]
+    return _replace(job, keys, reason, labeled_groups=result["count"], notes_named=result.get("notes_named"),
+                    notes_printed=result.get("notes_printed"), review_reasons=reasons)
+
+
+def copy_from(job_id, source, reason=None):
+    """Publish over one sheet a copy of what ``source`` - another sheet made
+    from the same file with the same settings - was just republished with,
+    instead of reading it again. Copies rather than pointing, like
+    storage.copy_reused, so deleting either never takes the other's files.
+    Every reader's edits are left as they are (reprocess.py)."""
+    job = db.get_annotation_job(job_id)
+    if job is None:
+        raise Refused(f"{job_id}: no such job")
+    if job.get("storage_version") != 2 or job["status"] not in REPUBLISHABLE:
+        raise Refused(f"{job_id}: status is {job['status']!r}, not one of {REPUBLISHABLE}")
+    attempt = uuid.uuid4().hex
+    # Every kind, so one the source no longer has is cleared, not left stale.
+    keys = {f"{kind}_key": storage.copy_artifact(job, source, kind, attempt) if source.get(f"{kind}_key") else None
+            for kind in storage.REUSABLE}
+    keys.update(storage.copy_recognition(job, source, attempt))
+    return _replace(job, keys, reason, reused_from=source["job_id"],
+                    **{key: source.get(key) for key in ("labeled_groups", "notes_named", "notes_printed",
+                                                        "review_reasons")})
+
+
+def _replace(job, keys, reason, **fields):
+    """Point the job at its new files, and leave the trace described above."""
+    job_id = job["job_id"]
+    now = int(time.time())
     # Only over the version just read: a delete, a retry or another republish
     # in between wins, and this run's files are left unreferenced.
     expected = {"status": job["status"], "output_key": job.get("output_key")}
     if not job_state.change(job_id, expected, status="done", stage="Complete", error=None,
-                            labeled_groups=result["count"], notes_named=result.get("notes_named"),
-                            notes_printed=result.get("notes_printed"), review_reasons=reasons,
-                            republished_at=now, republished_from=job.get("output_key"), **keys):
+                            republished_at=now, republished_from=job.get("output_key"), **keys, **fields):
         raise Refused(f"{job_id}: changed while it was being read again; nothing was published over it")
     try:
         processed_sheets.add(db.get_annotation_job(job_id))
@@ -135,5 +163,6 @@ def republish(job_id, allow_edits=False, dry_run=False, runner=generate, reason=
                "previous_status": job["status"], "previous_output_key": job.get("output_key"),
                "output_key": keys["output_key"], "queued_at": job.get("queued_at"),
                "finished_at": job.get("finished_at"), "republished_at": now,
-               "reason": reason, "review_reasons": reasons})
+               "reused_from": fields.get("reused_from"),
+               "reason": reason, "review_reasons": fields.get("review_reasons")})
     return db.get_annotation_job(job_id)

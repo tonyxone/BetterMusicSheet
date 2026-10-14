@@ -131,6 +131,10 @@ job_queue = queue.Queue()
 
 
 def _process(job_id):
+    if isinstance(job_id, tuple):
+        # ("reprocess", job_id): an admin asked for a sheet to be read again.
+        import reprocess
+        return reprocess.run(job_id[1])
     from worker import process_job
     return process_job(job_id)
 

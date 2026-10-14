@@ -86,8 +86,26 @@ export type AdminUpload = {
   size: number | null;
   attempts: number | null;
   region: string | null;
+  /** When it was last given a new reading after it finished. */
+  republished_at: number | null;
+  /** The admin's last request to read it again, if any (see ../../reprocess.py). */
+  reprocess: AdminReprocess | null;
+  /** Other sheets made from the same file, which reading this one again also
+   * updates. Absent on the system tab's list. */
+  copies?: number;
   /** Only on the all-uploads list: no signed-in account owns it. */
   guest?: boolean;
+};
+
+export type AdminReprocess = {
+  state: "queued" | "processing" | "done" | "failed";
+  requested_at: number | null;
+  finished_at: number | null;
+  error: string | null;
+  /** The other sheets of the same file given the new reading: copied as is,
+   * their names drawn again with their own settings, or read on their own. */
+  updated: { job_id: string; user_id: string; how: "copied" | "redrawn" | "read" }[];
+  failed: { job_id: string; user_id: string; error: string }[];
 };
 
 export type AdminOverview = {
@@ -124,6 +142,20 @@ export async function adminGet<T>(path: string): Promise<T> {
   const response = await clientApiFetch(`/api/admin${path}`);
   if (!response.ok) throw new Error(`The server answered ${response.status}.`);
   return (await response.json()) as T;
+}
+
+/** Have a sheet read again, and the reading passed on to every sheet of the
+ * same file. Resolves with the upload as it now stands; a worker does the
+ * reading afterwards. */
+export async function reprocessUpload(jobId: string, reason: string): Promise<AdminUpload> {
+  const response = await clientApiFetch(`/api/admin/uploads/${encodeURIComponent(jobId)}/reprocess`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason }),
+  });
+  if (!response.ok) {
+    const detail = await response.json().then((body: { detail?: unknown }) => body.detail, () => null);
+    throw new Error(typeof detail === "string" ? detail : `The server answered ${response.status}.`);
+  }
+  return (await response.json()) as AdminUpload;
 }
 
 /** Open an upload's original file or annotated result in a new tab. */
