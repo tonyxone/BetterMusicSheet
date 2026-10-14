@@ -87,6 +87,16 @@ def event_jobs(body):
     return records
 
 
+def reprocess_request(body):
+    """The sheet an admin asked to be read again (reprocess.py), or None for
+    any other message."""
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return None
+    return data.get("reprocess") if isinstance(data, dict) else None
+
+
 def accept_input(job_id, version=None):
     job = db.get_annotation_job(job_id)
     if not job or job.get("storage_version") != 2 or job["status"] != "uploading":
@@ -467,6 +477,10 @@ def main():
                     sqs.change_message_visibility(QueueUrl=url, ReceiptHandle=message["ReceiptHandle"],
                                                   VisibilityTimeout=LEASE_SECONDS)
                 ack = True
+                reprocess_id = reprocess_request(message["Body"])
+                if reprocess_id:
+                    import reprocess
+                    ack = reprocess.run(reprocess_id, extend)
                 for job_id, version in event_jobs(message["Body"]):
                     accept_input(job_id, version)
                     ack = process_job(job_id, extend) and ack

@@ -1,7 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { adminGet, openUploadFile, type AdminPayment, type AdminSubscription, type AdminUpload } from "@/lib/admin";
+import { Fragment, useCallback, useEffect, useState } from "react";
+import {
+  adminGet, openUploadFile, reprocessUpload, type AdminPayment, type AdminReprocess, type AdminSubscription, type AdminUpload,
+} from "@/lib/admin";
 
 /** Load an admin route; `reload` fetches it again. While reloading, the last
  * answer stays on screen rather than blanking the tab. */
@@ -73,8 +75,95 @@ export function UploadStatus({ upload }: { upload: AdminUpload }) {
       <Badge tone={tone}>{label}</Badge>
       {upload.status === "failed" && upload.error && <div className="admin-sub">{upload.error}</div>}
       {review && upload.review_reasons!.map((reason) => <div key={reason} className="admin-sub">{reason}</div>)}
+      {upload.reprocess && <ReprocessStatus reprocess={upload.reprocess} />}
     </>
   );
+}
+
+export const reprocessing = (upload: AdminUpload) =>
+  upload.reprocess?.state === "queued" || upload.reprocess?.state === "processing";
+
+const HOW = { copied: "copied", redrawn: "names redrawn", read: "read on its own" } as const;
+
+function ReprocessStatus({ reprocess }: { reprocess: AdminReprocess }) {
+  if (reprocess.state === "queued") return <div><Badge tone="info">Waiting to be read again</Badge></div>;
+  if (reprocess.state === "processing") return <div><Badge tone="info">Reading again…</Badge></div>;
+  const others = reprocess.updated.length;
+  return (
+    <div className="admin-sub">
+      {reprocess.state === "failed"
+        ? <span className="admin-error-text">Reading again failed: {reprocess.error}</span>
+        : <>Read again {date(reprocess.finished_at)}
+            {others > 0 && <> · {others} other {others === 1 ? "sheet" : "sheets"} updated</>}</>}
+      {others > 0 && (
+        <details>
+          <summary>Which</summary>
+          {reprocess.updated.map((u) => (
+            <div key={u.job_id} className="admin-id">{u.job_id} · {u.user_id} · {HOW[u.how] ?? u.how}</div>
+          ))}
+        </details>
+      )}
+      {reprocess.failed.map((f) => (
+        <div key={f.job_id} className="admin-error-text">
+          Not updated: <span className="admin-id">{f.job_id}</span> · {f.error}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const canReprocess = (upload: AdminUpload) =>
+  (upload.status === "done" || upload.status === "failed") && !reprocessing(upload);
+
+/** Asks before reading a sheet again with today's pipeline, saying how many
+ * other readers' sheets of the same file it also updates. */
+function ReprocessConfirm({ upload, onDone, onCancel }: {
+  upload: AdminUpload; onDone: () => void; onCancel: () => void;
+}) {
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const others = upload.copies ?? 0;
+  async function submit() {
+    setBusy(true);
+    setError(null);
+    try {
+      await reprocessUpload(upload.job_id, reason);
+      onDone();
+    } catch (failure) {
+      setError((failure as Error).message);
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="admin-reprocess">
+      <p className="admin-sub">
+        Read <strong>{upload.sheet_name || upload.job_id}</strong> again with today&rsquo;s pipeline
+        {others > 0 && <>, and update the {others} other {others === 1 ? "sheet" : "sheets"} made from the same file</>}.
+        Everyone&rsquo;s own edits and notes are kept.
+      </p>
+      <input className="admin-reprocess-reason" type="text" placeholder="What was fixed (optional)" value={reason}
+        maxLength={300} onChange={(event) => setReason(event.target.value)} aria-label="What was fixed" autoFocus />
+      <div className="admin-reprocess-actions">
+        <button type="button" className="btn-pill admin-small" onClick={() => void submit()} disabled={busy}>
+          {busy ? "Asking…" : others > 0 ? `Read ${others + 1} sheets again` : "Read again"}
+        </button>
+        <button type="button" className="btn-pill ghost admin-small" onClick={onCancel} disabled={busy}>Cancel</button>
+      </div>
+      {error && <div className="admin-sub admin-error-text">{error}</div>}
+    </div>
+  );
+}
+
+/** While any of ``uploads`` is being read again, call ``reload`` every few
+ * seconds, so how it went shows up without a manual refresh. */
+export function useReloadWhileReprocessing(uploads: AdminUpload[] | undefined, reload: () => void) {
+  const waiting = !!uploads?.some(reprocessing);
+  useEffect(() => {
+    if (!waiting) return;
+    const timer = window.setInterval(reload, 10000);
+    return () => window.clearInterval(timer);
+  }, [waiting, reload]);
 }
 
 export function SubscriptionBadge({ subscription, master }: { subscription: AdminSubscription | null; master: boolean }) {
@@ -107,11 +196,16 @@ function FileButton({ jobId, which }: { jobId: string; which: "original" | "anno
 
 /** Uploads as a table. `showOwner` adds who uploaded each one - for the lists
  * that span every account - and `filterRow` goes under the headings. */
-export function UploadsTable({ uploads, showOwner = false, filterRow }: {
+export function UploadsTable({ uploads, showOwner = false, filterRow, onChanged }: {
   uploads: AdminUpload[]; showOwner?: boolean; filterRow?: React.ReactNode;
+  /** Set where a sheet may be read again: called once that was asked for. */
+  onChanged?: () => void;
 }) {
+  // The one row whose "Read again" is asking for confirmation, if any.
+  const [asking, setAsking] = useState<string | null>(null);
   // With filters the table stays, so they can be loosened again.
   if (!uploads.length && !filterRow) return <p className="admin-sub">No uploads.</p>;
+  const columns = (showOwner ? 7 : 6) + (onChanged ? 1 : 0);
   return (
     <div className="admin-table-wrap">
       <table className="admin-table">
@@ -119,12 +213,14 @@ export function UploadsTable({ uploads, showOwner = false, filterRow }: {
           <tr>
             <th>Uploaded</th><th>Sheet</th>{showOwner && <th>Owner</th>}<th>Result</th>
             <th className="num">Time</th><th className="num">Size</th><th>Files</th>
+            {onChanged && <th />}
           </tr>
           {filterRow}
         </thead>
         <tbody>
           {uploads.map((upload) => (
-            <tr key={upload.job_id}>
+            <Fragment key={upload.job_id}>
+            <tr className={asking === upload.job_id ? "admin-row-open" : undefined}>
               <td className="nowrap">{date(upload.created_at)}</td>
               <td>
                 {upload.sheet_name || "—"}
@@ -146,7 +242,27 @@ export function UploadsTable({ uploads, showOwner = false, filterRow }: {
                 {upload.status !== "deleted" && <FileButton jobId={upload.job_id} which="original" />}
                 {upload.status === "done" && <> · <FileButton jobId={upload.job_id} which="annotated" /></>}
               </td>
+              {onChanged && (
+                <td className="nowrap">
+                  {canReprocess(upload) && (
+                    <button type="button" className="btn-pill ghost admin-small"
+                      onClick={() => setAsking(asking === upload.job_id ? null : upload.job_id)}
+                      aria-expanded={asking === upload.job_id}>
+                      Read again
+                    </button>
+                  )}
+                </td>
+              )}
             </tr>
+            {onChanged && asking === upload.job_id && canReprocess(upload) && (
+              <tr className="admin-row-detail">
+                <td colSpan={columns}>
+                  <ReprocessConfirm upload={upload} onCancel={() => setAsking(null)}
+                    onDone={() => { setAsking(null); onChanged(); }} />
+                </td>
+              </tr>
+            )}
+            </Fragment>
           ))}
         </tbody>
       </table>

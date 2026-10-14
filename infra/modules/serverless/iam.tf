@@ -106,6 +106,9 @@ resource "aws_iam_role_policy" "worker" {
   role = aws_iam_role.worker.id
   policy = jsonencode({ Version = "2012-10-17", Statement = [
     local.db_statement, local.alerts_statement,
+    # A sheet read again from the admin dashboard is passed on to every other
+    # sheet made from the same file (../../../reprocess.py), found by a scan.
+    { Effect = "Allow", Action = ["dynamodb:Scan"], Resource = "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.jobs_table}" },
     { Effect = "Allow", Action = ["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject"], Resource = "${aws_s3_bucket.files.arn}/jobs/*" },
     { Effect = "Allow", Action = ["s3:ListBucket"], Resource = aws_s3_bucket.files.arn },
     { Effect = "Allow", Action = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility"], Resource = aws_sqs_queue.jobs.arn },
