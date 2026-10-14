@@ -339,6 +339,41 @@ class RereadTests(unittest.TestCase):
             run.reread_binarized(Path("score.pdf"), Path("work"), "first.omr", 1)
         self.assertEqual(audiveris.call_args.kwargs["constants"], run.NO_MOVEMENTS)
 
+    # Audiveris's own scale lines, as logged for a page that read cleanly and
+    # for one whose beams it filed as cue beams.
+    ONE_BEAM = "INFO  [input#2]  ScaleStep 65   | Scale{ interline(20,21,22) line(2,2,3) beam(12)}"
+    CUE_BEAMS = ("INFO  [input#1]  ScaleStep 65   | Scale{ small_interline(15,16,17) "
+                 "interline(21,21,22) line(2,2,3) small_beam(12) beam(18)}")
+
+    def one_staff_size(self, log, placed):
+        """reread_one_staff_size after a pass that logged ``log`` and placed
+        951 notes, with the re-read placing ``placed``."""
+        audiveris = MagicMock(return_value=("one.mxl", "one.omr"))
+        playable = {"first.omr": 951, "one.omr": placed}
+        with patch("run._audiveris_log", return_value=log), \
+             patch("run.run_audiveris", audiveris), \
+             patch("run.placed_head_ratio", side_effect=lambda book, _: (2000, playable[book])):
+            return run.reread_one_staff_size(Path("score.pdf"), Path("work"), "first.omr", 1), audiveris
+
+    def test_beams_read_as_cue_beams_are_read_again_with_one_staff_size(self):
+        """A Cornfield Chase whose pages 1 and 3 lost every beam this way
+        placed 951 notes, and 1871 read again."""
+        kept, audiveris = self.one_staff_size(f"{self.ONE_BEAM}\n{self.CUE_BEAMS}", placed=1871)
+        self.assertEqual(kept, ("one.mxl", "one.omr"))
+        self.assertEqual(audiveris.call_args.kwargs["constants"],
+                         {**run.NO_MOVEMENTS, **run.ONE_STAFF_SIZE})
+
+    def test_a_book_with_one_beam_thickness_is_not_read_again(self):
+        kept, audiveris = self.one_staff_size(self.ONE_BEAM, placed=1871)
+        self.assertIsNone(kept)
+        audiveris.assert_not_called()
+
+    def test_a_real_second_staff_size_keeps_the_original(self):
+        """A smaller ossia or vocal staff does print cue-sized beams; reading
+        it as full size places fewer notes, and that reading is refused."""
+        kept, _ = self.one_staff_size(self.CUE_BEAMS, placed=900)
+        self.assertIsNone(kept)
+
     def test_a_page_reread_that_splits_into_movements_keeps_the_original(self):
         """Two uploads failed outright on this: the book read fine as one
         piece, then a page re-read split it again and took the job down."""
