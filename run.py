@@ -596,21 +596,67 @@ def reread_binarized(pdf_path, work_dir, omr_path, num_pages, dpi=None, log=prin
         print("  the re-read failed; keeping the original recognition")
         return None
 
-    def placed(book):
-        total = 0
-        for page in range(1, num_pages + 1):
-            try:
-                total += placed_head_ratio(book, page)[1]
-            except Exception:
-                continue
-        return total
-
     staves = sum(system_sizes(omr, num_pages))
-    if staves > sum(system_sizes(omr_path, num_pages)) and placed(omr) >= placed(omr_path):
+    if (staves > sum(system_sizes(omr_path, num_pages))
+            and _placed_heads(omr, num_pages) >= _placed_heads(omr_path, num_pages)):
         print(f"  the black-and-white copy found {staves} staves - keeping it")
         return mxl, omr
     print("  no better; keeping the original recognition")
     return None
+
+
+# "[input#1] ScaleStep 65 | Scale{ ... small_beam(12) beam(18)}": Audiveris
+# took the page for one holding two staff sizes, so two beam thicknesses, and
+# filed the thinner as cue beams - which it looks for only on small heads, so
+# every beam on the page was dropped and each eighth and sixteenth read as a
+# quarter. A ScoreStarling Cornfield Chase came out so on pages 1 and 3,
+# although it prints no small staff; page 2, scaled "beam(12)" alone, read
+# cleanly. Audiveris takes a second staff size only between 1.2 and 1.9 times
+# smaller, so a maximum of 1 allows none.
+_SMALL_BEAMS = re.compile(r"\|\s*Scale\{[^}\n]*small_beam\(")
+ONE_STAFF_SIZE = {"org.audiveris.omr.sheet.ScaleBuilder.maxSecondRatio": 1.0}
+
+
+def reread_one_staff_size(pdf_path, work_dir, omr_path, num_pages, dpi=None, binarize=False,
+                          log=print):
+    """Re-read a book in which Audiveris read some page's beams as cue beams.
+
+    Read whole, not page by page: a page read on its own never sees the time
+    signature printed before it, and on that Cornfield Chase page 3 re-read
+    alone came back in 4/4 with a beat of silence closing each 3/4 bar.
+    Returns (mxl, omr) of the re-read when it placed more notes, else None.
+    A real second staff size - a smaller ossia or vocal staff - would read
+    worse this way and be refused by that same comparison.
+    """
+    if not _SMALL_BEAMS.search(_audiveris_log(work_dir, Path(pdf_path).stem)):
+        return None
+    target = work_dir / "one-staff-size"
+    log(f"[1b/3] Some beams look misread; re-reading the sheet should take "
+        f"{describe_duration(estimated_seconds(pdf_path, dpi or DEFAULT_DPI))}:")
+    try:
+        mxl, omr = run_audiveris(pdf_path, target, dpi=dpi, binarize=binarize,
+                                 constants={**NO_MOVEMENTS, **ONE_STAFF_SIZE})
+    except (subprocess.CalledProcessError, RuntimeError):
+        print("  the re-read failed; keeping the original recognition")
+        return None
+    before, after = _placed_heads(omr_path, num_pages), _placed_heads(omr, num_pages)
+    if after > before:
+        print(f"  reading one beam thickness placed {after} notes against {before} - keeping it")
+        return mxl, omr
+    print(f"  reading one beam thickness placed {after} notes against {before}; "
+          f"keeping the original recognition")
+    return None
+
+
+def _placed_heads(omr_path, num_pages):
+    """Noteheads given a time offset, over the whole book (placed_head_ratio)."""
+    total = 0
+    for page in range(1, num_pages + 1):
+        try:
+            total += placed_head_ratio(omr_path, page)[1]
+        except Exception:
+            continue
+    return total
 
 
 def placed_head_ratio(omr_path, page):
@@ -1115,6 +1161,10 @@ def annotate_pdf(pdf_path, output, work_dir, style="unicode", octave=False, font
                 mxl, omr = reread
                 # The page re-reads below compare against, and re-read, this pass.
                 work_dir, binarized = Path(omr).parent, True
+        reread = reread_one_staff_size(pdf_path, work_dir, omr, num_pages, dpi, binarized, log)
+        if reread:
+            mxl, omr = reread
+            work_dir = Path(omr).parent
         counts, sparse = find_sparse_pages(omr, num_pages, mxl, pdf_path)
         if sparse:
             # The first honest moment to say a score will take a while: which
