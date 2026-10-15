@@ -116,7 +116,10 @@ jobs:
           # lets the serverless stack be provisioned without a special build.
           docker build -t "$REGISTRY/$REPOSITORY:$TAG" -t "$REGISTRY/$REPOSITORY:latest" .
           docker build -f Dockerfile.api -t "$REGISTRY/$REPOSITORY:api-$TAG" .
-          docker run --rm --entrypoint python -e JOB_BACKEND=sqs "$REGISTRY/$REPOSITORY:api-$TAG" -c 'import server, controller, sys; assert "pymupdf" not in sys.modules; assert "run" not in sys.modules'
+          # admin is imported here too: server.py only logs a failed import of it
+          # and serves on without the admin routes, so a module Dockerfile.api's
+          # list leaves out would otherwise ship as a 404 on every admin request.
+          docker run --rm --entrypoint python -e JOB_BACKEND=sqs "$REGISTRY/$REPOSITORY:api-$TAG" -c 'import server, controller, admin, sys; assert "pymupdf" not in sys.modules; assert "run" not in sys.modules'
           docker push "$REGISTRY/$REPOSITORY:$TAG"
           docker push "$REGISTRY/$REPOSITORY:latest"
           docker push "$REGISTRY/$REPOSITORY:api-$TAG"
