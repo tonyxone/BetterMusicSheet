@@ -29,6 +29,19 @@ export function date(value: number | null | undefined) {
   }) : "—";
 }
 
+/** ``date`` on two lines, the time under the day: in a narrow column the one
+ * line otherwise breaks wherever it falls, e.g. before "PM". */
+function DayAndTime({ value }: { value: number | null | undefined }) {
+  if (!value) return <>—</>;
+  const when = new Date(value * 1000);
+  return (
+    <>
+      {when.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}
+      <div className="admin-sub">{when.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</div>
+    </>
+  );
+}
+
 export function duration(seconds: number | null | undefined) {
   if (seconds == null) return "—";
   const s = Math.round(seconds);
@@ -220,8 +233,8 @@ export function UploadsTable({ uploads, showOwner = false, filterRow, onChanged 
           {uploads.map((upload) => (
             <Fragment key={upload.job_id}>
             <tr className={asking === upload.job_id ? "admin-row-open" : undefined}>
-              <td className="nowrap">{date(upload.created_at)}</td>
-              <td>
+              <td className="nowrap"><DayAndTime value={upload.created_at} /></td>
+              <td className="admin-sheet-name">
                 {upload.sheet_name || "—"}
                 <div className="admin-sub admin-id">{upload.job_id}{upload.region ? ` · ${upload.region}` : ""}</div>
               </td>
@@ -237,12 +250,12 @@ export function UploadsTable({ uploads, showOwner = false, filterRow, onChanged 
                 {!!upload.attempts && upload.attempts > 1 && <div className="admin-sub">{upload.attempts} attempts</div>}
               </td>
               <td className="num nowrap">{bytes(upload.size)}</td>
-              <td className="nowrap">
-                {upload.status !== "deleted" && <FileButton jobId={upload.job_id} which="original" />}
-                {upload.status === "done" && <> · <FileButton jobId={upload.job_id} which="annotated" /></>}
-                {/* Here, not in a column of its own: one more column pushed the
-                    table past the page, and the button out of sight behind its
-                    horizontal scroll. */}
+              {/* One per line, and "Read again" here rather than in a column of
+                  its own: side by side they made the table wider than the page,
+                  and the last of them went out of sight behind its scroll. */}
+              <td className="admin-files">
+                {upload.status !== "deleted" && <div><FileButton jobId={upload.job_id} which="original" /></div>}
+                {upload.status === "done" && <div><FileButton jobId={upload.job_id} which="annotated" /></div>}
                 {onChanged && canReprocess(upload) && (
                   <div>
                     <button type="button" className="admin-link"
