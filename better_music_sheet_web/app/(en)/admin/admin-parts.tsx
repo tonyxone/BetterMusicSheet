@@ -205,7 +205,7 @@ export function UploadsTable({ uploads, showOwner = false, filterRow, onChanged 
   const [asking, setAsking] = useState<string | null>(null);
   // With filters the table stays, so they can be loosened again.
   if (!uploads.length && !filterRow) return <p className="admin-sub">No uploads.</p>;
-  const columns = (showOwner ? 7 : 6) + (onChanged ? 1 : 0);
+  const columns = showOwner ? 7 : 6;
   return (
     <div className="admin-table-wrap">
       <table className="admin-table">
@@ -213,7 +213,6 @@ export function UploadsTable({ uploads, showOwner = false, filterRow, onChanged 
           <tr>
             <th>Uploaded</th><th>Sheet</th>{showOwner && <th>Owner</th>}<th>Result</th>
             <th className="num">Time</th><th className="num">Size</th><th>Files</th>
-            {onChanged && <th />}
           </tr>
           {filterRow}
         </thead>
@@ -241,18 +240,19 @@ export function UploadsTable({ uploads, showOwner = false, filterRow, onChanged 
               <td className="nowrap">
                 {upload.status !== "deleted" && <FileButton jobId={upload.job_id} which="original" />}
                 {upload.status === "done" && <> · <FileButton jobId={upload.job_id} which="annotated" /></>}
-              </td>
-              {onChanged && (
-                <td className="nowrap">
-                  {canReprocess(upload) && (
-                    <button type="button" className="btn-pill ghost admin-small"
+                {/* Here, not in a column of its own: one more column pushed the
+                    table past the page, and the button out of sight behind its
+                    horizontal scroll. */}
+                {onChanged && canReprocess(upload) && (
+                  <div>
+                    <button type="button" className="admin-link"
                       onClick={() => setAsking(asking === upload.job_id ? null : upload.job_id)}
                       aria-expanded={asking === upload.job_id}>
                       Read again
                     </button>
-                  )}
-                </td>
-              )}
+                  </div>
+                )}
+              </td>
             </tr>
             {onChanged && asking === upload.job_id && canReprocess(upload) && (
               <tr className="admin-row-detail">
