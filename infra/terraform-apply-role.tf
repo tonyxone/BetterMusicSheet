@@ -67,6 +67,7 @@ data "aws_iam_policy_document" "github_terraform_apply_iam" {
       "arn:aws:iam::${var.account_id}:role/${var.github_deploy_role_name}",
       "arn:aws:iam::${var.account_id}:role/${var.project}-github-drift",
       "arn:aws:iam::${var.account_id}:role/${var.project}-github-terraform-apply",
+      "arn:aws:iam::${var.account_id}:role/${var.project}-audiveris-publish",
     ]
   }
 }
