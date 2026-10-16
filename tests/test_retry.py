@@ -248,11 +248,38 @@ class CrashRerunTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(calls, 1)
 
-    def test_a_long_book_leaves_the_rerun_to_the_job_retry(self):
-        with patch.object(run.time, "monotonic", side_effect=[0, run.CRASH_RERUN_BUDGET_SECONDS]):
+    def test_past_the_rerun_budget_the_crashing_page_is_left_out(self):
+        # A 15-page scan: page 7 crashed twice at 3 minutes a run, and the
+        # rerun budget refused a third - leaving the page out still fits.
+        third = run.CRASH_RERUN_BUDGET_SECONDS * 5 / 12
+        with patch.object(run.time, "monotonic", side_effect=[0, third, 2 * third]):
+            result, calls, log = self.recognize(STUB_CRASH, STUB_CRASH, "ok")
+        self.assertEqual(self.sheets, [None, None, [1, 3]])
+        self.assertIn("No music could be read on page 2", log[-1])
+        self.assertIsNotNone(result)
+
+    def test_a_book_too_long_for_the_job_leaves_it_to_the_job_retry(self):
+        with patch.object(run.time, "monotonic", side_effect=[0, run.LEAVE_OUT_BUDGET_SECONDS]):
             result, calls, _ = self.recognize(STUB_CRASH, "ok")
         self.assertIsNone(result)
         self.assertEqual(calls, 1)
+
+    def no_spacing(self):
+        return "\n".join(f"WARN  [input#{page}]                      Book 2044 | Error processing stub "
+                         "org.audiveris.omr.step.StepException: No regularly spaced lines found"
+                         for page in (1, 2, 3))
+
+    def test_pages_without_a_measurable_staff_spacing_are_read_again_smaller(self):
+        result, calls, log = self.recognize(self.no_spacing(), "ok")
+        shrunk = round(run.DEFAULT_DPI * run.SHRINK_RATIO)
+        self.assertEqual(result, (self.work / "input.mxl", self.work / "input.omr", shrunk))
+        self.assertEqual([dpi for dpi, _ in self.runs], [None, shrunk])
+        self.assertIn(f"at {shrunk} DPI", log[-1])
+
+    def test_read_smaller_once_and_then_it_is_not_music(self):
+        with self.assertRaises(run.NotMusic):
+            self.recognize(self.no_spacing(), self.no_spacing())
+        self.assertEqual(len(self.runs), 2)
 
     def test_a_page_with_no_music_is_left_out_not_rerun(self):
         # A cover picture: Audiveris drops it, then refuses to export the book.

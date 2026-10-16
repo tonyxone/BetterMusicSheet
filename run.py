@@ -166,14 +166,13 @@ def run_audiveris(pdf_path, out_dir, dpi=None, sheets=None, switches=None, binar
     """Recognize ``pdf_path`` into ``out_dir``; returns the .mxl and .omr.
 
     ``binarize`` has Audiveris read a black-and-white copy of the scanned pages
-    instead, made at the same DPI it will read them at - see scan.py. At a
-    forced ``dpi`` a picture coarser than it is enlarged here first
-    (scan.enlarge_small_pictures).
+    instead, made at the same DPI it will read them at - see scan.py. A
+    picture coarser than the DPI it is read at is enlarged here first, and
+    at a forced ``dpi`` one finer than it is shrunk (scan.resample_pictures).
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    source = pdf_path
-    if dpi is not None:
-        source = scan.enlarge_small_pictures(source, out_dir / "enlarged", dpi, sheets)
+    source = scan.resample_pictures(pdf_path, out_dir / "resampled", dpi or scan.DEFAULT_DPI, sheets,
+                                    shrink=dpi is not None)
     if binarize:
         source = scan.prepare_for_recognition(source, out_dir / "input", dpi, sheets)
     if sys.platform == "win32":
@@ -251,6 +250,18 @@ def _no_system_found(work_dir, stem):
 # spending its time limit here.
 CRASH_RERUNS = 2
 CRASH_RERUN_BUDGET_SECONDS = MAX_JOB_SECONDS / 3
+# Leaving out a page that keeps failing gets more: it is what reads the rest
+# of the book. A 15-page scan whose page 7 crashed twice had spent 9 of its 30
+# minutes when the rerun budget alone refused it, and was failed for good.
+# The last third is left for everything after recognition.
+LEAVE_OUT_BUDGET_SECONDS = MAX_JOB_SECONDS * 2 / 3
+
+# "No regularly spaced lines found": Audiveris could not measure the staff
+# spacing at all, and drops the page as holding no music. On a phone photo
+# with staff lines about 26px apart, unevenly so in perspective, the spacing
+# histogram came out too flat; read at 70% it found all 5 staves, at 50% too.
+_NO_SPACING = "No regularly spaced lines found"
+SHRINK_RATIO = 0.7
 
 
 def _a_sheet_crashed(work_dir, stem):
@@ -324,6 +335,7 @@ def recognize_book(pdf_path, work_dir, dpi=None, log=print):
     started = time.monotonic()
     constants, runs, crashes, sheets = None, 0, 0, None
     fallbacks = list(CRASH_FALLBACK_DPIS)
+    shrunk = False
     while True:
         runs += 1
         try:
@@ -342,6 +354,9 @@ def recognize_book(pdf_path, work_dir, dpi=None, log=print):
             # One more run costs about what the runs so far averaged.
             spent = time.monotonic() - started
             within_budget = spent * (runs + 1) / runs <= CRASH_RERUN_BUDGET_SECONDS
+            # Leaving pages out is the step most likely to succeed, so it may
+            # use more of the job's time than reruns of the same thing.
+            within_job = spent * (runs + 1) / runs <= LEAVE_OUT_BUDGET_SECONDS
             if finer:
                 log(f"[1/3] The pages are too low-resolution to read; reading them again at {finer} DPI ...")
                 dpi = finer
@@ -353,10 +368,15 @@ def recognize_book(pdf_path, work_dir, dpi=None, log=print):
                 failed = {page: no_music for page, no_music in _failed_sheets(work_dir, stem).items()
                           if page in pages}
                 kept = [page for page in pages if page not in failed]
-                if failed and kept and within_budget:
+                if failed and kept and within_job:
                     left_out = ", ".join(str(page) for page in sorted(failed))
                     log(f"[1/3] No music could be read on page {left_out}; reading the other pages ...")
                     sheets = kept
+                elif (failed and not kept and all(failed.values()) and not shrunk
+                      and _NO_SPACING in _audiveris_log(work_dir, stem)):
+                    shrunk = True
+                    dpi = round((dpi or DEFAULT_DPI) * SHRINK_RATIO)
+                    log(f"[1/3] The staff spacing could not be measured; reading the pages again at {dpi} DPI ...")
                 elif failed and not kept and all(failed.values()):
                     raise NotMusic(NOT_MUSIC_MESSAGE)
                 elif _a_sheet_crashed(work_dir, stem) and fallbacks and within_budget:

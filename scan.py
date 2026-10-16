@@ -107,15 +107,23 @@ def picture_dpi(page):
 # is enlarged decides what Audiveris can find. Left to the PDF renderer, a
 # 602x757 screenshot (staff lines 6px apart) read at 800 DPI kept 8 of its 12
 # staves, and MuPDF's own pixmap scaling only 6; resampled with Lanczos to the
-# same 1605x2018 every one of them was found, in the right systems. Pictures
-# already near the resolution asked for are left as they are.
-MIN_ENLARGEMENT = 1.1
+# same 1605x2018 every one of them was found, in the right systems.
+#
+# That holds at Audiveris's own 300 DPI too: a Canva PDF of 65-82 DPI
+# pictures, stretched by the renderer, kept 0 of page 2's 12 staves and 2 of
+# page 1's 9; resampled first, all of them. And the other way: a phone photo
+# whose staff lines lay about 26px apart, unevenly so in perspective, gave
+# Audiveris no measurable spacing at all, while the same photo read at 70%
+# found all 5 staves - see run.SHRINK_RATIO. Pictures already near the
+# resolution asked for are left as they are.
+MIN_RESAMPLING = 1.1
 
 
-def enlarge_small_pictures(pdf_path, out_dir, dpi, pages=None):
+def resample_pictures(pdf_path, out_dir, dpi, pages=None, shrink=False):
     """The PDF Audiveris should read at ``dpi``: ``pdf_path`` itself, or a copy
-    in which every scanned page whose picture is coarser than ``dpi`` is
-    resampled to exactly ``dpi`` (see MIN_ENLARGEMENT).
+    in which every scanned page whose picture is coarser than ``dpi`` - or,
+    with ``shrink``, finer than it - is resampled to exactly ``dpi`` (see
+    MIN_RESAMPLING).
 
     Pages keep their size, so every position recognition reports, in points,
     holds for the original. ``pages`` and the copy's name are as in
@@ -124,12 +132,13 @@ def enlarge_small_pictures(pdf_path, out_dir, dpi, pages=None):
     from PIL import Image
 
     pdf_path = Path(pdf_path)
-    enlarged = 0
+    resampled = 0
     with pymupdf.open(pdf_path) as src, pymupdf.open() as out:
         for index, page in enumerate(src):
             native = picture_dpi(page) if is_scanned(page) else None
-            if (pages is not None and index + 1 not in pages) or not native \
-                    or dpi < native * MIN_ENLARGEMENT:
+            coarser = bool(native) and dpi >= native * MIN_RESAMPLING
+            finer = bool(native) and shrink and dpi * MIN_RESAMPLING <= native
+            if (pages is not None and index + 1 not in pages) or not (coarser or finer):
                 out.insert_pdf(src, from_page=index, to_page=index)
                 continue
             # Drawn at the picture's own resolution the page is its pixels,
@@ -141,8 +150,8 @@ def enlarge_small_pictures(pdf_path, out_dir, dpi, pages=None):
             picture = Image.frombytes("L", (pix.width, pix.height), pix.samples).resize(size, Image.LANCZOS)
             copy = out.new_page(width=page.rect.width, height=page.rect.height)
             copy.insert_image(copy.rect, pixmap=pymupdf.Pixmap(pymupdf.csGRAY, *size, picture.tobytes(), False))
-            enlarged += 1
-        if not enlarged:
+            resampled += 1
+        if not resampled:
             return pdf_path
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
