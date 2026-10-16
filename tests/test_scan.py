@@ -121,6 +121,14 @@ class OttavaTests(unittest.TestCase):
         self.assertEqual(list(intervals), [3])
         self.assertEqual(intervals[3][0][2], 1)
 
+    def test_a_page_without_any_measured_staff_has_no_octave_line(self):
+        page, _, _ = two_systems()
+        page.dashes(130, 940, 30)
+        # The page's staves have no line ys (or no extents): systems are empty.
+        intervals, carried = scan.find_ottavas(page.bitmap(), {}, [[1, 2], [3, 4]], {"above": 1})
+        self.assertEqual(intervals, {})
+        self.assertEqual(carried, {"above": 1})
+
     def test_8vb_lowers_the_staff_above_it(self):
         page, staves, systems = two_systems()
         _, start = page.label(300, 590, letters="vb")

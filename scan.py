@@ -533,6 +533,10 @@ def find_ottavas(bitmap, staves, systems, carried=None):
     """
     carried = dict(carried or {})
     systems = [system for system in ([sid for sid in s if sid in staves] for s in systems) if system]
+    if not systems:
+        # No staff measured on this page (e.g. Audiveris kept none of its staff
+        # lines): no line to read, and nothing to measure an interline from.
+        return {}, carried
     # Gap k runs from system k-1's bottom staff (or the top of the page) down
     # to system k's top staff (or the bottom of the page). Labelled lines are
     # assigned to a staff here; unlabelled ones wait to be claimed as the
