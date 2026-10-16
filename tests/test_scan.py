@@ -203,8 +203,8 @@ class BinarizeTests(unittest.TestCase):
         self.assertEqual(self.levels(copy, 1), {0, 255})
 
 
-class EnlargeTests(unittest.TestCase):
-    """A picture coarser than the reading DPI is resampled to it (Lanczos)."""
+class ResampleTests(unittest.TestCase):
+    """A picture coarser than the reading DPI - or finer, when asked - is resampled to it (Lanczos)."""
     scan_pdf = BinarizeTests.scan_pdf  # 200x100 px on a 150x75 pt page: 96 DPI
 
     def setUp(self):
@@ -220,7 +220,7 @@ class EnlargeTests(unittest.TestCase):
 
     def test_a_small_picture_is_resampled_to_the_reading_dpi_on_the_same_page(self):
         source = self.scan_pdf("sheet.pdf")
-        copy = scan.enlarge_small_pictures(source, self.path / "out", 300)
+        copy = scan.resample_pictures(source, self.path / "out", 300)
         self.assertEqual(copy, self.path / "out" / "sheet.pdf")
         pictures, rect = self.pictures(copy)
         self.assertEqual(pictures, [(625, 312)])
@@ -228,7 +228,7 @@ class EnlargeTests(unittest.TestCase):
 
     def test_a_picture_near_the_reading_dpi_is_left_alone(self):
         source = self.scan_pdf("sheet.pdf")
-        self.assertEqual(scan.enlarge_small_pictures(source, self.path / "out", 100), source)
+        self.assertEqual(scan.resample_pictures(source, self.path / "out", 100), source)
 
     def test_a_vector_page_is_left_alone(self):
         source = self.path / "vector.pdf"
@@ -237,11 +237,11 @@ class EnlargeTests(unittest.TestCase):
             for y in range(50, 100, 10):
                 page.draw_line((20, y), (280, y))
             doc.save(source)
-        self.assertEqual(scan.enlarge_small_pictures(source, self.path / "out", 800), source)
+        self.assertEqual(scan.resample_pictures(source, self.path / "out", 800), source)
 
     def test_only_the_pages_being_read_are_enlarged(self):
         source = self.scan_pdf("two.pdf", pages=2)
-        copy = scan.enlarge_small_pictures(source, self.path / "out", 300, pages=[2])
+        copy = scan.resample_pictures(source, self.path / "out", 300, pages=[2])
         self.assertEqual(self.pictures(copy, 0)[0], [(200, 100)])
         self.assertEqual(self.pictures(copy, 1)[0], [(625, 312)])
 
@@ -253,11 +253,25 @@ class EnlargeTests(unittest.TestCase):
             page.insert_image(page.rect, pixmap=pix, rotate=90)
             self.assertAlmostEqual(scan.picture_dpi(page), 300)
 
+    def test_a_finer_picture_is_shrunk_only_when_asked(self):
+        source = self.scan_pdf("sheet.pdf")
+        self.assertEqual(scan.resample_pictures(source, self.path / "out", 48), source)
+        copy = scan.resample_pictures(source, self.path / "out", 48, shrink=True)
+        self.assertEqual(self.pictures(copy)[0], [(100, 50)])
+
+    def test_reading_at_the_default_dpi_reads_the_enlarged_copy(self):
+        source = self.scan_pdf("input.pdf")
+        with patch.object(run.subprocess, "run") as audiveris, self.assertRaises(RuntimeError):
+            run.run_audiveris(source, self.path / "work")
+        self.assertEqual(audiveris.call_args[0][0][-1], str(self.path / "work" / "resampled" / "input.pdf"))
+        self.assertNotIn("org.audiveris.omr.image.ImageLoading.pdfResolution=300",
+                         " ".join(audiveris.call_args[0][0]))
+
     def test_reading_at_a_forced_dpi_reads_the_enlarged_copy(self):
         source = self.scan_pdf("input.pdf")
         with patch.object(run.subprocess, "run") as audiveris, self.assertRaises(RuntimeError):
             run.run_audiveris(source, self.path / "work", dpi=300)  # it wrote no output
-        self.assertEqual(audiveris.call_args[0][0][-1], str(self.path / "work" / "enlarged" / "input.pdf"))
+        self.assertEqual(audiveris.call_args[0][0][-1], str(self.path / "work" / "resampled" / "input.pdf"))
 
 
 class RereadTests(unittest.TestCase):
