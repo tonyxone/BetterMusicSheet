@@ -117,6 +117,9 @@ export type AdminOverview = {
   };
 };
 
+/** New accounts on one day ("YYYY-MM-DD", the admin's own calendar day). */
+export type AdminSignupDay = { date: string; count: number };
+
 /** One page of a list, and where it sits in the whole. */
 export type AdminPage<T> = { items: T[]; total: number; page: number; pages: number; page_size: number };
 

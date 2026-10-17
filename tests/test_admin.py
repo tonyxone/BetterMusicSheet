@@ -26,7 +26,7 @@ MEMBER = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 GUEST = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 SUBSCRIBER = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 
-ROUTES = ["/api/admin/me", "/api/admin/overview", "/api/admin/users", f"/api/admin/users/{MEMBER}/uploads",
+ROUTES = ["/api/admin/me", "/api/admin/overview", "/api/admin/users", "/api/admin/users/signups", f"/api/admin/users/{MEMBER}/uploads",
           f"/api/admin/users/{MEMBER}/payments",
           "/api/admin/uploads", "/api/admin/uploads?status=failed", "/api/admin/subscriptions", "/api/admin/system",
           "/api/admin/uploads/member-done/files", "/api/admin/uploads/member-done/file/input"]
@@ -207,6 +207,17 @@ class DashboardDataTests(AdminTestCase):
         canceling = self.get("/api/admin/subscriptions?state=canceling")
         self.assertEqual({row["user_id"] for row in canceling["items"]}, {"leaving", "leaving-trial"})
         self.assertEqual(canceling["counts"], listed["counts"])
+
+    def test_signups_counted_per_day(self):
+        days = self.get("/api/admin/users/signups?days=60")
+        self.assertEqual(len(days), 60)
+        self.assertEqual(days[-1]["date"], time.strftime("%Y-%m-%d", time.gmtime(self.now)))
+        self.assertEqual(days[-4], {"date": time.strftime("%Y-%m-%d", time.gmtime(self.now - 3 * 86400)), "count": 1})
+        self.assertEqual(days[-41]["count"], 1)
+        self.assertEqual(sum(day["count"] for day in days), 2)  # not the admin, 90 days ago
+        # A day is the admin's own: 14 hours east moves every signup with it.
+        shifted = self.get("/api/admin/users/signups?days=60&offset=840")
+        self.assertEqual(shifted[-1]["date"], time.strftime("%Y-%m-%d", time.gmtime(self.now + 14 * 3600)))
 
     def test_overview_counts(self):
         overview = self.get("/api/admin/overview")
