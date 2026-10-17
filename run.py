@@ -295,6 +295,17 @@ def _failed_sheets(work_dir, stem):
     return failed
 
 
+# A book with some pages failed still exports the others: "Transcription
+# failed on [Stub#1, Stub#3], using the other sheets".
+_DROPPED_SHEETS = re.compile(r"Transcription failed on \[([^\]]*)\], using the other sheets")
+
+
+def _dropped_sheets(work_dir, stem):
+    """The pages an export that succeeded left out, in page order."""
+    found = _DROPPED_SHEETS.search(_audiveris_log(work_dir, stem))
+    return sorted(int(n) for n in re.findall(r"#(\d+)", found.group(1))) if found else []
+
+
 # "With a too low interline value of 7 pixels, either this sheet contains no
 # multi-line staves, or the picture resolution is too low". A phone screenshot
 # saved as a PDF: its staff lines are there, just too few pixels apart.
@@ -340,18 +351,34 @@ def recognize_book(pdf_path, work_dir, dpi=None, log=print):
         runs += 1
         try:
             mxl, omr = run_audiveris(pdf_path, work_dir, dpi=dpi, sheets=sheets, constants=constants)
+            stem = pdf_path.stem
+            dropped = _dropped_sheets(work_dir, stem)
             # Audiveris drops a page whose staves are too fine and exports the
             # rest: a 15-page scan came back with only its last 6 pages, the 9
             # with 10px interlines gone. Read finer, they all are - if that
             # pass, costing the square of the DPI ratio, still fits.
-            finer = _upscaled_dpi(work_dir, pdf_path.stem, dpi)
-            if finer and ((time.monotonic() - started) * (1 + (finer / (dpi or DEFAULT_DPI)) ** 2)
-                          <= LEAVE_OUT_BUDGET_SECONDS):
+            finer = _upscaled_dpi(work_dir, stem, dpi) if dropped else None
+            spent = time.monotonic() - started if dropped else 0
+            if finer and spent * (1 + (finer / (dpi or DEFAULT_DPI)) ** 2) <= LEAVE_OUT_BUDGET_SECONDS:
                 log(f"[1/3] Some pages are too low-resolution to read; reading them again at {finer} DPI ...")
                 dpi = finer
+            # A page that crashed is lost from the export just the same, where
+            # a fresh run usually reads it.
+            elif (dropped and _a_sheet_crashed(work_dir, stem) and crashes < CRASH_RERUNS
+                  and spent * (runs + 1) / runs <= CRASH_RERUN_BUDGET_SECONDS):
+                crashes += 1
+                log(f"[1/3] Audiveris crashed on a page; reading the sheet again ({crashes} of {CRASH_RERUNS}) ...")
             else:
-                if sheets:
-                    number_pages(mxl, sheets)
+                # The export numbers its pages from 1 whichever were left out,
+                # so the music of a book whose cover was dropped would land a
+                # page early.
+                kept = [page for page in (sheets or range(1, count_pages(pdf_path) + 1))
+                        if page not in dropped]
+                if dropped:
+                    log(f"[1/3] No music could be read on page {', '.join(map(str, dropped))}; "
+                        "keeping the other pages ...")
+                if sheets or dropped:
+                    number_pages(mxl, kept)
                 return mxl, omr, dpi
         except SplitIntoMovements:
             if constants:
