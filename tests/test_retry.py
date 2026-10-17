@@ -198,8 +198,9 @@ class CrashRerunTests(unittest.TestCase):
             self.sheets.append(sheets)
             outcome = next(calls)
             (out_dir / "input.omr").write_text("partial book")
-            if outcome == "ok":
-                (out_dir / "input-1.log").write_text("all good")
+            if outcome.startswith("ok"):
+                # "ok" + a log: exported, with some pages dropped on the way.
+                (out_dir / "input-1.log").write_text(outcome[2:] or "all good")
                 return out_dir / "input.mxl", out_dir / "input.omr"
             if outcome == "movements":
                 raise run.SplitIntoMovements("split")
@@ -299,6 +300,27 @@ class CrashRerunTests(unittest.TestCase):
         self.assertEqual(result, (self.work / "input.mxl", self.work / "input.omr", 700))
         self.assertEqual([dpi for dpi, _ in self.runs], [None, 700])
         self.assertIn("700 DPI", log[-1])
+
+    def test_a_too_coarse_page_dropped_from_an_export_is_read_again_finer(self):
+        # The export holds the other pages, but the coarse one is lost.
+        result, calls, log = self.recognize("ok" + SHEET_REMOVED, "ok")
+        self.assertEqual(result, (self.work / "input.mxl", self.work / "input.omr", 700))
+        self.assertEqual([dpi for dpi, _ in self.runs], [None, 700])
+        self.assertIn("Some pages are too low-resolution", log[-1])
+
+    def test_a_dropped_page_is_kept_out_when_reading_finer_would_not_fit(self):
+        # At 700 DPI a pass costs (700/300)^2 = 5.4 times the first.
+        first = run.LEAVE_OUT_BUDGET_SECONDS / 6
+        with patch.object(run.time, "monotonic", side_effect=[0, first]):
+            result, calls, _ = self.recognize("ok" + SHEET_REMOVED, "ok")
+        self.assertEqual(result, (self.work / "input.mxl", self.work / "input.omr", None))
+        self.assertEqual(calls, 1)
+
+    def test_an_export_still_too_coarse_at_the_limit_is_kept(self):
+        result, calls, _ = self.recognize("ok" + SHEET_REMOVED.replace("of 7 pixels", "of 3 pixels"),
+                                          "ok" + SHEET_REMOVED.replace("of 7 pixels", "of 3 pixels"))
+        self.assertEqual([dpi for dpi, _ in self.runs], [None, run.MAX_UPSCALE_DPI])
+        self.assertEqual(result[2], run.MAX_UPSCALE_DPI)
 
     def test_a_page_still_too_coarse_at_the_limit_is_left_out(self):
         result, calls, _ = self.recognize(SHEET_REMOVED.replace("of 7 pixels", "of 3 pixels"),

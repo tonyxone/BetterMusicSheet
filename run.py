@@ -340,9 +340,19 @@ def recognize_book(pdf_path, work_dir, dpi=None, log=print):
         runs += 1
         try:
             mxl, omr = run_audiveris(pdf_path, work_dir, dpi=dpi, sheets=sheets, constants=constants)
-            if sheets:
-                number_pages(mxl, sheets)
-            return mxl, omr, dpi
+            # Audiveris drops a page whose staves are too fine and exports the
+            # rest: a 15-page scan came back with only its last 6 pages, the 9
+            # with 10px interlines gone. Read finer, they all are - if that
+            # pass, costing the square of the DPI ratio, still fits.
+            finer = _upscaled_dpi(work_dir, pdf_path.stem, dpi)
+            if finer and ((time.monotonic() - started) * (1 + (finer / (dpi or DEFAULT_DPI)) ** 2)
+                          <= LEAVE_OUT_BUDGET_SECONDS):
+                log(f"[1/3] Some pages are too low-resolution to read; reading them again at {finer} DPI ...")
+                dpi = finer
+            else:
+                if sheets:
+                    number_pages(mxl, sheets)
+                return mxl, omr, dpi
         except SplitIntoMovements:
             if constants:
                 raise
