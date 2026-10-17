@@ -143,9 +143,81 @@ def time_signatures(page):
     return marks
 
 
+def _filled_dotted_line(drawing):
+    """A dotted line filled as one path of many tiny dashes, as (left, right, y).
+
+    LilyPond-engraved PDFs (Noctave's editions among them) draw an octave
+    line this way rather than as a dashed stroke. The gaps are what separate
+    it from a thin filled bar: the dashes must leave much of the run empty.
+    """
+    rect, items = drawing.get('rect'), drawing['items']
+    if (rect is None or 'f' not in (drawing.get('type') or '') or rect.height >= 1.5
+            or rect.width <= 20 or len(items) < 16 or any(i[0] != 'l' for i in items)):
+        return None
+    runs = sorted((min(a.x, b.x), max(a.x, b.x)) for _, a, b in items if abs(a.y - b.y) < .2)
+    covered, reach = 0, rect.x0
+    for left, right in runs:
+        left = max(left, reach)
+        if right > left:
+            covered += right - left
+            reach = right
+    if covered > .8 * rect.width:
+        return None
+    return rect.x0, rect.x1, (rect.y0 + rect.y1) / 2
+
+
+def _outlined_eights(drawings, lines):
+    """Octave labels drawn as outlines, not text: an isolated "8"-sized glyph,
+    or "(8)" on a continuing system, set right where a dotted line starts.
+
+    Only the plain "8" is accepted - its size and shape are all there is to go
+    on, and "15" or "22" would be twice as wide. A letter ending a word such
+    as "dim" is ruled out by the glyph set close against it.
+    """
+    shapes = [d['rect'] for d in drawings
+              if d.get('rect') is not None and 'f' in (d.get('type') or '')
+              and 4 <= d['rect'].height <= 9 and d['rect'].width < 8]
+    eights = [d['rect'] for d in drawings
+              if d.get('rect') is not None and 'f' in (d.get('type') or '')
+              # an "8" is all curves, bar the odd segment closing a contour
+              and sum(i[0] == 'c' for i in d['items']) >= max(8, .8 * len(d['items']))
+              and 3 <= d['rect'].width <= 7 and 1 <= d['rect'].height / d['rect'].width <= 1.6]
+    narrow = lambda r: r.width < 3  # a parenthesis
+    beside = lambda r, x0, x1, top, bottom: x0 <= r.x1 <= x1 and r.y0 < bottom and r.y1 > top
+    hooks = [(a.x, a.y, b.y) for d in drawings for i in d['items'] if i[0] == 'l'
+             for a, b in [i[1:3]] if abs(a.x - b.x) < .5 and 2 <= abs(a.y - b.y) <= 8]
+
+    def hook_direction(right, y):
+        # The closing hook points at the staff the line shifts: down from a
+        # line above it (alta), up from one below (bassa). Midway between two
+        # staves it is the only thing that says which.
+        for x, y0, y1 in hooks:
+            if right - 3 <= x <= right + 1:
+                for near, far in ((y0, y1), (y1, y0)):
+                    if abs(near - y) < 1:
+                        return 1 if far > near else -1
+        return None
+
+    marks = []
+    for left, right, y in lines:
+        for g in eights:
+            if not g.y0 - 2 <= y <= g.y1 + 2:
+                continue
+            gap = left - g.x1
+            if not (-1 <= gap <= 3 or 3 < gap <= 6 and any(
+                    narrow(s) and beside(s, g.x1, left + 1, g.y0, g.y1) for s in shapes)):
+                continue
+            if any(s is not g and not narrow(s) and beside(s, g.x0 - 2, g.x0 + .5, g.y0, g.y1) for s in shapes):
+                continue
+            marks.append((g.y0, g.x0, 1, hook_direction(right, y), [(left, right, y)]))
+            break
+    return marks
+
+
 def octave_intervals(page, staff_lines):
-    dashed, solid = [], []
-    for drawing in page.get_drawings():
+    dashed, solid, filled_dotted = [], [], []
+    drawings = page.get_drawings()
+    for drawing in drawings:
         dashes = drawing.get('dashes')
         target = solid if not dashes or dashes.startswith('[]') else dashed
         for item in drawing['items']:
@@ -153,8 +225,12 @@ def octave_intervals(page, staff_lines):
                 a, b = item[1:3]
                 if abs(a.y - b.y) < 1 and abs(a.x - b.x) > 20:
                     target.append((min(a.x, b.x), max(a.x, b.x), (a.y + b.y) / 2))
+        line = _filled_dotted_line(drawing)
+        if line:
+            filled_dotted.append(line)
+    dashed += filled_dotted
     spans = text_spans(page)
-    marks = []
+    marks = _outlined_eights(drawings, filled_dotted)
     for span in spans:
         text = span['text'].strip()
         amount = LEGACY_OCTAVES.get((span.get('font'), text))
@@ -217,8 +293,17 @@ def octave_intervals(page, staff_lines):
     # the page that ran to the systems' right edge.
     ends = [b for _, b, _ in dashed + solid]
     right_edge = max(ends) if ends else None
+    marks.sort(key=lambda m: (m[0], m[1]))
+    # Read backwards too: a line that runs off its system has no closing hook
+    # of its own, and the continuation's hook, one system on, says which way.
+    for i in range(len(marks) - 2, -1, -1):
+        y0, x0, amount, direction, lines = marks[i]
+        following = marks[i + 1]
+        if (direction is None and following[3] is not None and len(lines) == 1
+                and right_edge is not None and lines[0][1] >= right_edge - 3 and following[1] < x0):
+            marks[i] = (y0, x0, amount, following[3], lines)
     intervals, carried = {}, None
-    for _, x0, amount, direction, lines in sorted(marks, key=lambda m: (m[0], m[1])):
+    for _, x0, amount, direction, lines in marks:
         if direction is None:
             direction = carried
         if len(lines) != 1:
