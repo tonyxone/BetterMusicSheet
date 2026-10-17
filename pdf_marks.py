@@ -77,6 +77,22 @@ def text_spans(page):
     return [s for b in page.get_text('dict')['blocks'] for line in b.get('lines', []) for s in line['spans']]
 
 
+def number_texts(page):
+    """Small all-digit text on the page, as [(x0, y0, x1, y1, number)].
+
+    Bar numbers among them are told apart by where they sit (timeline matches
+    them to the top-left corner of a system). Size alone rules out the large
+    digits of a time signature or a multimeasure rest's count, whose font
+    encodings are often unreadable anyway.
+    """
+    found = []
+    for span in text_spans(page):
+        text = span['text'].strip()
+        if text.isdigit() and span.get('size', 0) <= 14:
+            found.append((*span['bbox'], int(text)))
+    return found
+
+
 def time_signatures(page):
     """Read stacked time digits using baselines, not font bounding boxes.
 

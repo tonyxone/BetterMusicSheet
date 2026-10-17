@@ -797,6 +797,67 @@ class AccuracyTests(unittest.TestCase):
         self.assertIsNotNone(t['measures'][1]['bbox_pt'])
         self.assertEqual(t['notes'][1]['midi'], 62)
 
+    REST = '<note print-object="no"><rest measure="yes"/><duration>4</duration></note>'
+    MULTI = '<attributes><measure-style><multiple-rest>{}</multiple-rest></measure-style></attributes>'
+
+    def test_a_multimeasure_rest_is_one_printed_bar(self):
+        # Printed: a 3-bar rest, then a bar with a note. The export writes
+        # the rest as 3 bars; every bar still lands on its printed one.
+        pages = [[[], [(6, 0, 1, None)]]]
+        resolved = self.resolved(pages)
+        body = (measure(ATTR + self.MULTI.format(3) + self.REST, 1) + measure(self.REST, 2)
+                + measure(self.REST, 3) + measure(note(duration=4), 4))
+        p = timeline.prepare_score(None, mxl(self.path / 'score.mxl', body), None, 1, resolved_notes=resolved)
+        t = timeline.build_timeline(None, None, None, 1, prepared_score=p)
+        self.assertEqual([m['bbox_pt'][0] for m in t['measures']], [0, 0, 0, 100])
+        self.assertEqual(t['stats']['notes_unmatched'], 0)
+        self.assertEqual(t['stats']['measure_count_mismatch'], 0)
+
+    def test_a_rest_glued_to_the_bar_before_it_gets_its_own_bars(self):
+        # Audiveris missed the barline: one printed bar holds a note and a
+        # 2-bar rest, which the export ends that bar with.
+        pages = [[[(6, 0, 1, None)]]]
+        resolved = self.resolved(pages)
+        body = measure(ATTR + note(duration=4) + self.MULTI.format(2) + self.REST, 1)
+        p = timeline.prepare_score(None, mxl(self.path / 'score.mxl', body), None, 1, resolved_notes=resolved)
+        t = timeline.build_timeline(None, None, None, 1, prepared_score=p)
+        self.assertEqual([m['length_beats'] for m in t['measures']], [4, 4, 4])
+        self.assertEqual(len(t['notes']), 1)
+        self.assertTrue(all(m['bbox_pt'] for m in t['measures']))
+        self.assertFalse(any(w.startswith('Recognized duration') for m in t['measures'] for w in m['warnings']))
+
+    def test_a_one_bar_rest_inside_a_bar_is_not_split_off_unconfirmed(self):
+        # A half rest's block read as a "1-bar multirest": nothing to split.
+        _, ms = self.parse(measure(ATTR + note(duration=4) + self.MULTI.format(1) + self.REST, 1))
+        printed = [(m, []) for m in ms]
+        self.assertFalse(timeline._split_glued_rests(printed))
+        self.assertEqual(len(printed), 1)
+        # Nor is a rest under an earlier voice, or one after more than a bar.
+        for body in (note(duration=4) + '<backup><duration>4</duration></backup>' + self.MULTI.format(3) + self.REST,
+                     note(duration=4) + note(duration=4) + self.MULTI.format(3) + self.REST):
+            _, ms = self.parse(measure(ATTR + body, 1))
+            self.assertNotIn('glued_rest', ms[0])
+
+    def test_a_glued_rest_is_as_long_as_the_printed_bar_numbers_say(self):
+        # Saints: system 5 starts at bar 32 and holds 32, 33, then 43 glued to
+        # a rest read as 1 bar; the next system is printed as starting at 49.
+        _, ms = self.parse(measure(ATTR + note(duration=4), 32) + measure(note(duration=4), 33)
+                           + measure(note(duration=4) + self.MULTI.format(1) + self.REST, 34)
+                           + measure('<print new-system="yes"/>' + note(duration=4), 35))
+        printed = [(m, []) for m in ms]
+        self.assertTrue(timeline._split_glued_rests(printed, {(1, 0): 32, (1, 1): 49}))
+        # 49 - 32 = 17 bars on the first system: three, and fourteen of rest.
+        self.assertEqual(len(printed), 18)
+        self.assertEqual([m['label'] for m, _ in printed][:3] + [printed[-1][0]['label']], ['32', '33', '34', '49'])
+        self.assertEqual(printed[3][0]['multiple_rest'], 14)
+        self.assertTrue(all(m['rest_continuation'] for m, _ in printed[4:17]))
+        # Without the next system's number the exported count stands; the
+        # printed start still numbers the bars.
+        _, ms = self.parse(measure(ATTR + note(duration=4) + self.MULTI.format(2) + self.REST, 7))
+        printed = [(m, []) for m in ms]
+        timeline._split_glued_rests(printed, {(1, 0): 30})
+        self.assertEqual([m['label'] for m, _ in printed], ['30', '31', '32'])
+
     def system_missing_one_measure(self, numbers):
         """Three printed measures in one system against a two-measure export."""
         pages = [[[(6, 0, 1, None)], [(4, 0, 1, None)], [(5, 0, 1, None)]]]
