@@ -916,6 +916,70 @@ class AccuracyTests(unittest.TestCase):
             self.assertEqual(pdf_marks.octave_intervals(page, {1: (40, 50, 60, 70, 80)}),
                               {1: [(18, 182, 1)]}, msg=label)
 
+    @staticmethod
+    def outlined_page(*drawings):
+        """A LilyPond-style page: every glyph an outline, no text at all."""
+        from types import SimpleNamespace
+        return SimpleNamespace(get_text=lambda _: {'blocks': []}, get_drawings=lambda: list(drawings))
+
+    @staticmethod
+    def filled_dots(left, right, y, dash=1, gap=1.5):
+        items, x = [], left
+        while x + dash <= right:
+            a, b = pymupdf.Point(x, y), pymupdf.Point(x + dash, y)
+            c, d = pymupdf.Point(x + dash, y + .5), pymupdf.Point(x, y + .5)
+            items += [('l', a, b), ('l', b, c), ('l', c, d), ('l', d, a)]
+            x += dash + gap
+        return {'type': 'f', 'rect': pymupdf.Rect(left, y, x - gap, y + .5), 'items': items}
+
+    @staticmethod
+    def glyph(x0, y0, x1, y1, curves=28, segments=1):
+        p = pymupdf.Point(x0, y0)
+        return {'type': 'fs', 'rect': pymupdf.Rect(x0, y0, x1, y1),
+                'items': [('c', p, p, p, p)] * curves + [('l', p, p)] * segments}
+
+    @staticmethod
+    def hook(x, y, down=True):
+        return {'type': 's', 'rect': pymupdf.Rect(x, y, x, y + 4.6),
+                'items': [('l', pymupdf.Point(x, y), pymupdf.Point(x, y + 4.6 if down else y - 4.6))]}
+
+    def test_pdf_outlined_eight_and_filled_dotted_line_are_an_octave(self):
+        # Noctave's Chopin: the line sits midway between a bass staff above and
+        # a treble staff below; only its closing hook says which it shifts.
+        staffs = {6: (394, 399, 403, 408, 412), 7: (467, 472, 476, 481, 485)}
+        page = self.outlined_page(self.glyph(213.4, 438.4, 218.3, 444.5),
+                                  self.filled_dots(218.5, 442.4, 438.4), self.hook(442, 438.6))
+        found = pdf_marks.octave_intervals(page, staffs)
+        self.assertEqual({s: [(round(a), round(b), n) for a, b, n in spans] for s, spans in found.items()},
+                         {7: [(211, 444, 1)]})
+        page = self.outlined_page(self.glyph(213.4, 438.4, 218.3, 444.5),
+                                  self.filled_dots(218.5, 442.4, 438.4), self.hook(442, 438.6, down=False))
+        self.assertEqual(list(pdf_marks.octave_intervals(page, staffs)), [6])
+
+    def test_pdf_outlined_octave_running_off_the_system_takes_its_continuations_direction(self):
+        staffs = {8: (516, 520, 525, 530, 534), 9: (589, 593, 598, 603, 607),
+                  11: (712, 717, 722, 726, 731)}
+        page = self.outlined_page(
+            self.glyph(417.2, 560.4, 422.1, 566.4), self.filled_dots(422.4, 561, 560.4),
+            {'type': 's', 'rect': pymupdf.Rect(70, 534, 561, 534),  # a staff line: the systems' edge
+             'items': [('l', pymupdf.Point(70, 534), pymupdf.Point(561, 534))]},
+            # "(8)" on the next system, closed by a hook down
+            self.glyph(65.9, 688.2, 68.0, 694.6, curves=8, segments=4), self.glyph(68.0, 688.1, 72.9, 694.1),
+            self.glyph(72.9, 688.2, 75.0, 694.6, curves=8, segments=4),
+            self.filled_dots(75.2, 167.5, 688.1), self.hook(167.2, 688.3))
+        found = pdf_marks.octave_intervals(page, staffs)
+        self.assertEqual(sorted(found), [9, 11])
+        self.assertEqual([amount for spans in found.values() for *_, amount in spans], [1, 1])
+
+    def test_pdf_outlined_letters_and_solid_bars_are_not_octaves(self):
+        staffs = {1: (40, 45, 50, 55, 60)}
+        # "...m" of "dim" followed by dots: a glyph set right against it.
+        word = self.outlined_page(self.glyph(10, 20, 14.8, 26), self.glyph(15, 20, 19.9, 26),
+                                  self.filled_dots(20.1, 180, 20.2))
+        self.assertEqual(pdf_marks.octave_intervals(word, staffs), {})
+        bar = self.filled_dots(20.1, 180, 20.2, dash=4, gap=.2)
+        self.assertEqual(pdf_marks.octave_intervals(self.outlined_page(self.glyph(15, 20, 19.9, 26), bar), staffs), {})
+
     def test_pdf_octave_direction_selects_the_correct_staff_between_systems(self):
         from types import SimpleNamespace
         staffs = {1: (0, 5, 10, 15, 20), 2: (50, 55, 60, 65, 70)}
