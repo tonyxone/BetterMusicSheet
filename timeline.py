@@ -3,7 +3,7 @@ from collections import defaultdict
 from copy import deepcopy
 import pymupdf
 from audiveris_heads import has_sheet, load_time_signatures
-from pdf_marks import arpeggio_signs, time_signatures
+from pdf_marks import arpeggio_signs, number_texts, time_signatures
 
 import musicxml
 from labels import step_of, octave_of
@@ -51,6 +51,100 @@ def _printed_sources(mxl_path, num_pages, overrides):
     # to a different page as a fallback.
     result.extend((m, by_measure[m['measure_index']]) for m in measures if m['page'] > num_pages)
     return result
+
+
+def _system_start_numbers(pdf_path, resolved):
+    """The bar number printed at the start of each system, by (page, system).
+
+    Engravers set it just above the top-left corner of the system's first bar.
+    Only systems with a readable number appear.
+    """
+    starts = {}
+    with pymupdf.open(pdf_path) as pdf:
+        for page, data in resolved['pages'].items():
+            if not 1 <= page <= len(pdf):
+                continue
+            texts = number_texts(pdf[page - 1])
+            for r in data.get('regions', ()):
+                if r['system_measure'] != 0 or not r.get('bbox_pt'):
+                    continue
+                x0, top = r['bbox_pt'][0], r['bbox_pt'][1]
+                near = [t for t in texts if x0 - 6 <= t[0] <= x0 + 14 and top - 14 <= t[3] <= top + 1]
+                if len(near) == 1:
+                    starts[(page, r['system'])] = near[0][4]
+    return starts
+
+
+def _split_glued_rests(printed, start_numbers=None):
+    """Give a multimeasure rest Audiveris wrote into the bar before it its own bars.
+
+    When the barline before the rest is missed, the export ends that bar with
+    the rest's own whole-bar rest, so the bar plays twice as long and the
+    rest's other bars vanish - its count is often misread too. The rest keeps
+    the printed slot it shares with that bar (no barline was found between
+    them), and how many bars it is comes from the printed bar numbers: the
+    next system starts that many bars later. Without them, the exported count
+    stands.
+
+    Where a rest was split, each system with a printed start number is
+    numbered from it, so the bars after the rest read as printed.
+    """
+    start_numbers = start_numbers or {}
+    systems = []
+    for m, _ in printed:
+        if (m['page'], m['system']) not in systems:
+            systems.append((m['page'], m['system']))
+    result, split = [], False
+    for m, notes in printed:
+        result.append((m, notes))
+        glued = m.pop('glued_rest', None)
+        if not glued or m['implicit']:
+            continue
+        key = (m['page'], m['system'])
+        bars = glued['bars']
+        following = systems[systems.index(key) + 1] if systems.index(key) + 1 < len(systems) else None
+        counted = None
+        if key in start_numbers and following in start_numbers:
+            in_system = [x for x, _ in printed if (x['page'], x['system']) == key]
+            if not any(x['implicit'] for x in in_system):
+                counted = start_numbers[following] - start_numbers[key] - len(in_system)
+                counted = counted if 1 <= counted <= 999 else None
+        if counted is None and bars < 2:
+            # No engraver prints a one-bar multimeasure rest - that is a whole
+            # rest. Read as one, it is more likely another rest misread (a
+            # half rest's block, say), so without the bar numbers to confirm
+            # it the bar is left as it was exported.
+            continue
+        bars = counted or bars
+        nominal = m['nominal_length_beats']
+        m['content_length_beats'] = glued['at']
+        m['rests'] = [r for r in m['rests'] if r['start'] < glued['at'] - 1e-7]
+        m['length_beats'] = max(nominal, glued['at'])
+        if abs(glued['at'] - nominal) <= 1e-7:
+            m['warnings'][:] = [w for w in m['warnings'] if not w.startswith('Recognized duration differs')]
+        repeat_backward, m['repeat_backward'] = m['repeat_backward'], 0
+        for k in range(bars):
+            rest = dict(m, identity=(*m['identity'], 'rest', k), implicit=False,
+                        events=[], warnings=[], navigation={}, repeat_forward=False,
+                        repeat_backward=repeat_backward if k == bars - 1 else 0,
+                        rests=[],
+                        content_length_beats=0.0, length_beats=nominal, endings=list(m['endings']))
+            rest.pop('multiple_rest', None)
+            rest.update({'multiple_rest': bars} if k == 0 else {'rest_continuation': True})
+            result.append((rest, []))
+        split = True
+    printed[:] = result
+    if split:
+        for key in systems:
+            if key not in start_numbers:
+                continue
+            members = [(m, notes) for m, notes in printed if (m['page'], m['system']) == key]
+            if all(m['label'].isdigit() for m, _ in members):
+                for offset, (m, notes) in enumerate(members):
+                    m['label'] = str(start_numbers[key] + offset)
+                    for n in notes:
+                        n['label'] = m['label']
+    return split
 
 
 def _match_head(n, candidates, used):
@@ -504,6 +598,7 @@ def _recover_aligned_vector_heads(measure, notes, candidates, used):
 def _prepare_musicxml_only(mxl_path, num_pages, page_omr_overrides=None):
     """Prepare playable notes when PDF/OMR geometry cannot be reconciled."""
     printed = _printed_sources(mxl_path, num_pages, page_omr_overrides)
+    _split_glued_rests(printed)
     note_count = 0
     warning = 'PDF note matching failed; playback uses MusicXML-only score data.'
     for printed_index, (measure, notes) in enumerate(printed):
@@ -598,7 +693,9 @@ def _measure_regions(printed, resolved):
             (r for r in resolved['pages'].get(page, {}).get('regions', ())
              if r['system'] == system),
             key=lambda r: r['system_measure'])
-        if len(regions) == len(indexes):
+        # A multimeasure rest is several MusicXML bars in one printed bar: its
+        # bars share a slot, and all of them light up that one bar.
+        if len(regions) == len({printed[index][0]['system_measure'] for index in indexes}):
             by_slot = {r['system_measure']: r for r in regions}
             for index in indexes:
                 region = by_slot.get(printed[index][0]['system_measure'])
@@ -637,6 +734,7 @@ def meter_confirmed_by_bars(measures):
 def prepare_score(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=None, resolved_notes=None):
     resolved = resolved_notes if resolved_notes is not None else resolve_score_notes(pdf_path, omr_path, num_pages, page_omr_overrides)
     printed = _printed_sources(mxl_path, num_pages, page_omr_overrides)
+    _split_glued_rests(printed, _system_start_numbers(pdf_path, resolved))
     with pymupdf.open(pdf_path) as pdf:
         meters = {i + 1: time_signatures(p) for i, p in enumerate(pdf)}
         # Audiveris misses roughly half the arpeggios on a vector engraving that
@@ -711,7 +809,10 @@ def prepare_score(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=No
             if event['system'] == m['system'] and event['system_measure'] == m['system_measure']:
                 m['events'] = [e for e in m['events'] if not (e['kind'] == 'tempo' and abs(e['beat'] - event['beat']) < 1e-6)]
                 m['events'].append(event)
-        candidates = [h for h in page['notes'] if region and h['system'] == region['system']
+        # A rest's bars hold no notes, even where the printed slot they share
+        # also holds the bar Audiveris glued them to - its heads are that bar's.
+        resting = m.get('multiple_rest') or m.get('rest_continuation')
+        candidates = [h for h in page['notes'] if region and not resting and h['system'] == region['system']
                       and h['system_measure'] == region['system_measure']]
         used = set()
         for n in notes:
