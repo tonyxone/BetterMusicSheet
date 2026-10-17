@@ -1183,6 +1183,21 @@ main:has(.full-window) { z-index: 45; }
 .admin-tile-button { text-align: left; font: inherit; color: inherit; cursor: pointer; }
 .admin-tile-button:hover { border-color: var(--ink-soft); }
 .admin-tile-button.active { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.admin-chart { background: var(--card); border: 1px solid var(--paper-deep); border-radius: 14px; padding: 16px 18px 8px; margin-bottom: 24px; }
+.admin-chart .admin-toolbar { align-items: flex-start; }
+.admin-chart-title { margin: 0; }
+.admin-chart-plot { position: relative; height: 220px; }
+.admin-chart-plot svg { display: block; }
+.admin-chart-grid { stroke: var(--paper-deep); stroke-width: 1; }
+.admin-chart-axis { stroke: var(--ink-soft); stroke-width: 1; }
+.admin-chart-label { fill: var(--ink-soft); font-size: 11px; font-variant-numeric: tabular-nums; }
+.admin-chart-bar { fill: var(--accent); }
+.admin-chart-bar.hover { fill: var(--accent-deep); }
+.admin-chart-tip {
+  position: absolute; transform: translateX(-50%); pointer-events: none; white-space: nowrap;
+  background: var(--card); border: 1px solid var(--paper-deep); border-radius: 8px; padding: 6px 10px;
+  font-size: 13px; box-shadow: 0 2px 8px rgba(46, 33, 23, 0.12);
+}
 .admin-filter-row th { padding: 6px 8px 10px; vertical-align: top; }
 .admin-col-filter {
   display: block; width: 100%; min-width: 64px; padding: 5px 8px; border: 1px solid var(--paper-deep); border-radius: 8px;

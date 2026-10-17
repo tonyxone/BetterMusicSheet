@@ -10,6 +10,7 @@ import {
   Badge, LoadState, Pager, PaymentsTable, SubscriptionBadge, UploadsTable, date, duration, useAdminData,
   useReloadWhileReprocessing, type Tone,
 } from "./admin-parts";
+import { SignupsChart } from "./signups-chart";
 
 const TABS = [
   { id: "overview", label: "Overview" },
@@ -229,6 +230,7 @@ function UsersTab() {
   const users = data?.items ?? [];
   return (
     <section>
+      <SignupsChart />
       <div className="admin-toolbar">
         <ClearFilters any={any} clear={clear} />
         <LoadState loading={loading} error={error} onReload={reload} />

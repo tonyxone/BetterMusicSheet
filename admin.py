@@ -284,6 +284,24 @@ def users(q: str = "", joined: int = 0, plan: str = "", subscribed: int = 0, can
     return _page(rows, page, page_size)
 
 
+@router.get("/users/signups")
+def signups(days: int = 30, offset: int = 0):
+    """How many accounts were created each day of the last `days` (today
+    included), oldest first. `offset` is the admin's minutes east of UTC, so a
+    day runs midnight to midnight where they are."""
+    days = max(1, min(days, 3660))
+    shift = max(-14 * 60, min(offset, 14 * 60)) * 60
+    today = (int(time.time()) + shift) // DAY
+    counts = dict.fromkeys(range(today - days + 1, today + 1), 0)
+    for user in db.all_accounts():
+        if user.get("created_at"):
+            day = (user["created_at"] + shift) // DAY
+            if day in counts:
+                counts[day] += 1
+    return [{"date": time.strftime("%Y-%m-%d", time.gmtime(day * DAY)), "count": count}
+            for day, count in counts.items()]
+
+
 @router.get("/subscriptions")
 def subscriptions(state: str = "", page: int = 1, page_size: int = PAGE_SIZE):
     """Every subscription ever started, newest first, with how many are in
