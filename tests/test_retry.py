@@ -168,6 +168,8 @@ SHEET_REMOVED = ("WARN  [input#1]                 SheetStub 411  | input#1   Wit
                  "either this sheet contains no multi-line staves,  or the picture resolution is too low (try 300 DPI).\n"
                  "WARN  [input#1]                      Book 2044 | Error processing stub "
                  "org.audiveris.omr.step.StepException: Sheet removed\n")
+DROPPED_1 = ("WARN  [input]                      Book 2693 | Transcription failed on [Stub#1], "
+             "using the other sheets\n")
 
 
 class CrashRerunTests(unittest.TestCase):
@@ -198,8 +200,9 @@ class CrashRerunTests(unittest.TestCase):
             self.sheets.append(sheets)
             outcome = next(calls)
             (out_dir / "input.omr").write_text("partial book")
-            if outcome == "ok":
-                (out_dir / "input-1.log").write_text("all good")
+            if outcome.startswith("ok"):
+                # "ok" + a log: exported, with some pages dropped on the way.
+                (out_dir / "input-1.log").write_text(outcome[2:] or "all good")
                 return out_dir / "input.mxl", out_dir / "input.omr"
             if outcome == "movements":
                 raise run.SplitIntoMovements("split")
@@ -299,6 +302,57 @@ class CrashRerunTests(unittest.TestCase):
         self.assertEqual(result, (self.work / "input.mxl", self.work / "input.omr", 700))
         self.assertEqual([dpi for dpi, _ in self.runs], [None, 700])
         self.assertIn("700 DPI", log[-1])
+
+    def test_a_too_coarse_page_dropped_from_an_export_is_read_again_finer(self):
+        # The export holds the other pages, but the coarse one is lost.
+        result, calls, log = self.recognize("ok" + SHEET_REMOVED + DROPPED_1, "ok")
+        self.assertEqual(result, (self.work / "input.mxl", self.work / "input.omr", 700))
+        self.assertEqual([dpi for dpi, _ in self.runs], [None, 700])
+        self.assertIn("Some pages are too low-resolution", log[-1])
+        self.numbered.assert_not_called()
+
+    def test_a_dropped_page_is_kept_out_when_reading_finer_would_not_fit(self):
+        # At 700 DPI a pass costs (700/300)^2 = 5.4 times the first.
+        first = run.LEAVE_OUT_BUDGET_SECONDS / 6
+        with patch.object(run.time, "monotonic", side_effect=[0, first]):
+            result, calls, _ = self.recognize("ok" + SHEET_REMOVED + DROPPED_1, "ok")
+        self.assertEqual(result, (self.work / "input.mxl", self.work / "input.omr", None))
+        self.assertEqual(calls, 1)
+        self.numbered.assert_called_once_with(self.work / "input.mxl", [2, 3])
+
+    def test_an_export_still_too_coarse_at_the_limit_is_kept(self):
+        coarse = "ok" + SHEET_REMOVED.replace("of 7 pixels", "of 3 pixels") + DROPPED_1
+        result, calls, _ = self.recognize(coarse, coarse)
+        self.assertEqual([dpi for dpi, _ in self.runs], [None, run.MAX_UPSCALE_DPI])
+        self.assertEqual(result[2], run.MAX_UPSCALE_DPI)
+        self.numbered.assert_called_once_with(self.work / "input.mxl", [2, 3])
+
+    def test_a_low_interline_warning_on_a_page_still_exported_is_not_read_again(self):
+        result, calls, _ = self.recognize("ok" + SHEET_REMOVED.split("\n")[0])
+        self.assertEqual(calls, 1)
+        self.numbered.assert_not_called()
+
+    def test_an_export_without_its_cover_numbers_the_pages_it_kept(self):
+        # Exported alone, pages 2-3 would call themselves pages 1-2.
+        cover = SHEET_REMOVED.replace("too low interline", "too high interline")
+        result, calls, log = self.recognize("ok" + cover + DROPPED_1)
+        self.assertEqual(calls, 1)
+        self.numbered.assert_called_once_with(self.work / "input.mxl", [2, 3])
+        self.assertIn("No music could be read on page 1; keeping the other pages", log[-1])
+
+    def test_a_page_crashed_out_of_an_export_is_read_again(self):
+        crashed = "ok" + STUB_CRASH + "\n" + DROPPED_1.replace("Stub#1", "Stub#2")
+        result, calls, log = self.recognize(crashed, "ok")
+        self.assertEqual(calls, 2)
+        self.assertIn("reading the sheet again (1 of 2)", log[-1])
+        self.numbered.assert_not_called()
+
+    def test_a_page_that_keeps_crashing_out_of_an_export_is_left_out(self):
+        crashed = "ok" + STUB_CRASH + "\n" + DROPPED_1.replace("Stub#1", "Stub#2")
+        result, calls, _ = self.recognize(*[crashed] * (1 + run.CRASH_RERUNS))
+        self.assertEqual(calls, 1 + run.CRASH_RERUNS)
+        self.numbered.assert_called_once_with(self.work / "input.mxl", [1, 3])
+        self.assertIsNotNone(result)
 
     def test_a_page_still_too_coarse_at_the_limit_is_left_out(self):
         result, calls, _ = self.recognize(SHEET_REMOVED.replace("of 7 pixels", "of 3 pixels"),
