@@ -126,6 +126,10 @@ def _parse_part(part, part_ordinal, default_staff):
     page, system, system_measure = 1, 0, 0
     clefs, shifts, keys, transposes = {}, {}, {}, {}
     active_endings, label_counts = [], {}
+    # Bars still to come of a multimeasure rest. MusicXML writes one bar per
+    # bar of rest, but the page prints them all as a single bar, so they share
+    # its slot in the system.
+    rest_bars_left = 0
     staffless = part.find('.//{*}staff') is None
     for measure in part.findall('{*}measure'):
         label = measure.get('number') or str(len(measures) + 1)
@@ -155,7 +159,12 @@ def _parse_part(part, part_ordinal, default_staff):
                 'width': _number(measure.get('width')), 'events': [],
                 'warnings': [], 'rests': [], 'repeat_forward': False,
                 'repeat_backward': 0, 'endings': list(active_endings), 'navigation': {}}
-        system_measure += 1
+        if rest_bars_left and system_measure:
+            rest_bars_left -= 1
+            meta.update(system_measure=system_measure - 1, rest_continuation=True)
+        else:
+            rest_bars_left = 0
+            system_measure += 1
         stops = {}
         for el in measure:
             tag = _tag(el)
@@ -180,6 +189,17 @@ def _parse_part(part, part_ordinal, default_staff):
                         'octave': _int_text(clef.find('{*}clef-octave-change'))}
                 for tr in el.findall('{*}transpose'):
                     transposes[int(tr.get('number', '0'))] = _int_text(tr.find('{*}chromatic')) + 12 * _int_text(tr.find('{*}octave-change'))
+                bars = _int_text(el.find('{*}measure-style/{*}multiple-rest'))
+                if bars >= 1:
+                    if high == 0:
+                        meta['multiple_rest'] = bars
+                        rest_bars_left = bars - 1
+                    elif cursor == high and 0 < cursor <= nominal + 1e-7:
+                        # Audiveris missed the barline before the rest and
+                        # wrote it after a bar's worth of music (timeline
+                        # splits it off). A rest set under an earlier voice,
+                        # or after more than a bar, is some other misreading.
+                        meta['glued_rest'] = {'bars': bars, 'at': float(cursor)}
             elif tag in ('backup', 'forward'):
                 duration = Fraction(el.findtext('{*}duration', '0')) / divisions
                 cursor += duration if tag == 'forward' else -duration
