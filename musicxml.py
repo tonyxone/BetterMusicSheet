@@ -121,6 +121,9 @@ def _direction(el, cursor, divisions, staff, part, shifts, meta, stops):
 
 
 def _parse_part(part, part_ordinal, default_staff):
+    # Audiveris names a part P<id> after the logical part it exports, and
+    # each system of its book lists the logical parts it holds by that id.
+    part_id = (part.get('id') or '').removeprefix('P')
     notes, measures = [], []
     divisions, nominal = Fraction(1), 4.0
     page, system, system_measure = 1, 0, 0
@@ -236,6 +239,7 @@ def _parse_part(part, part_ordinal, default_staff):
                 pitch = el.find('{*}pitch')
                 if el.find('{*}rest') is not None:
                     meta['rests'].append({'staff': _int_text(el.find('{*}staff'), default_staff),
+                                          'part_id': part_id, 'part_staff': 1 if staffless else _int_text(el.find('{*}staff'), 1),
                                           'start': float(start), 'duration': float(duration)})
                 if pitch is not None and el.find('{*}cue') is None:
                     staff = _int_text(el.find('{*}staff'), default_staff)
@@ -253,7 +257,9 @@ def _parse_part(part, part_ordinal, default_staff):
                     if grace and grace_el.get('make-time'):
                         grace_data['make-time-beats'] = float(Fraction(grace_el.get('make-time')) / divisions)
                     notes.append({'identity': identity, 'label': label, 'part': part_ordinal,
-                                  'staff': staff, 'voice': el.findtext('{*}voice', '1'),
+                                  'staff': staff, 'part_id': part_id,
+                                  'part_staff': 1 if staffless else staff,
+                                  'voice': el.findtext('{*}voice', '1'),
                                   'step': pitch.findtext('{*}step', 'C').strip(),
                                   'octave': _int_text(pitch.find('{*}octave'), 4),
                                   'alter': _number(pitch.findtext('{*}alter')),

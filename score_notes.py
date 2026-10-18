@@ -316,6 +316,14 @@ def page_structure(root, staff_lines):
     for system_index, system in enumerate(root.findall('.//system')):
         staves = [s for p in system.findall('part') for s in p.findall('staff')]
         ids = [int(s.get('id')) for s in staves]
+        # Which of the system's staves each part holds, by logical part id: a
+        # voice above the piano makes the right hand the system's second staff,
+        # and a part only some systems hold moves the others only there.
+        part_roles, role = {}, 0
+        for p in system.findall('part'):
+            count = len(p.findall('staff'))
+            part_roles[p.get('id')] = list(range(role, role + count))
+            role += count
         ys = [y for sid in ids for y in staff_lines.get(sid, ())]
         stacks = system.findall('stack')
         for local, stack in enumerate(stacks):
@@ -323,7 +331,8 @@ def page_structure(root, staff_lines):
             bbox = [float(stack.get('left')), min(ys) - pad,
                     float(stack.get('right')), max(ys) + pad] if ys else None
             region = {'system': system_index, 'system_measure': local,
-                      'label': stack.get('id'), 'bbox_px': bbox, 'staff_ids': ids}
+                      'label': stack.get('id'), 'bbox_px': bbox, 'staff_ids': ids,
+                      'part_roles': part_roles}
             regions.append(region)
             slots = {s.get('id'): float(Fraction(s.get('time-offset'))) * 4
                      for s in stack.findall('slot') if s.get('time-offset') is not None}
