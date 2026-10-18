@@ -147,6 +147,28 @@ def _split_glued_rests(printed, start_numbers=None):
     return split
 
 
+def _role(n):
+    """The staff of the system a MusicXML note or rest is on, numbered from 0
+    as recognition numbers its heads' roles (_place_on_system_staves), or
+    its staff within its part where the system's parts are not known."""
+    return max(0, n.get('system_staff', n['staff']) - 1)
+
+
+def _place_on_system_staves(notes, rests, region):
+    """Number each note and rest of a measure by its staff in the system, as
+    recognition numbers heads: under a voice the piano's right hand is the
+    system's second staff, though it is its part's first. A part this
+    system does not hold keeps its own numbering."""
+    roles = (region or {}).get('part_roles') or {}
+    for n in [*notes, *rests]:
+        staves = roles.get(n.get('part_id'))
+        staff = n.get('part_staff', n['staff'])
+        if staves and 1 <= staff <= len(staves):
+            n['system_staff'] = staves[staff - 1] + 1
+        else:
+            n.pop('system_staff', None)
+
+
 def _match_head(n, candidates, used):
     clef = n['clef']
     ref = clef_reference(clef['sign'], clef['line'])
@@ -158,7 +180,7 @@ def _match_head(n, candidates, used):
     # into the same pitch class and leaves one of them unmatched.
     written = 34 - (n['octave'] * 7 + 'CDEFGAB'.index(n['step']))
     positioned = [h for h in candidates if h['source_id'] not in used
-                and h['role'] == max(0, n['staff'] - 1)
+                and h['role'] == _role(n)
                 and h.get('onset') is not None
                 and abs(h['onset'] - n['start_beat_in_measure']) < 1e-6]
     written_slot = written - ref
@@ -275,7 +297,7 @@ def _recover_measure_tail(measure, notes, candidates, used):
     by_id = {h['source_id']: h for h in candidates}
     for role in {h['role'] for h in candidates}:
         anchors = sorted([n for n in notes if n.get('head_id') in by_id
-                          and n['staff'] - 1 == role], key=lambda n: n['start_beat_in_measure'])
+                          and _role(n) == role], key=lambda n: n['start_beat_in_measure'])
         if len(anchors) < 3:
             continue
         # A chord contributes one rhythmic anchor at its mean horizontal position.
@@ -317,9 +339,9 @@ def _recover_measure_tail(measure, notes, candidates, used):
                for i, group in enumerate(chord_groups) for h in group):
             continue
         # Do not overwrite a rest or another exported voice in this staff.
-        if any(n['staff'] - 1 == role and n['start_beat_in_measure'] >= end for n in notes):
+        if any(_role(n) == role and n['start_beat_in_measure'] >= end for n in notes):
             continue
-        if any(r['staff'] - 1 == role and r['start'] + r['duration'] > end
+        if any(_role(r) == role and r['start'] + r['duration'] > end
                for r in measure.get('rests', [])):
             continue
         for i, h in [(i, h) for i, group in enumerate(chord_groups) for h in group]:
@@ -362,13 +384,13 @@ def _recover_known_onsets(measure, notes, candidates, used):
     original = list(notes)
     for (role, onset), heads in sorted(groups.items()):
         recovered_before = len(recovered)
-        existing = [n for n in original if n['staff'] - 1 == role
+        existing = [n for n in original if _role(n) == role
                     and abs(n['start_beat_in_measure'] - onset) < 1e-6]
         deficit = len(heads) - len(existing)
         if deficit <= 0:
             continue
 
-        role_notes = [n for n in original if n['staff'] - 1 == role]
+        role_notes = [n for n in original if _role(n) == role]
         fallback = role_notes or original
         prototype = min(fallback, key=lambda n: abs(n['start_beat_in_measure'] - onset)) if fallback else None
         transpose = prototype.get('transpose', 0) if prototype else 0
@@ -416,7 +438,7 @@ def _recover_known_onsets(measure, notes, candidates, used):
             base = dict(prototype) if prototype else {}
             source_id = f'recovered:{h["source_id"]}'
             base.update(identity=(measure['identity'], source_id), label=measure['label'],
-                        part=h.get('part', base.get('part', 0)), staff=role + 1, voice=voice,
+                        part=h.get('part', base.get('part', 0)), staff=role + 1, system_staff=role + 1, voice=voice,
                         step=step_of(diatonic), octave=octave_of(diatonic), alter=h['alter'],
                         start_beat_in_measure=onset, duration_beats=duration,
                         is_grace=False, grace={}, chord=bool(existing), tie_start=False,
@@ -449,14 +471,14 @@ def _recover_uniform_vector_run(measure, notes, candidates, used):
     """
     recovered = []
     for role in {h['role'] for h in candidates}:
-        role_notes = [n for n in notes if n['staff'] - 1 == role]
+        role_notes = [n for n in notes if _role(n) == role]
         role_heads = [h for h in candidates if h['role'] == role]
         missing_heads = [h for h in role_heads if h['source_id'] not in used]
         if (len(role_notes) < 3 or not missing_heads
                 or any(not h.get('vector_pdf') for h in missing_heads)
                 or any(n['is_grace'] or n['chord'] or n['tie_start'] or n['tie_stop']
                        or n.get('head_id') is None for n in role_notes)
-                or any(r['staff'] - 1 == role for r in measure.get('rests', []))):
+                or any(_role(r) == role for r in measure.get('rests', []))):
             continue
         voices = {n['voice'] for n in role_notes}
         durations = {round(float(n['duration_beats']), 8) for n in role_notes}
@@ -544,7 +566,7 @@ def _recover_aligned_vector_heads(measure, notes, candidates, used):
         role = h['role']
         tolerance = max(h.get('w', 0) * .6, 1.0)
         aligned = [n for n, head in placed if not n['is_grace'] and abs(head['cx'] - h['cx']) <= tolerance]
-        chord = [n for n in aligned if n['staff'] - 1 == role]
+        chord = [n for n in aligned if _role(n) == role]
         if chord:
             prototype = min(chord, key=lambda n: n['start_beat_in_measure'])
             start, duration = prototype['start_beat_in_measure'], prototype['duration_beats']
@@ -561,13 +583,13 @@ def _recover_aligned_vector_heads(measure, notes, candidates, used):
         diatonic = h.get('label_diatonic', h['diatonic'])
         transpose = prototype.get('transpose', 0)
         midi = midi_of(diatonic, h['alter']) + transpose
-        if any(n['staff'] - 1 == role and n['midi'] == midi
+        if any(_role(n) == role and n['midi'] == midi
                and abs(n['start_beat_in_measure'] - start) < 1e-6 for n in notes + recovered):
             continue
         # A whole note joining nothing in its own staff borrows the other
         # staff's note for timing only: its staff, clef and voice are its own.
-        staff_notes = [n for n in notes if n['staff'] - 1 == role]
-        if prototype['staff'] - 1 == role:
+        staff_notes = [n for n in notes if _role(n) == role]
+        if _role(prototype) == role:
             clef, voice = prototype['clef'], prototype['voice']
         else:
             sign = h.get('clef', 'G' if role == 0 else 'F')
@@ -577,7 +599,7 @@ def _recover_aligned_vector_heads(measure, notes, candidates, used):
         source_id = f'recovered:{h["source_id"]}'
         n = dict(prototype)
         n.update(identity=(measure['identity'], source_id), label=measure['label'],
-                 staff=role + 1, voice=voice, clef=clef,
+                 staff=role + 1, system_staff=role + 1, voice=voice, clef=clef,
                  step=step_of(diatonic), octave=octave_of(diatonic), alter=h['alter'],
                  start_beat_in_measure=start, duration_beats=duration,
                  is_grace=False, grace={}, chord=bool(chord), tie_start=False, tie_stop=False,
@@ -814,6 +836,7 @@ def prepare_score(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=No
         resting = m.get('multiple_rest') or m.get('rest_continuation')
         candidates = [h for h in page['notes'] if region and not resting and h['system'] == region['system']
                       and h['system_measure'] == region['system_measure']]
+        _place_on_system_staves(notes, m.get('rests', []), region)
         used = set()
         for n in notes:
             n['printed_id'] = f'{m["page"]}:{n["source_id"]}'
@@ -1064,7 +1087,7 @@ def build_timeline(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=N
         measure_notes = []
         for n in ns:
             out = dict(n, source_id=f'{occurrence}:{n["printed_id"]}', measure_index=occurrence,
-                       printed_measure_index=index, role=max(0, n['staff'] - 1), hand=None,
+                       printed_measure_index=index, role=_role(n), hand=None,
                        start_beat=start + n['start_beat_in_measure'])
             measure_notes.append(out)
         # A written arpeggio is staggered low-to-high, bounded by its duration.
