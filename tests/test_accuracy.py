@@ -769,6 +769,22 @@ class AccuracyTests(unittest.TestCase):
         self.assertEqual(t['notes'][0]['midi'], 89)
         self.assertEqual(annotate.records_from_resolved(p['resolved'], octave=True)[0]['labels'], ['F6'])
 
+    def test_an_octave_line_the_engraving_does_not_draw_is_not_doubted(self):
+        # Audiveris reports an 8va over a note written at its own pitch (Für
+        # Elise bar 6). Once the PDF's octave lines were readable - one is
+        # drawn elsewhere - the note is under none, and no warning is raised.
+        direction = '<direction><direction-type><octave-shift type="down" size="8"/></direction-type></direction>'
+        body = measure(ATTR + direction + note('F', octave=5, duration=4))
+        warned = lambda t: any(w.startswith('Octave marking') for m in t['measures'] for w in m['warnings'])
+        with patch('score_notes.octave_intervals', return_value={2: [(0, 200, 1)]}):
+            _, t = self.build([[[(-4, 0, 1, None)]]], body)
+        self.assertEqual(t['notes'][0]['midi'], 77)
+        self.assertFalse(warned(t))
+        # With no octave line read anywhere, the doubt stays.
+        _, t = self.build([[[(-4, 0, 1, None)]]], body)
+        self.assertEqual(t['notes'][0]['midi'], 77)
+        self.assertTrue(warned(t))
+
     def test_octave_shift_unison_matches_both_written_positions(self):
         common = {'staff': 1, 'voice': '1', 'start_beat_in_measure': 1.5,
                   'clef': {'sign': 'G', 'line': 2, 'octave': 0},
