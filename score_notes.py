@@ -325,7 +325,11 @@ def page_structure(root, staff_lines):
             part_roles[p.get('id')] = list(range(role, role + count))
             role += count
         ys = [y for sid in ids for y in staff_lines.get(sid, ())]
-        stacks = system.findall('stack')
+        # A cautionary stack - the courtesy key or time signature closing a
+        # system before the change - holds no music, and Audiveris leaves it
+        # out of the MusicXML. Counted, it shifts every bar of the system
+        # against the export and none of them gets its notes placed.
+        stacks = [s for s in system.findall('stack') if s.get('special') != 'CAUTIONARY']
         for local, stack in enumerate(stacks):
             pad = max(8, (max(ys) - min(ys)) * .12) if ys else 0
             bbox = [float(stack.get('left')), min(ys) - pad,
