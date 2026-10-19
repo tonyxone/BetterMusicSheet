@@ -366,6 +366,9 @@ def resolve_score_notes(pdf_path, omr_path, num_pages, page_omr_overrides=None):
     inherited_keys, inherited_clefs = {}, {}
     # An octave line still running at the foot of a scanned page, for the next.
     carried_octaves = None
+    # Engraved pages, and whether the octave lines they draw could be read on
+    # any of them (see the end).
+    vector_pages, vector_octaves_read = set(), False
     with pymupdf.open(pdf_path) as doc:
         for page in range(1, num_pages + 1):
             src = (page_omr_overrides or {}).get(page, {}).get('omr', omr_path)
@@ -396,6 +399,8 @@ def resolve_score_notes(pdf_path, omr_path, num_pages, page_omr_overrides=None):
                                for staff, spans in found.items()}
             else:
                 carried_octaves = None
+                vector_pages.add(page)
+                vector_octaves_read |= bool(pdf_octaves)
             pdf_tempos = metronome_marks(doc[page - 1])
             omr_clefs = load_omr_clefs(src, page)
             keys, alters = load_key_timeline(src, page), load_alter_map(src, page)
@@ -521,4 +526,13 @@ def resolve_score_notes(pdf_path, omr_path, num_pages, page_omr_overrides=None):
             pages[page] = {'regions': regions, 'notes': page_notes, 'tempo_events': tempo_events,
                            'staff_lines_pt': {s: [y * sy for y in ys] for s, ys in staff_lines.items()}}
             all_notes.extend(page_notes)
+    # Once an engraving's octave lines have been read somewhere in it, a note
+    # outside every one of them is under none: the engraving says so. Audiveris
+    # also reports octave lines nothing on the page shows (a start with no
+    # stop, running to the end of the page), and those are not worth doubting
+    # the note over. The note plays as written either way.
+    if vector_octaves_read:
+        for n in all_notes:
+            if n['page'] in vector_pages and 'pdf_octave_shift' not in n:
+                n['octave_unmarked'] = True
     return {'pages': pages, 'notes': all_notes}

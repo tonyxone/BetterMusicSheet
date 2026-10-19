@@ -864,7 +864,7 @@ def prepare_score(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=No
                 shift = (source_diatonic - xml_diatonic) // 7
                 if 'pdf_octave_shift' in h:
                     shift = h['pdf_octave_shift'] + n['clef']['octave']
-                elif shift != n['octave_shift'] + n['clef']['octave']:
+                elif shift != n['octave_shift'] + n['clef']['octave'] and not h.get('octave_unmarked'):
                     m['warnings'].append('Octave marking and encoded pitch disagree; the encoded octave is retained.')
                 n['midi'] = h['midi'] + shift * 12 + n['transpose']
                 h['label_diatonic'] = h['diatonic'] - shift * 7
