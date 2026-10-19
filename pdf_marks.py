@@ -230,6 +230,24 @@ def _outlined_eights(drawings, lines):
     return marks
 
 
+# "8va", "8vb", "15ma", "(8)": an octave mark spelled out in plain letters.
+_OCTAVE_WORD = re.compile(r'^\(?(8|15|22)(va|vb|ma|mb|ba|ve|a|b)?\.?\)?$', re.IGNORECASE)
+
+
+def octave_mark_is_text(page, rect):
+    """Whether what recognition took for an octave mark at ``rect`` (points)
+    is a word of the page's text instead: the 8 of a composer's "(1685-1750)",
+    of a metronome's "138", or a letter of "sempre". Only plain letters and
+    digits count - a music font's own glyphs, an 8va drawn as outlines over
+    noteheads, are left to recognition."""
+    words = [w[4] for w in page.get_text('words') if w[0] < rect[2] and rect[0] < w[2]
+             and w[1] < rect[3] and rect[1] < w[3]]
+    if any(_OCTAVE_WORD.match(w) or any(ord(ch) in OCTAVES for ch in w)
+           or any(text in w for _, text in LEGACY_OCTAVES) for w in words):
+        return False
+    return any(ch.isalnum() and ord(ch) < 0x2000 for w in words for ch in w)
+
+
 def octave_intervals(page, staff_lines):
     dashed, solid, filled_dotted = [], [], []
     drawings = page.get_drawings()

@@ -1,4 +1,5 @@
 """Hand-authored musical ground truth; no OMR engine or network required."""
+import functools
 import tempfile
 import unittest
 import zipfile
@@ -34,7 +35,7 @@ def mxl(path, body):
     return path
 
 
-def omr(path, pages, place_voices=True):
+def omr(path, pages, place_voices=True, octave_marks=()):
     """Two staves per page, one system, with explicit voice/slot identities.
 
     Each page contains measures of heads: (pitch slot, onset, staff, alter).
@@ -43,6 +44,8 @@ def omr(path, pages, place_voices=True):
     ``place_voices=False`` writes the heads without the voice/slot entries that
     give their chords a time offset - Audiveris's RHYTHMS step failing, which
     detects every notehead and still drops it from the exported score.
+
+    ``octave_marks``: (staff, x) of each octave mark recognition reports.
     """
     with zipfile.ZipFile(path, 'w') as z:
         for page_number, ms in enumerate(pages, 1):
@@ -86,6 +89,9 @@ def omr(path, pages, place_voices=True):
                         ET.SubElement(entry, 'key').text = slot
                         ET.SubElement(entry, 'value', chord=cid, status='BEGIN')
                 ET.SubElement(m, 'head-chords').text = ' '.join(ids)
+            for staff, x in octave_marks:
+                mark = ET.SubElement(sig, 'octave-shift', kind='ALTA', staff=str(staff))
+                ET.SubElement(mark, 'bounds', x=str(x), y='20', w='8', h='10')
             z.writestr(f'sheet#{page_number}/sheet#{page_number}.xml', ET.tostring(root))
     return path
 
@@ -768,6 +774,21 @@ class AccuracyTests(unittest.TestCase):
         p, t = self.build([[[ (-4, 0, 1, None)]]], measure(ATTR + direction + note('F', octave=6, duration=4)))
         self.assertEqual(t['notes'][0]['midi'], 89)
         self.assertEqual(annotate.records_from_resolved(p['resolved'], octave=True)[0]['labels'], ['F6'])
+
+    def test_an_octave_mark_read_from_the_pages_text_is_not_doubted(self):
+        # Bach's "(1685-1750)" above a Minuet: recognition reads its 8 as an
+        # 8va, which the export carries on. No octave line is drawn anywhere,
+        # yet the notes after the mark are not doubted - and still play as
+        # written.
+        direction = '<direction><direction-type><octave-shift type="down" size="8"/></direction-type></direction>'
+        body = measure(ATTR + direction + note('F', octave=5, duration=4))
+        warned = lambda t: any(w.startswith('Octave marking') for m in t['measures'] for w in m['warnings'])
+        marked = functools.partial(omr, octave_marks=[(1, 10)])
+        for is_text in (True, False):
+            with patch(__name__ + '.omr', marked), patch('score_notes.octave_mark_is_text', return_value=is_text):
+                _, t = self.build([[[(-4, 0, 1, None)]]], body)
+            self.assertEqual(t['notes'][0]['midi'], 77)
+            self.assertEqual(warned(t), not is_text)
 
     def test_an_octave_line_the_engraving_does_not_draw_is_not_doubted(self):
         # Audiveris reports an 8va over a note written at its own pitch (Für

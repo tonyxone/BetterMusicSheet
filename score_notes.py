@@ -12,7 +12,7 @@ from audiveris_heads import (
     load_omr_clefs, load_key_timeline, load_alter_map, get_picture_size, load_binary_image,
 )
 from labels import PITCH_REF, step_of, octave_of
-from pdf_marks import octave_intervals, metronome_marks
+from pdf_marks import octave_intervals, octave_mark_is_text, metronome_marks
 from scan import _Bitmap, is_scanned, ottava_intervals
 
 STEP = {'C': 0, 'D': 2, 'E': 4, 'F': 5, 'G': 7, 'A': 9, 'B': 11}
@@ -410,6 +410,25 @@ def resolve_score_notes(pdf_path, omr_path, num_pages, page_omr_overrides=None):
             for r in regions:
                 for role, sid in enumerate(r['staff_ids']):
                     roles[sid] = (r['system'], role)
+            # Where on each staff an octave mark read from the page's text takes
+            # effect - Bach's "(1685-1750)" above a Minuet started an 8va the
+            # export carried to the end of the page, flagging every bar after it.
+            # The notes under it are not worth doubting over a mark the page
+            # does not print, as for those outside every octave line the PDF
+            # draws (octave_unmarked); their pitch is left as it was.
+            text_octaves = {}
+            if not is_scanned(doc[page - 1]):
+                for mark in root.iter('octave-shift'):
+                    bounds, sid = mark.find('bounds'), int(mark.get('staff') or 0)
+                    if bounds is None or sid not in roles:
+                        continue
+                    left, top, width, height = (float(bounds.get(k)) for k in ('x', 'y', 'w', 'h'))
+                    if octave_mark_is_text(doc[page - 1], (left * sx, top * sy, (left + width) * sx, (top + height) * sy)):
+                        system, role = roles[sid]
+                        for other, (other_system, other_role) in roles.items():
+                            if other_role == role and other_system > system:
+                                text_octaves[other] = 0
+                        text_octaves[sid] = min(left, text_octaves.get(sid, left))
             ties, tie_sources = {}, {}
             tie_ids = {s.get('id') for s in root.iter('slur') if s.get('tie') == 'true'}
             for rel in root.iter('relation'):
@@ -481,6 +500,8 @@ def resolve_score_notes(pdf_path, omr_path, num_pages, page_omr_overrides=None):
                         if staff in pdf_octaves:
                             note['pdf_octave_shift'] = sum(amount for left, right, amount in pdf_octaves[staff] if left <= h['cx'] * sx <= right)
                             note['label_diatonic'] = diatonic - note['pdf_octave_shift'] * 7
+                        elif h['cx'] >= text_octaves.get(staff, float('inf')):
+                            note['octave_unmarked'] = True
                         resolved[h['id']] = note
                     for key, values in updates.items():
                         if len(values) == 1:
