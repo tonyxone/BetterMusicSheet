@@ -1193,6 +1193,17 @@ main:has(.full-window) { z-index: 45; }
 .admin-chart-label { fill: var(--ink-soft); font-size: 11px; font-variant-numeric: tabular-nums; }
 .admin-chart-bar { fill: var(--accent); }
 .admin-chart-bar.hover { fill: var(--accent-deep); }
+/* The engagement chart's two series: the sheet page and practice. */
+.admin-chart { --chart-sheet: #2f6fb5; --chart-practice: #A83C34; }
+.admin-chart-bar.sheet { fill: var(--chart-sheet); }
+.admin-chart-bar.practice { fill: var(--chart-practice); }
+.admin-chart-hover { fill: var(--paper-deep); opacity: 0.6; }
+.admin-chart-legend { display: flex; gap: 16px; font-size: 13px; color: var(--ink-soft); padding-top: 4px; }
+.admin-chart-key {
+  display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px;
+  background: var(--chart-sheet);
+}
+.admin-chart-key.practice { background: var(--chart-practice); }
 .admin-chart-tip {
   position: absolute; transform: translateX(-50%); pointer-events: none; white-space: nowrap;
   background: var(--card); border: 1px solid var(--paper-deep); border-radius: 8px; padding: 6px 10px;

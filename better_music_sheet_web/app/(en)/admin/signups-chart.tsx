@@ -15,14 +15,14 @@ const PAD = { top: 12, right: 8, bottom: 26, left: 36 };
 
 /** Round steps for the y axis - 1, 2, 5, 10, 20... - so its labels are
  * whole numbers of people. */
-function ticks(max: number) {
+export function ticks(max: number) {
   let step = 1;
   for (let i = 1; max / step > 5; i++) step = [1, 2, 5][i % 3] * 10 ** Math.floor(i / 3);
   const top = Math.max(step, Math.ceil(max / step) * step);
   return Array.from({ length: top / step + 1 }, (_, i) => i * step);
 }
 
-function dayLabel(day: string, long = false) {
+export function dayLabel(day: string, long = false) {
   // Noon UTC, so no time zone can move it onto another day.
   return new Date(`${day}T12:00:00Z`).toLocaleDateString(undefined, {
     month: "short", day: "numeric", ...(long ? { year: "numeric", weekday: "short" } : {}), timeZone: "UTC",
@@ -123,7 +123,7 @@ export function SignupsChart() {
 }
 
 /** A bar standing on the baseline, its top corners rounded. */
-function roundedTop(x: number, top: number, w: number, h: number, r: number) {
+export function roundedTop(x: number, top: number, w: number, h: number, r: number) {
   const bottom = top + h;
   return `M${x},${bottom}V${top + r}Q${x},${top} ${x + r},${top}H${x + w - r}Q${x + w},${top} ${x + w},${top + r}V${bottom}Z`;
 }

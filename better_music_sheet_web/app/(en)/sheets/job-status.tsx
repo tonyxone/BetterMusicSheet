@@ -10,6 +10,7 @@ import { SheetToggle, type SheetVariant } from "../../sheet-toggle";
 import { KeyboardIcon } from "../../keyboard-icon";
 import { BackButton } from "../../back-button";
 import { isActive, type AnnotationJob } from "@/lib/api";
+import { countUsage, useUsage } from "@/lib/usage";
 import { usePreference } from "@/lib/preferences";
 import type { CustomizedExport } from "../../sheet-viewer/sheet-editor";
 import { PageLoading } from "../../page-loading";
@@ -57,6 +58,8 @@ export function JobStatus() {
   // The upload can be read long before the names are ready, and still can
   // after adding them failed.
   const viewable = done || !!job?.original_ready;
+  // Time spent with the sheet, for the admin dashboard (lib/usage.ts).
+  useUsage(viewable ? jobId : null, "sheet");
 
   useEffect(() => {
     if (!jobId || !viewable) return;
@@ -431,6 +434,7 @@ function DownloadMenu({ jobId, sheetName, originalMissing, customizedRef, varian
   }, [open]);
 
   async function download(kind: DownloadKind) {
+    countUsage("download");
     setOpen(false);
     setBusy(kind);
     setError(null);

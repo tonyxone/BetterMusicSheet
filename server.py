@@ -13,7 +13,7 @@ import traceback
 import unicodedata
 import uuid
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -27,6 +27,7 @@ import processed_sheets
 import storage
 import apple_billing
 import stripe_billing
+import usage
 from auth import (
     BACKEND_JWT_LIFETIME_SECONDS,
     GUEST_USER_ID,
@@ -454,6 +455,11 @@ def delete_account(user_id: str = Depends(get_signed_in_user_id)):
         db.delete_annotation_job(job["job_id"])
     for sheet in db.list_music_sheets(user_id):
         db.delete_music_sheet(sheet["music_sheet_id"])
+    try:
+        usage.forget(user_id)
+    except Exception:
+        # They expire by themselves; the account must still go.
+        traceback.print_exc()
     db.delete_user(user_id)
     return Response(status_code=204)
 
@@ -1077,6 +1083,40 @@ def put_edits(job_id: str, body: EditsRequest, user_id: str = Depends(get_curren
             raise HTTPException(413, "Too many drawings on this sheet to save. Erase some and try again.")
         storage.write_edits(job, user_id, data)
     return {"revision": stored["revision"], "updated_at": stored["updated_at"]}
+
+
+class UsageReport(BaseModel):
+    """What one open page did since its last report (see usage.py). Unknown
+    keys and controls are refused, like Preferences."""
+    model_config = {"extra": "forbid"}
+    # Made up by the page when it opens; one per sheet per page.
+    session_id: str = Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    job_id: str = Field(min_length=1, max_length=100)
+    surface: Literal[usage.SURFACES]
+    platform: Literal[usage.PLATFORMS] = "web"
+    # In use: visible and touched lately, or playing.
+    seconds: int = Field(0, ge=0, le=usage.MAX_REPORT_SECONDS)
+    playing_seconds: int = Field(0, ge=0, le=usage.MAX_REPORT_SECONDS)
+    events: dict[Literal[usage.EVENTS], Annotated[int, Field(ge=0, le=1000)]] = Field(default_factory=dict)
+
+
+@app.post("/api/usage", status_code=204)
+def report_usage(body: UsageReport, user_id: str = Depends(get_current_user_id),
+                 account_id: Optional[str] = Depends(get_signed_in_user_id)):
+    """Add a page's report to its session, for the admin dashboard. Only for
+    a sheet the reader may open - their own, or the demo."""
+    _readable_job_or_404(body.job_id, user_id)
+    if user_id == GUEST_USER_ID:
+        # No id of its own: every such visitor would be one person.
+        return Response(status_code=204)
+    try:
+        admin = account_id is not None and db.is_admin(account_id)
+    except Exception:
+        traceback.print_exc()
+        admin = False
+    usage.record(user_id, body.session_id, body.job_id, body.surface, body.seconds, body.playing_seconds,
+                 body.events, body.platform, admin)
+    return Response(status_code=204)
 
 
 @app.get("/api/music-sheets")

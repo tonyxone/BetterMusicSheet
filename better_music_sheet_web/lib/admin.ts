@@ -28,6 +28,9 @@ export type AdminUser = {
   uploads: number;
   failed: number;
   last_upload_at: number | null;
+  /** Seconds the account spent on its sheets and practising them, last 30 days. */
+  active_seconds_30d: number;
+  last_active_at: number | null;
 };
 
 /** One charge for a subscription, as the store that billed it has it. */
@@ -119,6 +122,65 @@ export type AdminOverview = {
 
 /** New accounts on one day ("YYYY-MM-DD", the admin's own calendar day). */
 export type AdminSignupDay = { date: string; count: number };
+
+/** A control whose use is counted (../../usage.py's EVENTS). */
+export type AdminUsageEvent = keyof typeof USAGE_EVENTS;
+
+/** What each counted control is, as the dashboard names it. */
+export const USAGE_EVENTS = {
+  play: "Play",
+  measure: "Play from a bar",
+  step: "Step a note",
+  scrub: "Drag the position",
+  speed: "Speed",
+  tempo: "Tempo typed in",
+  balance: "Hand balance",
+  instrument: "Instrument",
+  sound: "Sound on/off",
+  paywall: "Hit the free limit",
+  notation: "Letters / numbers / solfège",
+  view: "Annotated / original",
+  download: "Download",
+  edit: "Edit a name or mark",
+} as const;
+
+export type AdminSurface = "sheet" | "practice";
+
+/** How readers spent a span of days with their sheets (admin.py's /engagement). */
+export type AdminEngagement = {
+  totals: {
+    users: number;
+    accounts: number;
+    guests: number;
+    practicing_users: number;
+    sessions: Record<AdminSurface, number>;
+    sheet_seconds: number;
+    practice_seconds: number;
+    playing_seconds: number;
+    median_day_seconds: number | null;
+  };
+  days: { date: string; sheet_seconds: number; practice_seconds: number; playing_seconds: number; users: number }[];
+  /** `sheet` and `practice`: sessions on that page that used it. */
+  controls: ({ event: AdminUsageEvent; users: number; uses: number } & Record<AdminSurface, number>)[];
+  sheets: {
+    job_id: string; sheet_name: string | null; demo: boolean; users: number;
+    sheet_seconds: number; practice_seconds: number; playing_seconds: number;
+  }[];
+};
+
+/** One sheet open on one page, from opening it to leaving (../../usage.py). */
+export type AdminSession = {
+  session_id: string;
+  job_id: string;
+  sheet_name: string | null;
+  surface: AdminSurface;
+  platform: string;
+  started_at: number;
+  last_at: number;
+  seconds: number;
+  playing_seconds: number;
+  events: Partial<Record<AdminUsageEvent, number>>;
+};
 
 /** One page of a list, and where it sits in the whole. */
 export type AdminPage<T> = { items: T[]; total: number; page: number; pages: number; page_size: number };

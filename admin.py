@@ -31,6 +31,7 @@ import db
 import reprocess
 import republish
 import storage
+import usage
 from auth import get_signed_in_user_id
 
 DAY = 86400
@@ -246,6 +247,12 @@ def users(q: str = "", joined: int = 0, plan: str = "", subscribed: int = 0, can
     for job in _jobs():
         if job.get("status") not in REMOVED:
             jobs_by_user.setdefault(job["user_id"], []).append(job)
+    active, last_active = {}, {}
+    for session in usage.all_sessions():
+        who = session["user_id"]
+        last_active[who] = max(last_active.get(who, 0), session["last_at"])
+        if session["started_at"] >= now - 30 * DAY:
+            active[who] = active.get(who, 0) + session["seconds"]
     rows = []
     for user in db.all_accounts():
         if not _matching(user["user_id"], q) or not _within(user.get("created_at"), joined, now):
@@ -261,6 +268,8 @@ def users(q: str = "", joined: int = 0, plan: str = "", subscribed: int = 0, can
             "uploads": len(mine),
             "failed": sum(j.get("status") == "failed" for j in mine),
             "last_upload_at": max((j.get("created_at") or 0 for j in mine), default=None),
+            "active_seconds_30d": active.get(user["user_id"], 0),
+            "last_active_at": last_active.get(user["user_id"]),
         }
         if plan:
             # Read the way the Plan badge reads: a subscription that grants
@@ -284,22 +293,114 @@ def users(q: str = "", joined: int = 0, plan: str = "", subscribed: int = 0, can
     return _page(rows, page, page_size)
 
 
+def _day_range(days, offset, longest):
+    """The last `days` days, today included, as day numbers - each midnight
+    to midnight where the admin is, `offset` being their minutes east of UTC
+    - and the shift that puts a timestamp on that calendar."""
+    days = max(1, min(days, longest))
+    shift = max(-14 * 60, min(offset, 14 * 60)) * 60
+    today = (int(time.time()) + shift) // DAY
+    return range(today - days + 1, today + 1), shift
+
+
+def _date(day):
+    return time.strftime("%Y-%m-%d", time.gmtime(day * DAY))
+
+
 @router.get("/users/signups")
 def signups(days: int = 30, offset: int = 0):
     """How many accounts were created each day of the last `days` (today
     included), oldest first. `offset` is the admin's minutes east of UTC, so a
     day runs midnight to midnight where they are."""
-    days = max(1, min(days, 3660))
-    shift = max(-14 * 60, min(offset, 14 * 60)) * 60
-    today = (int(time.time()) + shift) // DAY
-    counts = dict.fromkeys(range(today - days + 1, today + 1), 0)
+    span, shift = _day_range(days, offset, 3660)
+    counts = dict.fromkeys(span, 0)
     for user in db.all_accounts():
         if user.get("created_at"):
             day = (user["created_at"] + shift) // DAY
             if day in counts:
                 counts[day] += 1
-    return [{"date": time.strftime("%Y-%m-%d", time.gmtime(day * DAY)), "count": count}
-            for day, count in counts.items()]
+    return [{"date": _date(day), "count": count} for day, count in counts.items()]
+
+
+def _sheet_name(job_id):
+    """The sheet's name, or None once it is gone for good."""
+    if job_id == config.DEMO_JOB_ID:
+        return config.DEMO_SHEET_NAME
+    job = db.get_annotation_job(job_id)
+    if job is None:
+        return None
+    if job.get("sheet_name"):
+        return job["sheet_name"]
+    sheet = db.get_music_sheet(job["music_sheet_id"])
+    return sheet["sheet_name"] if sheet else None
+
+
+@router.get("/engagement")
+def engagement(days: int = 30, offset: int = 0):
+    """How readers spent the last `days` days with their sheets (see
+    usage.py): who was active, for how long on the sheet page and on the
+    practice page, which controls they used, and which sheets held them
+    longest. A session counts on the day it started, on the admin's own
+    calendar as in /users/signups. Admins' own sessions are left out."""
+    span, shift = _day_range(days, offset, usage.KEEP_DAYS)
+    since = span[0] * DAY - shift
+    sessions = [s for s in usage.all_sessions(since) if not s["admin"] and (s["seconds"] or s["events"])]
+    accounts = {u["user_id"] for u in db.all_accounts()}
+
+    daily = {day: {"sheet": 0, "practice": 0, "playing": 0, "users": set()} for day in span}
+    per_user_day = {}
+    for s in sessions:
+        day = (s["started_at"] + shift) // DAY
+        if day not in daily:
+            continue
+        daily[day][s["surface"]] += s["seconds"]
+        daily[day]["playing"] += s["playing_seconds"]
+        daily[day]["users"].add(s["user_id"])
+        per_user_day[(s["user_id"], day)] = per_user_day.get((s["user_id"], day), 0) + s["seconds"]
+
+    users = {s["user_id"] for s in sessions}
+    by_surface = {surface: [s for s in sessions if s["surface"] == surface] for surface in usage.SURFACES}
+    controls = []
+    for name in usage.EVENTS:
+        using = [s for s in sessions if s["events"].get(name)]
+        controls.append({
+            "event": name,
+            "users": len({s["user_id"] for s in using}),
+            "uses": sum(s["events"][name] for s in using),
+            # Sessions it was used in, on each page.
+            **{surface: sum(s["surface"] == surface for s in using) for surface in usage.SURFACES},
+        })
+
+    sheets = {}
+    for s in sessions:
+        sheet = sheets.setdefault(s["job_id"], {"job_id": s["job_id"], "users": set(), "sheet_seconds": 0,
+                                                "practice_seconds": 0, "playing_seconds": 0})
+        sheet["users"].add(s["user_id"])
+        sheet[f"{s['surface']}_seconds"] += s["seconds"]
+        sheet["playing_seconds"] += s["playing_seconds"]
+    top = sorted(sheets.values(), key=lambda x: x["sheet_seconds"] + x["practice_seconds"], reverse=True)[:10]
+    for sheet in top:
+        sheet.update(users=len(sheet["users"]), sheet_name=_sheet_name(sheet["job_id"]),
+                     demo=sheet["job_id"] == config.DEMO_JOB_ID)
+
+    return {
+        "totals": {
+            "users": len(users),
+            "accounts": len(users & accounts),
+            "guests": len(users - accounts),
+            "practicing_users": len({s["user_id"] for s in by_surface["practice"]}),
+            "sessions": {surface: len(rows) for surface, rows in by_surface.items()},
+            "sheet_seconds": sum(s["seconds"] for s in by_surface["sheet"]),
+            "practice_seconds": sum(s["seconds"] for s in by_surface["practice"]),
+            "playing_seconds": sum(s["playing_seconds"] for s in sessions),
+            # A typical day for someone who came at all.
+            "median_day_seconds": statistics.median(per_user_day.values()) if per_user_day else None,
+        },
+        "days": [{"date": _date(day), "sheet_seconds": d["sheet"], "practice_seconds": d["practice"],
+                  "playing_seconds": d["playing"], "users": len(d["users"])} for day, d in daily.items()],
+        "controls": controls,
+        "sheets": top,
+    }
 
 
 @router.get("/subscriptions")
@@ -349,6 +450,18 @@ def user_payments(user_id: str):
     except HTTPException as exc:
         return {"payments": [], "notes": [], "error": str(exc.detail)}
     return {"payments": rows, "notes": notes, "error": None}
+
+
+@router.get("/users/{user_id}/usage")
+def user_usage(user_id: str, limit: int = 50):
+    """The account's latest sessions (see usage.py), newest first, with the
+    name of the sheet each was on."""
+    sessions = usage.user_sessions(user_id)[:max(1, min(limit, 500))]
+    names = {}
+    for session in sessions:
+        if session["job_id"] not in names:
+            names[session["job_id"]] = _sheet_name(session["job_id"])
+    return [{**session, "sheet_name": names[session["job_id"]]} for session in sessions]
 
 
 MB = 1024 * 1024

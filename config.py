@@ -94,6 +94,12 @@ ADMIN_TABLE = os.environ.get("ADMIN_TABLE")
 # simply read from scratch, as before. Local dev keeps the list in memory.
 PROCESSED_SHEET_TABLE = os.environ.get("PROCESSED_SHEET_TABLE")
 
+# How long readers spend on each sheet and practising it, for the admin
+# dashboard (see usage.py). Optional for the same reason: without the table
+# the browser's reports are dropped. Local dev keeps them in memory, and never
+# writes the real table even if .env names it.
+USAGE_TABLE = os.environ.get("USAGE_TABLE")
+
 # Which generation of recognition a reusable result came from. Only results
 # from the current one are reused, so bump this after a fix to recognition:
 # from then on every upload is read again with the fix, and the results it

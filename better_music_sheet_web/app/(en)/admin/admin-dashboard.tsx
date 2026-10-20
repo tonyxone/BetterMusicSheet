@@ -3,18 +3,21 @@
 import { Fragment, useEffect, useState } from "react";
 import { useAuth } from "../../auth-context";
 import { clientApiFetch } from "@/lib/client-api";
-import type {
-  AdminOverview, AdminPage, AdminPayments, AdminSubscriptionState, AdminSubscriptions, AdminSystem, AdminUpload, AdminUploads, AdminUser,
+import {
+  USAGE_EVENTS, type AdminEngagement, type AdminOverview, type AdminPage, type AdminPayments, type AdminSession,
+  type AdminSubscriptionState, type AdminSubscriptions, type AdminSystem, type AdminUpload, type AdminUploads, type AdminUser,
 } from "@/lib/admin";
 import {
   Badge, LoadState, Pager, PaymentsTable, SubscriptionBadge, UploadsTable, date, duration, useAdminData,
   useReloadWhileReprocessing, type Tone,
 } from "./admin-parts";
 import { SignupsChart } from "./signups-chart";
+import { EngagementChart } from "./engagement-chart";
 
 const TABS = [
   { id: "overview", label: "Overview" },
   { id: "users", label: "Users" },
+  { id: "engagement", label: "Engagement" },
   { id: "subscriptions", label: "Subscriptions" },
   { id: "uploads", label: "Uploads" },
   { id: "system", label: "System" },
@@ -79,6 +82,7 @@ function Dashboard() {
       </div>
       {tab === "overview" && <OverviewTab />}
       {tab === "users" && <UsersTab />}
+      {tab === "engagement" && <EngagementTab />}
       {tab === "subscriptions" && <SubscriptionsTab />}
       {tab === "uploads" && <UploadsTab />}
       {tab === "system" && <SystemTab />}
@@ -154,6 +158,44 @@ function UserPayments({ userId }: { userId: string }) {
       <PaymentsTable payments={data.payments} />
       {data.notes.map((note) => <p key={note} className="admin-sub">{note}</p>)}
     </>
+  );
+}
+
+const PAGES = { sheet: "Sheet page", practice: "Practice" } as const;
+
+/** "Play ×4 · Speed ×2": what was used in a session, most first. */
+function eventSummary(events: AdminSession["events"]) {
+  return (Object.entries(events) as [keyof typeof USAGE_EVENTS, number][])
+    .sort((a, b) => b[1] - a[1])
+    .map(([event, count]) => `${USAGE_EVENTS[event] ?? event} ×${count}`)
+    .join(" · ");
+}
+
+function UserActivity({ userId }: { userId: string }) {
+  const { data, error, loading } = useAdminData<AdminSession[]>(`/users/${encodeURIComponent(userId)}/usage`);
+  if (error) return <p className="admin-error-text">{error}</p>;
+  if (!data) return <p className="admin-sub">{loading ? "Loading activity…" : ""}</p>;
+  if (!data.length) return <p className="admin-sub">No time on a sheet recorded yet.</p>;
+  return (
+    <div className="admin-table-wrap">
+      <table className="admin-table">
+        <thead>
+          <tr><th>Opened</th><th>Sheet</th><th>Page</th><th className="num">Time</th><th className="num">Playing</th><th>Used</th></tr>
+        </thead>
+        <tbody>
+          {data.map((s) => (
+            <tr key={s.session_id}>
+              <td className="nowrap">{date(s.started_at)}</td>
+              <td>{s.sheet_name ?? <span className="admin-sub">Deleted sheet</span>}</td>
+              <td className="nowrap">{PAGES[s.surface] ?? s.surface}{s.platform !== "web" && <div className="admin-sub">{s.platform}</div>}</td>
+              <td className="num">{duration(s.seconds)}</td>
+              <td className="num">{s.surface === "practice" ? duration(s.playing_seconds) : "—"}</td>
+              <td className="admin-sub">{eventSummary(s.events) || "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -242,6 +284,7 @@ function UsersTab() {
               <tr>
                 <th>User</th><th>Joined</th><th>Plan</th><th>Subscribed</th><th>Canceled</th>
                 <th className="num">Uploads</th>
+                <th className="num">Active, 30 days</th><th>Last active</th>
               </tr>
               <tr className="admin-filter-row">
                 <th><ColumnSearch label="user ID" value={filters.q} onChange={set("q")} /></th>
@@ -250,6 +293,7 @@ function UsersTab() {
                 <th><ColumnSelect label="subscribed" value={filters.subscribed} options={WITHIN} onChange={set("subscribed")} /></th>
                 <th><ColumnSelect label="canceled" value={filters.canceled} options={WITHIN} onChange={set("canceled")} /></th>
                 <th><ColumnSelect label="uploads" value={filters.uploads} options={UPLOAD_COUNTS} onChange={set("uploads")} /></th>
+                <th /><th />
               </tr>
             </thead>
             <tbody>
@@ -277,19 +321,23 @@ function UsersTab() {
                         {u.uploads}
                         {u.failed > 0 && <div className="admin-sub">{u.failed} failed</div>}
                       </td>
+                      <td className="num">{u.active_seconds_30d ? duration(u.active_seconds_30d) : "—"}</td>
+                      <td className="nowrap">{date(u.last_active_at)}</td>
                     </tr>
                     {expanded && (
                       <tr className="admin-expanded">
-                        <td colSpan={6}>
+                        <td colSpan={8}>
                           {/* Only an account that has subscribed has a store to ask. */}
                           {s && (
                             <>
                               <h3 className="admin-subheading">Payments</h3>
                               <UserPayments userId={u.user_id} />
-                              <h3 className="admin-subheading">Uploads</h3>
                             </>
                           )}
+                          <h3 className="admin-subheading">Uploads</h3>
                           <UserUploads userId={u.user_id} />
+                          <h3 className="admin-subheading">Activity</h3>
+                          <UserActivity userId={u.user_id} />
                         </td>
                       </tr>
                     )}
@@ -303,6 +351,118 @@ function UsersTab() {
       )}
       {data && <Pager page={data.page} pages={data.pages} total={data.total} noun="users"
         onPage={(next) => { setPage(next); setOpen(null); }} />}
+    </section>
+  );
+}
+
+const ENGAGEMENT_DAYS = [
+  { days: 7, label: "7 days" },
+  { days: 30, label: "30 days" },
+  { days: 90, label: "90 days" },
+] as const;
+
+/** "1 visit", "3 visits". */
+function plural(n: number, noun: string) {
+  return `${n.toLocaleString()} ${noun}${n === 1 ? "" : "s"}`;
+}
+
+function share(part: number, whole: number) {
+  return whole ? `${Math.round((part / whole) * 100)}%` : "—";
+}
+
+function EngagementTab() {
+  const [days, setDays] = useState<number>(30);
+  // Minutes east of UTC, so a day is the admin's own (see SignupsChart).
+  const offset = -new Date().getTimezoneOffset();
+  const { data, error, loading, reload } = useAdminData<AdminEngagement>(`/engagement${query({ days, offset })}`);
+  const totals = data?.totals;
+  const controls = [...(data?.controls ?? [])].sort((a, b) => b.users - a.users || b.uses - a.uses);
+  return (
+    <section>
+      <div className="admin-toolbar">
+        <div className="admin-filters">
+          {ENGAGEMENT_DAYS.map((range) => (
+            <button key={range.days} type="button" className={days === range.days ? "active" : ""}
+              onClick={() => setDays(range.days)}>{range.label}</button>
+          ))}
+        </div>
+        <div className="admin-toolbar-end">
+          <span className="admin-sub">Admin accounts left out</span>
+          <LoadState loading={loading} error={error} onReload={reload} />
+        </div>
+      </div>
+      {data && totals && (
+        <>
+          <div className="admin-tiles">
+            <Tile label="Active readers" value={totals.users.toLocaleString()}
+              sub={`${totals.accounts.toLocaleString()} with an account · ${plural(totals.guests, "guest")}`} />
+            <Tile label="On sheet pages" value={duration(totals.sheet_seconds)}
+              sub={plural(totals.sessions.sheet, "visit")} />
+            <Tile label="Practising" value={duration(totals.practice_seconds)}
+              sub={`${plural(totals.practicing_users, "reader")} · ${share(totals.playing_seconds, totals.practice_seconds)} of it playing`} />
+            <Tile label="A typical day" value={duration(totals.median_day_seconds)}
+              sub="Median time a reader spent on a day they came" />
+          </div>
+          <EngagementChart days={data.days} />
+          {totals.users === 0 ? (
+            <p className="admin-sub admin-empty">No time on a sheet recorded in these days yet.</p>
+          ) : (
+            <>
+              <h2 className="admin-heading">Controls used</h2>
+              <div className="admin-table-wrap">
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>Control</th><th className="num">Readers</th><th className="num">Sheet page visits</th>
+                      <th className="num">Practice visits</th><th className="num">Uses</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {controls.map((c) => (
+                      <tr key={c.event}>
+                        <td>{USAGE_EVENTS[c.event] ?? c.event}</td>
+                        <td className="num">{c.users ? c.users.toLocaleString() : "—"}
+                          {c.users > 0 && <div className="admin-sub">{share(c.users, totals.users)}</div>}</td>
+                        <td className="num">{c.sheet ? c.sheet.toLocaleString() : "—"}
+                          {c.sheet > 0 && <div className="admin-sub">{share(c.sheet, totals.sessions.sheet)}</div>}</td>
+                        <td className="num">{c.practice ? c.practice.toLocaleString() : "—"}
+                          {c.practice > 0 && <div className="admin-sub">{share(c.practice, totals.sessions.practice)}</div>}</td>
+                        <td className="num">{c.uses ? c.uses.toLocaleString() : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <h2 className="admin-heading">Sheets that held readers longest</h2>
+              <div className="admin-table-wrap">
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>Sheet</th><th className="num">Readers</th><th className="num">Sheet page</th>
+                      <th className="num">Practice</th><th className="num">Playing</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.sheets.map((sheet) => (
+                      <tr key={sheet.job_id}>
+                        <td>
+                          {sheet.sheet_name ?? <span className="admin-sub">Deleted sheet</span>}
+                          {sheet.demo && <> <Badge tone="info">Demo</Badge></>}
+                          <div className="admin-sub admin-id">{sheet.job_id}</div>
+                        </td>
+                        <td className="num">{sheet.users.toLocaleString()}</td>
+                        <td className="num">{duration(sheet.sheet_seconds)}</td>
+                        <td className="num">{duration(sheet.practice_seconds)}</td>
+                        <td className="num">{duration(sheet.playing_seconds)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </>
+      )}
     </section>
   );
 }

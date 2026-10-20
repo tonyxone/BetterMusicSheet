@@ -276,3 +276,44 @@ resource "aws_dynamodb_table" "processed_sheet" {
     }
   }
 }
+
+# Time spent with sheets, for the admin dashboard's Engagement tab (see
+# ../usage.py). One row per session - one sheet open on the sheet page or the
+# practice page - keyed by the reader's id, so one person's sessions are a
+# single Query. Rows remove themselves a little over a year after their
+# session started.
+resource "aws_dynamodb_table" "usage" {
+  name         = "${var.project}-usage"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "user_id"
+  range_key    = "session_id"
+
+  attribute {
+    name = "user_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "session_id"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  stream_enabled   = local.us_east_1_enabled
+  stream_view_type = local.us_east_1_enabled ? "NEW_AND_OLD_IMAGES" : null
+  dynamic "replica" {
+    for_each = local.us_east_1_enabled ? [local.us_east_1] : []
+    content {
+      region_name            = replica.value
+      point_in_time_recovery = true
+    }
+  }
+}
