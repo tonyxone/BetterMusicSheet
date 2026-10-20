@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { DragDropProvider } from "@dnd-kit/react";
 import { isSortable, useSortable } from "@dnd-kit/react/sortable";
 import { useRouter } from "next/navigation";
@@ -9,15 +9,28 @@ import { useAuth } from "./auth-context";
 import { clientApiFetch } from "@/lib/client-api";
 import { refreshSubscription } from "@/lib/subscription";
 import { resolveUploadAttempt } from "@/lib/upload-gate";
-import { addFiles, combinePhotos, isPhoto, moveFile, removeFile } from "@/lib/photo-pages";
+import { addFiles, combinePhotos, isPdf, isPhoto, moveFile, removeFile } from "@/lib/photo-pages";
+import { originOf, type PageFix } from "@/lib/page-photo";
 import { checkUpload, type UploadCheck } from "@/lib/staff-check";
 import { PremiumWindow } from "./(en)/subscription/premium-window";
+import { PageFixer } from "./page-fixer";
 import { useI18n } from "@/lib/i18n/client";
 import { fmt, plural, rich } from "@/lib/i18n/format";
 import { translateKnown } from "@/lib/i18n/known-text";
 import type { Messages } from "@/lib/i18n/messages/en";
 
 type UploadOption = "notation" | "style" | "fontSize" | "color" | "dpi" | "octave" | "autoRetry";
+
+/** A phone or tablet: something with a camera to photograph a page with,
+ * held in the hand. On a computer the button would only open the file
+ * picker the drop area already opens. */
+function useTouchDevice() {
+  return useSyncExternalStore((changed) => {
+    const query = window.matchMedia("(pointer: coarse)");
+    query.addEventListener("change", changed);
+    return () => query.removeEventListener("change", changed);
+  }, () => window.matchMedia("(pointer: coarse)").matches, () => false);
+}
 
 /** Presets worth one click. All dark enough to read against the staff; the
  * picker beside them still allows anything at all. */
@@ -59,6 +72,12 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
   // into processing. Kept with the files it was made for, so a result for
   // an earlier choice is never shown against a newer one.
   const [checked, setChecked] = useState<{ files: File[]; result: UploadCheck } | null>(null);
+  // The photo whose page is being fitted (page-fixer.tsx): just taken with
+  // the camera (index null), or the page at `index` fitted again from the
+  // photo it was made from.
+  const [fixing, setFixing] = useState<{ photo: File; fix: PageFix | null; index: number | null } | null>(null);
+  const cameraInput = useRef<HTMLInputElement>(null);
+  const touch = useTouchDevice();
   const check = checked?.files === files ? checked.result : null;
   const unreadableAll = !!check?.unreadable.length && check.unreadable.length === check.checked;
 
@@ -79,10 +98,23 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
   const photos = files.length > 0 && files.every(isPhoto);
   const file = files.length === 1 ? files[0] : null;
 
-  function choose(incoming: FileList | null) {
+  function choose(incoming: FileList | File[] | null) {
     const result = addFiles(files, Array.from(incoming ?? []));
     setFiles(result.files);
     setError(result.error && translateKnown(result.error, m));
+  }
+
+  /** A page fitted in the fixer takes its photo's place - or, fresh from
+   * the camera, goes after the pages already there. */
+  function fitted(page: File) {
+    if (fixing?.index == null) choose([page]);
+    else setFiles(files.map((f, i) => (i === fixing.index ? page : f)));
+    setFixing(null);
+  }
+
+  function straighten(index: number) {
+    const origin = originOf(files[index]);
+    setFixing({ photo: origin?.photo ?? files[index], fix: origin?.fix ?? null, index });
   }
 
   async function checkAccountAndUpload() {
@@ -189,6 +221,24 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
           )}
         </label>
 
+        {/* The camera opens straight away, and the photo goes to the fixer
+            rather than the list, so its page is fitted before it is added. */}
+        <input ref={cameraInput} type="file" accept="image/*" capture="environment" hidden
+          onChange={(e) => {
+            const shot = e.target.files?.[0];
+            e.target.value = "";
+            if (shot) setFixing({ photo: shot, fix: null, index: null });
+          }} />
+        {touch && !files.some(isPdf) && (
+          <div className="camera-row">
+            <button type="button" className="btn-pill ghost camera-button" disabled={submitting}
+              onClick={() => cameraInput.current?.click()}>
+              <CameraIcon />
+              {photos ? t.camera.takeNext : t.camera.takePhoto}
+            </button>
+          </div>
+        )}
+
         {check && check.unreadable.length > 0 && (
           <p className="upload-check" role="alert">
             {unreadableAll
@@ -197,6 +247,7 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
               : rich(plural(locale, check.unreadable.length, t.checkUnreadablePages, {
                 pages: new Intl.ListFormat(tag, { type: "conjunction" }).format(check.unreadable.map(String)),
               }), { b: (text) => <strong>{text}</strong> })}
+            {photos && <span className="upload-check-hint">{t.camera.hint}</span>}
           </p>
         )}
 
@@ -205,7 +256,7 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
         </p>
 
         {photos ? (
-          <PhotoPages files={files} onChange={setFiles} disabled={submitting} />
+          <PhotoPages files={files} onChange={setFiles} onStraighten={straighten} disabled={submitting} />
         ) : files.length > 0 && (
           <div className="picked-file">
             <button type="button" className="link-button" disabled={submitting}
@@ -337,7 +388,22 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
           onSeePlans={() => { setAtFreeLimit(false); setPlansOpen(true); }} />
       )}
       {plansOpen && <PremiumWindow onClose={() => setPlansOpen(false)} />}
+      {fixing && (
+        <PageFixer photo={fixing.photo} fix={fixing.fix} camera={fixing.index === null} onDone={fitted}
+          onCancel={() => setFixing(null)}
+          // Within the click, so the browser still lets the camera open.
+          onRetake={() => { setFixing(null); cameraInput.current?.click(); }} />
+      )}
     </div>
+  );
+}
+
+function CameraIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 8h3l2-3h6l2 3h3v11H4z" strokeLinejoin="round" />
+      <circle cx="12" cy="13" r="3.5" />
+    </svg>
   );
 }
 
@@ -413,9 +479,10 @@ function thumbnail(file: File) {
  * Space to pick it up, the arrow keys to move it, Space to drop, Escape to
  * cancel - announced to screen readers. The list itself only changes on the
  * drop. */
-function PhotoPages({ files, onChange, disabled }: {
+function PhotoPages({ files, onChange, onStraighten, disabled }: {
   files: File[];
   onChange: (files: File[]) => void;
+  onStraighten: (index: number) => void;
   disabled: boolean;
 }) {
   const { m } = useI18n();
@@ -434,7 +501,7 @@ function PhotoPages({ files, onChange, disabled }: {
         } as React.CSSProperties}>
           {files.map((file, index) => (
             <PhotoPage key={photoId(file)} file={file} index={index} disabled={disabled}
-              onRemove={() => onChange(removeFile(files, index))} />
+              onStraighten={() => onStraighten(index)} onRemove={() => onChange(removeFile(files, index))} />
           ))}
         </ol>
       </DragDropProvider>
@@ -443,10 +510,11 @@ function PhotoPages({ files, onChange, disabled }: {
   );
 }
 
-function PhotoPage({ file, index, disabled, onRemove }: {
+function PhotoPage({ file, index, disabled, onStraighten, onRemove }: {
   file: File;
   index: number;
   disabled: boolean;
+  onStraighten: () => void;
   onRemove: () => void;
 }) {
   const { ref, isDragging, isDropping } = useSortable({ id: photoId(file), index, disabled });
@@ -470,6 +538,8 @@ function PhotoPage({ file, index, disabled, onRemove }: {
         <strong className="photo-page-number" />
         <span>{file.name}</span>
       </div>
+      <button type="button" className="photo-remove photo-straighten" onClick={onStraighten} disabled={disabled}
+        aria-label={fmt(m.upload.camera.straightenPage, { n: index + 1 })} title={m.upload.camera.straighten}>⤢</button>
       <button type="button" className="photo-remove" onClick={onRemove}
         disabled={disabled} aria-label={fmt(m.upload.removePage, { n: index + 1 })} title={m.upload.remove}>✕</button>
     </li>
