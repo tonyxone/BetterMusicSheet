@@ -239,6 +239,34 @@ export const en = {
     pageNumberAfter: "",
     removePage: "Remove page {n}",
     remove: "Remove",
+    /** Photographing a page, and straightening a photo (app/page-fixer.tsx). */
+    camera: {
+      takePhoto: "Take a photo of a page",
+      takeNext: "Take a photo of the next page",
+      straighten: "Straighten",
+      straightenPage: "Straighten page {n}",
+      title: "Fit the page",
+      found: "We found the page's edges. Drag a corner to adjust them.",
+      notFound: "Drag each corner onto a corner of the page.",
+      evenLighting: "Even out the lighting",
+      whole: "Use the whole photo",
+      use: "Use this page",
+      retake: "Retake",
+      working: "Straightening…",
+      failed: "Couldn't straighten this photo. Try again, or use the whole photo.",
+      corners: {
+        topLeft: "Top-left corner",
+        topRight: "Top-right corner",
+        bottomRight: "Bottom-right corner",
+        bottomLeft: "Bottom-left corner",
+      },
+      cornerKeys: "Arrow keys move it.",
+      hint: "Photographed at an angle? Straighten a page with its ⤢ button.",
+      checking: "Checking the page…",
+      unreadable: "<b>We can't find staff lines on this page.</b> It will probably come back without names. "
+        + "Take it again straight on, held steady, in even light and without glare on the page.",
+      useAnyway: "Use it anyway",
+    },
   },
 
   library: {

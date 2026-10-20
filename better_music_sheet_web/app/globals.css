@@ -1296,3 +1296,44 @@ main:has(.full-window) { z-index: 45; }
 .picked-file { margin-top: 10px; text-align: center; }
 .link-button { border: none; background: none; padding: 0; font: inherit; font-size: 13.5px; color: var(--accent); text-decoration: underline; cursor: pointer; }
 .photo-thumb-placeholder { width: 44px; height: 56px; border-radius: 6px; background: var(--paper-deep); flex: none; }
+.photo-straighten { font-size: 17px; }
+
+/* Photographing a page (upload-form.tsx), and fitting its corners (page-fixer.tsx). */
+.camera-row { margin-top: 12px; text-align: center; }
+.camera-button { display: inline-flex; align-items: center; gap: 8px; }
+.camera-button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+.upload-check-hint { display: block; margin-top: 4px; }
+.page-fixer {
+  position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column;
+  background: #1d1611; color: #f7efe3;
+}
+/* Over the sticky header too, as the full-window sheet is. */
+main:has(.page-fixer) { z-index: 45; }
+.page-fixer-head { flex: none; padding: 14px 16px 8px; text-align: center; }
+.page-fixer-head h2 { margin: 0; font-size: 18px; font-weight: 600; }
+.page-fixer-head p { margin: 4px auto 0; max-width: 640px; min-height: 1.4em; font-size: 13.5px; color: #d9cbb6; }
+.page-fixer-head .page-fixer-warning { color: #ffd9a8; }
+.page-fixer-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 8px 16px; }
+.page-fixer-photo { position: relative; }
+.page-fixer-photo canvas:first-child { display: block; }
+.page-fixer-photo svg { position: absolute; inset: 0; touch-action: none; overflow: visible; }
+.page-fixer-shade { fill: rgba(0, 0, 0, 0.5); }
+.page-fixer-edge { fill: none; stroke: var(--gold); stroke-linejoin: round; }
+.page-fixer-corner { cursor: grab; outline: none; }
+.page-fixer-corner circle:last-child { fill: rgba(217, 164, 65, 0.35); stroke: var(--gold); }
+.page-fixer-corner.active circle:last-child, .page-fixer-corner:focus-visible circle:last-child { fill: var(--gold); stroke: #fff; }
+.page-fixer-hit { fill: transparent; }
+.page-fixer-loupe {
+  position: absolute; top: 8px; left: 8px; border-radius: 50%; border: 2px solid var(--gold);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45); pointer-events: none;
+}
+.page-fixer-loupe.right { left: auto; right: 8px; }
+.page-fixer-foot {
+  flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px;
+  padding: 10px 16px calc(14px + env(safe-area-inset-bottom));
+}
+.page-fixer-even { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; }
+.page-fixer-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; margin-left: auto; }
+.page-fixer .link-button { color: #e9d8bd; }
+.page-fixer .btn-pill.ghost { color: #f7efe3; border-color: #8a7660; }
+.page-fixer .btn-pill.ghost:hover:not(:disabled) { background: rgba(255, 255, 255, 0.08); }
