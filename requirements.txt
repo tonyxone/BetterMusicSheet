@@ -1,6 +1,10 @@
-fastapi
+# 0.147 reads a boolean form field left out as False, whatever its default - see
+# requirements-api.txt.
+fastapi>=0.115,<0.147
 uvicorn[standard]
-pymupdf
+# 2.0 is a new major version, not yet tried on real sheets (it crashes outright on
+# Windows); move to it on purpose, after reading sheets with it.
+pymupdf>=1.24,<2
 python-multipart
 boto3
 python-jose[cryptography]
