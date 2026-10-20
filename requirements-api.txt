@@ -1,4 +1,7 @@
-fastapi>=0.115,<1
+# From 0.147 a boolean form field left out of a request is False, overriding its
+# default: server.py's POST /api/sheets then turned auto_retry off for every upload
+# that didn't send it. Lift this once that route no longer relies on the default.
+fastapi>=0.115,<0.147
 python-multipart>=0.0.18,<1
 boto3>=1.35,<2
 python-jose[cryptography]>=3.4,<4
