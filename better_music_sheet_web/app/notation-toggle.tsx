@@ -6,6 +6,7 @@
 
 import type { Notation } from "@/lib/notation";
 import { useI18n } from "@/lib/i18n/client";
+import { countUsage } from "@/lib/usage";
 
 export function NotationToggle({ value, onChange, dark = false }: {
   value: Notation;
@@ -28,7 +29,7 @@ export function NotationToggle({ value, onChange, dark = false }: {
           className={`sheet-toggle-option${value === option.id ? " active" : ""}`}
           aria-pressed={value === option.id}
           title={option.title}
-          onClick={() => onChange(option.id)}
+          onClick={() => { countUsage("notation"); onChange(option.id); }}
         >
           {option.label}
         </button>

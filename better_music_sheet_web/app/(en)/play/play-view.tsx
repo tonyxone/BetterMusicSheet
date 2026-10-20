@@ -31,6 +31,7 @@ import { loadLabels, type LabelSet } from "@/lib/labels";
 import { useNotation } from "@/lib/notation";
 import { usePreference } from "@/lib/preferences";
 import { useHandBalance } from "@/lib/hand-balance";
+import { countUsage, useUsage } from "@/lib/usage";
 import { AnnotationLayer } from "../../sheet-viewer/annotation-layer";
 import { tempoClock, tempoControl } from "./tempo";
 import { GRACE_SECONDS, SynthEngine, INSTRUMENTS, isInstrumentId, type InstrumentId } from "./synth";
@@ -397,6 +398,8 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
   const [error, setError] = useState<string | null>(null);
 
   const [playing, setPlaying] = useState(false);
+  // Time spent practising, for the admin dashboard (lib/usage.ts).
+  useUsage(timeline ? jobId : null, "practice", playing);
   // Full speed by default; the slider still goes down to 0.1x for picking a
   // passage apart.
   const [speed, setSpeed] = usePreference("speed", 1);
@@ -441,7 +444,10 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
 
   /** Whether the subscribe prompt is open right now. */
   const [subscribePromptOpen, setSubscribePromptOpen] = useState(false);
-  const openSubscribePrompt = useCallback(() => setSubscribePromptOpen(true), []);
+  const openSubscribePrompt = useCallback(() => {
+    countUsage("paywall");
+    setSubscribePromptOpen(true);
+  }, []);
   const closeSubscribePrompt = useCallback(() => setSubscribePromptOpen(false), []);
 
   /** Index of the first measure past the free lines, or null when a visitor
@@ -756,6 +762,7 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
     }
     // No argument: playback picks up from the beat it was paused at, rather
     // than restarting the measure that was underway.
+    countUsage("play");
     playWholePiece();
   }, [timeline, playWholePiece, audioLoading]);
 
@@ -935,14 +942,15 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
     }
   }, [timeline, ensurePlayback, onsetBeats, beat, isLocked, openSubscribePrompt, speed, baseBpm, balance]);
 
-  const handleStepBack = useCallback(() => step(-1), [step]);
-  const handleStepForward = useCallback(() => step(1), [step]);
+  const handleStepBack = useCallback(() => { countUsage("step"); void step(-1); }, [step]);
+  const handleStepForward = useCallback(() => { countUsage("step"); void step(1); }, [step]);
 
   /** Drag the playhead. Locked regions clamp back to the free part and pop
    * the subscribe prompt, so scrubbing can't be used to walk past the preview. */
   const handleScrub = useCallback(
     (value: number) => {
       if (!timeline) return;
+      countUsage("scrub");
       let target = value;
       if (lockedFrom !== null && target >= freeEndBeat) {
         target = Math.max(0, freeEndBeat - 0.001);
@@ -968,7 +976,10 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
   );
 
   const handleMeasureClick = useCallback(
-    (index: number) => playFromMeasure(index),
+    (index: number) => {
+      countUsage("measure");
+      playFromMeasure(index);
+    },
     [playFromMeasure],
   );
 
@@ -1143,6 +1154,7 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
               value={speed}
               onChange={(e) => {
                 const value = Number(e.target.value);
+                countUsage("speed");
                 setSpeed(value);
                 playbackRef.current?.setSpeed(value);
               }}
@@ -1182,7 +1194,7 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
             aria-pressed={soundOn}
             title={soundOn ? t.mute : t.unmute}
             aria-label={soundOn ? t.mute : t.unmute}
-            onClick={() => setSoundOn(!soundOn)}
+            onClick={() => { countUsage("sound"); setSoundOn(!soundOn); }}
           >
             {/* The glyph itself carries the state, so it stays readable even
                 where the pressed styling is subtle. */}
@@ -1203,8 +1215,8 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
                 left: Math.round((1 - Math.max(0, balance)) * 100),
                 right: Math.round((1 + Math.min(0, balance)) * 100),
               })}
-              onChange={(e) => changeBalance(Number(e.target.value))}
-              onDoubleClick={() => changeBalance(0)}
+              onChange={(e) => { countUsage("balance"); changeBalance(Number(e.target.value)); }}
+              onDoubleClick={() => { countUsage("balance"); changeBalance(0); }}
             />
             <datalist id="hand-balance-even"><option value={0} /></datalist>
             <span aria-hidden="true" style={{ color: CSS_RIGHT }}>{t.rightHandShort}</span>
@@ -1229,6 +1241,7 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
               onChange={(e) => {
                 const value = Number(e.target.value);
                 if (value >= 20 && value <= 300) {
+                  countUsage("tempo");
                   const quarterBpm = tempoControl(timeline).toQuarterBpm(value);
                   setBaseBpm(quarterBpm);
                   playbackRef.current?.setTempo(quarterBpm);
@@ -1241,6 +1254,7 @@ function Player({ jobId, isPremium }: { jobId: string; isPremium: boolean }) {
             <label>{t.instrument} <select value={instrument} onChange={(e) => {
               const value = e.target.value;
               if (!isInstrumentId(value)) return;
+              countUsage("instrument");
               setInstrumentFallback(null);
               setSavedInstrument(value);
               void ensurePlayback(timeline, value);

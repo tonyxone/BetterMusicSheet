@@ -55,6 +55,8 @@ variable "sheets_table" { type = string }
 variable "jobs_table" { type = string }
 # Finished sheets by upload hash, for reusing them (see ../../../processed_sheets.py).
 variable "processed_sheet_table" { type = string }
+# Time spent with sheets, for the admin dashboard (see ../../../usage.py). Only the API uses it.
+variable "usage_table" { type = string }
 variable "secret_parameter" { type = string }
 variable "cognito_pool" { type = string }
 variable "cognito_client" { type = string }

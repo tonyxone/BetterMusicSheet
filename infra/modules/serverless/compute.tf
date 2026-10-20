@@ -42,6 +42,8 @@ resource "aws_lambda_function" "api" {
       ADMIN_TABLE    = var.admin_table
       WORKER_CLUSTER = var.cluster_name
       WORKER_SERVICE = "${local.name}-worker"
+      # Readers' reports of time spent with their sheets (../../../usage.py).
+      USAGE_TABLE = var.usage_table
     })
   }
   logging_config {

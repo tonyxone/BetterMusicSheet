@@ -14,6 +14,7 @@ import { validCorrection, type Corrections, type NoteCorrection } from "./correc
 import { retypedMidi, type LabelItem } from "./labels";
 import { displayText, type Notation } from "./notation";
 import type { Timeline } from "./timeline";
+import { countUsage } from "./usage";
 
 /** ``color`` is a reader-chosen colour for this one name ("#rrggbb"),
  * set by the iOS app; absent, the sheet's own label colour is used. */
@@ -326,6 +327,7 @@ export function useSheetEdits(jobId: string, text: EditsText = ENGLISH) {
       setDoc(next);
       return;
     }
+    countUsage("edit");
     const h = history.current;
     h.past.push(options.before ?? current);
     if (h.past.length > HISTORY_LIMIT) h.past.shift();

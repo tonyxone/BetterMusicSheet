@@ -6,6 +6,7 @@
 // same question in both places.
 
 import { useI18n } from "@/lib/i18n/client";
+import { countUsage } from "@/lib/usage";
 //
 // Geometry is identical between the two: the annotated PDF is the uploaded
 // one with names drawn on top (see annotate.py), so Play keeps highlighting
@@ -54,7 +55,7 @@ export function SheetToggle({
             aria-pressed={value === option.id}
             disabled={blocked}
             title={option.title}
-            onClick={() => onChange(option.id)}
+            onClick={() => { countUsage("view"); onChange(option.id); }}
           >
             {option.label}
           </button>

@@ -19,7 +19,7 @@ export default async function PrivacyPage() {
         <BackButton />
         <h1 className="serif">Privacy</h1>
       </div>
-      <div className="sub">Last updated 28 September 2026</div>
+      <div className="sub">Last updated 19 October 2026</div>
 
       <p>
         This page explains what BetterMusicSheet keeps about you, why, and how
@@ -59,6 +59,13 @@ export default async function PrivacyPage() {
           Google&apos;s privacy policy
         </a>
         .
+      </p>
+      <p>
+        We also keep our own record of how long a sheet or its practice page is
+        open and which controls are used there, under your account or, if
+        you aren&apos;t signed in, this browser&apos;s guest id. It doesn&apos;t
+        include your music, and it is deleted after about 13 months, or with
+        your account.
       </p>
 
       <h2>What we don&apos;t do</h2>

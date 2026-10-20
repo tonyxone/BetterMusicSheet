@@ -25,11 +25,18 @@ locals {
   # lists, and a look at this region's queue and worker service.
   admin_statements = [
     { Effect = "Allow", Action = ["dynamodb:GetItem"], Resource = "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.admin_table}" },
-    { Effect = "Allow", Action = ["dynamodb:Scan"], Resource = [for name in [var.users_table, var.subscriptions_table, var.master_users_table, var.sheets_table, var.jobs_table] :
+    { Effect = "Allow", Action = ["dynamodb:Scan"], Resource = [for name in [var.users_table, var.subscriptions_table, var.master_users_table, var.sheets_table, var.jobs_table, var.usage_table] :
     "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${name}"] },
     { Effect = "Allow", Action = ["sqs:GetQueueAttributes"], Resource = [aws_sqs_queue.jobs.arn, aws_sqs_queue.failed.arn] },
     { Effect = "Allow", Action = ["ecs:DescribeServices"], Resource = "${replace(data.aws_ecs_cluster.existing.arn, ":cluster/", ":service/")}/${local.name}-worker" },
   ]
+  # Time spent with sheets (../../../usage.py): the API adds readers' reports
+  # to their sessions, reads one person's, and removes a deleted account's.
+  # Nothing else uses the table.
+  usage_statement = {
+    Effect   = "Allow", Action = ["dynamodb:UpdateItem", "dynamodb:Query", "dynamodb:BatchWriteItem"],
+    Resource = "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.usage_table}"
+  }
   new_files_statement = {
     Effect   = "Allow", Action = ["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion"],
     Resource = ["${aws_s3_bucket.files.arn}/jobs/*"]
@@ -75,7 +82,7 @@ resource "aws_iam_role_policy" "api" {
   role = aws_iam_role.api.id
   policy = jsonencode({ Version = "2012-10-17", Statement = concat([
     local.logs_statement, local.db_statement, local.master_users_statement, local.new_files_statement,
-    local.list_files_statement, local.cognito_delete_statement, local.alerts_statement,
+    local.list_files_statement, local.cognito_delete_statement, local.alerts_statement, local.usage_statement,
     { Effect = "Allow", Action = ["s3:GetObject", "s3:DeleteObject"], Resource = "arn:aws:s3:::${var.legacy_bucket}/*" },
     { Effect = "Allow", Action = ["s3:ListBucket"], Resource = "arn:aws:s3:::${var.legacy_bucket}" },
     { Effect = "Allow", Action = ["ssm:GetParameter"], Resource = var.secret_parameter },

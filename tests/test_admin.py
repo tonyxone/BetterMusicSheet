@@ -27,7 +27,7 @@ GUEST = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 SUBSCRIBER = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 
 ROUTES = ["/api/admin/me", "/api/admin/overview", "/api/admin/users", "/api/admin/users/signups", f"/api/admin/users/{MEMBER}/uploads",
-          f"/api/admin/users/{MEMBER}/payments",
+          f"/api/admin/users/{MEMBER}/payments", f"/api/admin/users/{MEMBER}/usage", "/api/admin/engagement",
           "/api/admin/uploads", "/api/admin/uploads?status=failed", "/api/admin/subscriptions", "/api/admin/system",
           "/api/admin/uploads/member-done/files", "/api/admin/uploads/member-done/file/input"]
 
