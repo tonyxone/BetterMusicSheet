@@ -121,7 +121,9 @@ export type AdminOverview = {
 };
 
 /** New accounts on one day ("YYYY-MM-DD", the admin's own calendar day). */
-export type AdminSignupDay = { date: string; count: number };
+/** New accounts on one day, by where they were made; "unknown" is every one
+ * made before that was recorded. */
+export type AdminSignupDay = { date: string; count: number; web: number; ios: number; unknown: number };
 
 /** A control whose use is counted (../../usage.py's EVENTS). */
 export type AdminUsageEvent = keyof typeof USAGE_EVENTS;

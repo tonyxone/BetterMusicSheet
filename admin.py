@@ -310,16 +310,18 @@ def _date(day):
 @router.get("/users/signups")
 def signups(days: int = 30, offset: int = 0):
     """How many accounts were created each day of the last `days` (today
-    included), oldest first. `offset` is the admin's minutes east of UTC, so a
-    day runs midnight to midnight where they are."""
+    included), oldest first, and where: on the web, in the iOS app, or
+    "unknown" for those made before that was recorded. `offset` is the admin's
+    minutes east of UTC, so a day runs midnight to midnight where they are."""
     span, shift = _day_range(days, offset, 3660)
-    counts = dict.fromkeys(span, 0)
+    counts = {day: dict.fromkeys((*db.SIGNUP_PLATFORMS, "unknown"), 0) for day in span}
     for user in db.all_accounts():
         if user.get("created_at"):
             day = (user["created_at"] + shift) // DAY
             if day in counts:
-                counts[day] += 1
-    return [{"date": _date(day), "count": count} for day, count in counts.items()]
+                platform = user.get("signup_platform")
+                counts[day][platform if platform in counts[day] else "unknown"] += 1
+    return [{"date": _date(day), "count": sum(split.values()), **split} for day, split in counts.items()]
 
 
 def _sheet_name(job_id):

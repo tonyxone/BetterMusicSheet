@@ -30,7 +30,10 @@ from config import ADMIN_TABLE, IS_PRODUCTION, MASTER_USERS_TABLE, SUBSCRIPTIONS
 
 
 _SUBSCRIPTION_STATUSES = {"trialing", "active", "canceled", "expired", "past_due"}
-ACCOUNT_FIELDS = ("user_id", "created_at")
+ACCOUNT_FIELDS = ("user_id", "created_at", "signup_platform")
+# Where an account was made: "web" or "ios". Recorded only from the release
+# that added it on, so older accounts have none.
+SIGNUP_PLATFORMS = ("web", "ios")
 # Statuses of a subscription that has stopped for good, as opposed to one that
 # is merely set to stop at its period end (cancel_at_period_end).
 _SUBSCRIPTION_ENDED = {"canceled", "expired"}
@@ -119,7 +122,7 @@ if IS_PRODUCTION:
         except _users_table.meta.client.exceptions.ConditionalCheckFailedException:
             pass
 
-    def save_user_identity(user_id, email, display_name):
+    def save_user_identity(user_id, email, display_name, platform=None):
         """Write the identity claims a just-verified sign-in proved.
 
         create_user_if_missing deliberately never touches an existing row, so a
@@ -129,7 +132,11 @@ if IS_PRODUCTION:
         one moment we hold verified values, so that is where they are written.
 
         Only non-None values are written: a pool that omits the name claim must
-        not erase a name an earlier sign-in already established."""
+        not erase a name an earlier sign-in already established.
+
+        `platform` is the client signing in. It is kept only when this sign-in
+        creates the account - every later one, on whichever client, is just
+        the same person signing in again."""
         names = {"#created": "created_at"}
         values = {":now": int(time.time())}
         expression = "SET #created = if_not_exists(#created, :now)"
@@ -139,10 +146,17 @@ if IS_PRODUCTION:
             names[f"#f{i}"] = key
             values[f":f{i}"] = value
             expression += f", #f{i} = :f{i}"
-        _users_table.update_item(
+        old = _users_table.update_item(
             Key={"user_id": user_id}, UpdateExpression=expression,
             ExpressionAttributeNames=names, ExpressionAttributeValues=values,
-        )
+            ReturnValues="UPDATED_OLD",
+        ).get("Attributes", {})
+        # No created_at before means this sign-in made the account.
+        if platform is not None and "created_at" not in old:
+            _users_table.update_item(
+                Key={"user_id": user_id}, UpdateExpression="SET signup_platform = :p",
+                ExpressionAttributeValues={":p": platform},
+            )
 
     def delete_user(user_id):
         _users_table.delete_item(Key={"user_id": user_id})
@@ -293,7 +307,7 @@ else:
                 "display_name": display_name, "created_at": int(time.time()),
             })
 
-    def save_user_identity(user_id, email, display_name):
+    def save_user_identity(user_id, email, display_name, platform=None):
         """Write the identity claims a just-verified sign-in proved.
 
         create_user_if_missing deliberately never touches an existing row, so a
@@ -303,12 +317,18 @@ else:
         one moment we hold verified values, so that is where they are written.
 
         Only non-None values are written: a pool that omits the name claim must
-        not erase a name an earlier sign-in already established."""
+        not erase a name an earlier sign-in already established.
+
+        `platform` is the client signing in. It is kept only when this sign-in
+        creates the account - every later one, on whichever client, is just
+        the same person signing in again."""
         with _lock:
-            row = _users.setdefault(user_id, {
-                "user_id": user_id, "email": None,
-                "display_name": None, "created_at": int(time.time()),
-            })
+            if user_id not in _users and platform is not None:
+                _users[user_id] = {"user_id": user_id, "signup_platform": platform}
+            row = _users.setdefault(user_id, {"user_id": user_id})
+            row.setdefault("email", None)
+            row.setdefault("display_name", None)
+            row.setdefault("created_at", int(time.time()))
             if email is not None:
                 row["email"] = email
             if display_name is not None:

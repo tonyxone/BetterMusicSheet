@@ -100,7 +100,7 @@ function storeSession(data: { access_token: string; expires_in?: number; user: U
 export async function signIn(email: string, password: string): Promise<Session> {
   if (!isAuthConfigured) throw new Error("Cognito is not configured");
   const tokens = await signInWithPassword(email, password);
-  const data = await postForSession("/api/auth/token", { id_token: tokens.IdToken });
+  const data = await postForSession("/api/auth/token", { id_token: tokens.IdToken, platform: "web" });
   return storeSession(data, tokens.RefreshToken ?? null);
 }
 
@@ -112,7 +112,7 @@ export async function signIn(email: string, password: string): Promise<Session> 
  * sees one. */
 export async function signInWithSocialCode(code: string, redirectUri: string): Promise<Session> {
   if (!isAuthConfigured) throw new Error("Cognito is not configured");
-  const data = await postForSession("/api/auth/social", { code, redirect_uri: redirectUri });
+  const data = await postForSession("/api/auth/social", { code, redirect_uri: redirectUri, platform: "web" });
   return storeSession(data, data.refresh_token ?? null);
 }
 
@@ -132,7 +132,7 @@ export async function getAccessToken(): Promise<string | null> {
     // token was originally issued - password sign-in or a social one - so
     // this one path covers both.
     const tokens = await refreshTokens(session.refreshToken);
-    const data = await postForSession("/api/auth/token", { id_token: tokens.IdToken });
+    const data = await postForSession("/api/auth/token", { id_token: tokens.IdToken, platform: "web" });
     // Cognito doesn't return a new refresh token on this grant - keep ours.
     const refreshed = storeSession(data, session.refreshToken);
     return refreshed.token;

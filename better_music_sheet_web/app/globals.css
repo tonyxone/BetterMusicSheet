@@ -1204,10 +1204,22 @@ main:has(.full-window) { z-index: 45; }
   background: var(--chart-sheet);
 }
 .admin-chart-key.practice { background: var(--chart-practice); }
+/* New users per day, by where they signed up: web, the iOS app, or before
+   that was recorded. */
+.admin-chart { --chart-web: #2f6fb5; --chart-ios: #eb6834; --chart-unknown: #cdbfa9; }
+.admin-chart-bar.platform.web { fill: var(--chart-web); }
+.admin-chart-bar.platform.ios { fill: var(--chart-ios); }
+.admin-chart-bar.platform.unknown { fill: var(--chart-unknown); }
+.admin-chart-bar.platform.hover { opacity: 0.8; }
+.admin-platform-legend { flex-wrap: wrap; padding-bottom: 8px; }
+.admin-platform-count { color: var(--ink); font-variant-numeric: tabular-nums; }
+.admin-chart-key.web { background: var(--chart-web); }
+.admin-chart-key.ios { background: var(--chart-ios); }
+.admin-chart-key.unknown { background: var(--chart-unknown); }
 .admin-chart-tip {
   position: absolute; transform: translateX(-50%); pointer-events: none; white-space: nowrap;
   background: var(--card); border: 1px solid var(--paper-deep); border-radius: 8px; padding: 6px 10px;
-  font-size: 13px; box-shadow: 0 2px 8px rgba(46, 33, 23, 0.12);
+  font-size: 13px; box-shadow: 0 2px 8px rgba(46, 33, 23, 0.12); z-index: 1;
 }
 .admin-filter-row th { padding: 6px 8px 10px; vertical-align: top; }
 .admin-col-filter {
