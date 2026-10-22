@@ -75,6 +75,15 @@ export const ko: Messages = {
     disclaimer: "음이름은 자동으로 인식되므로 정확성을 보장할 수 없습니다. 사용하기 전에 원본 악보와 대조해 보세요.",
   },
 
+  iosApp: {
+    link: "iOS 앱",
+    title: "iPhone·iPad용 BetterMusicSheet",
+    lead: "iOS 앱으로 이동 중에도 악보에 계이름을 붙이고 연습하세요.",
+    sameAccount: "이 사이트와 같은 계정(Google·Apple·이메일)으로 로그인하면 악보도 그대로 이어집니다.",
+    sameSubscription: "프리미엄은 양쪽에서 모두 쓸 수 있습니다. 웹사이트나 앱 중 한 곳에서 한 번만 구독하면, 같은 계정으로 로그인한 모든 기기에서 프리미엄이 적용됩니다. 두 번 결제할 필요가 없습니다.",
+    download: "App Store에서 다운로드",
+  },
+
   landing: {
     title: "악보의 모든 음표에 자동으로 음이름을",
     lead:

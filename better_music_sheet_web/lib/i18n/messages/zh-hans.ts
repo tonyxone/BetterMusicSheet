@@ -75,6 +75,15 @@ export const zhHans: Messages = {
     disclaimer: "音名由程序自动识别，并不能保证一定正确——使用前请对照原谱核对。",
   },
 
+  iosApp: {
+    link: "iOS 应用",
+    title: "iPhone 和 iPad 版 BetterMusicSheet",
+    lead: "使用 iOS 应用，随时随地为乐谱标注音名并练习。",
+    sameAccount: "使用与本网站相同的账号（Google、Apple 或邮箱）登录，你的乐谱也会同步过去。",
+    sameSubscription: "高级版两边通用。在网站或应用中订阅一次，即可在所有用同一账号登录的设备上使用高级版，无需重复付费。",
+    download: "在 App Store 下载",
+  },
+
   landing: {
     title: "自动标记乐谱上的每个音符",
     lead:

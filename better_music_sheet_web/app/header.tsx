@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import Link from "next/link";
 import { Logo } from "./logo";
 import { HistoryIcon } from "./history-icon";
+import { IosAppLink } from "./ios-app-link";
 import { SignInIcon } from "./sign-in-icon";
 import { useAuth } from "./auth-context";
 import { isAuthConfigured } from "@/lib/auth";
@@ -24,6 +25,7 @@ export function Header() {
         <Logo />
       </Link>
       <nav className="flex items-center gap-3">
+        <IosAppLink />
         {/* /history, not "/": the root is the Library only for a signed-in
             visitor, and a guest with sheets of their own needs this to work
             too. */}
