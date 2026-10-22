@@ -212,12 +212,31 @@ class DashboardDataTests(AdminTestCase):
         days = self.get("/api/admin/users/signups?days=60")
         self.assertEqual(len(days), 60)
         self.assertEqual(days[-1]["date"], time.strftime("%Y-%m-%d", time.gmtime(self.now)))
-        self.assertEqual(days[-4], {"date": time.strftime("%Y-%m-%d", time.gmtime(self.now - 3 * 86400)), "count": 1})
+        self.assertEqual(days[-4], {"date": time.strftime("%Y-%m-%d", time.gmtime(self.now - 3 * 86400)),
+                                     "count": 1, "web": 0, "ios": 0, "unknown": 1})
         self.assertEqual(days[-41]["count"], 1)
         self.assertEqual(sum(day["count"] for day in days), 2)  # not the admin, 90 days ago
         # A day is the admin's own: 14 hours east moves every signup with it.
         shifted = self.get("/api/admin/users/signups?days=60&offset=840")
         self.assertEqual(shifted[-1]["date"], time.strftime("%Y-%m-%d", time.gmtime(self.now + 14 * 3600)))
+
+    def test_signups_split_by_platform(self):
+        db.save_user_identity("new-web", None, None, "web")
+        db.save_user_identity("new-ios", None, None, "ios")
+        # Signing in again elsewhere doesn't move an account, nor does an
+        # older account gain a platform by signing in after the release.
+        db.save_user_identity("new-ios", None, None, "web")
+        db.save_user_identity(MEMBER, None, None, "web")
+        days = self.get("/api/admin/users/signups?days=30")
+        self.assertEqual(days[-1], {"date": days[-1]["date"], "count": 2, "web": 1, "ios": 1, "unknown": 0})
+        self.assertEqual(sum(d["unknown"] for d in days), 1)  # MEMBER, 3 days ago
+
+    def test_sign_in_records_the_platform_only_for_a_new_account(self):
+        with patch.object(server, "verify_cognito_id_token", return_value=("signed-up", None, None)):
+            self.assertEqual(self.client.post("/api/auth/token", json={"id_token": "t", "platform": "ios"}).status_code, 200)
+            self.assertEqual(self.client.post("/api/auth/token", json={"id_token": "t", "platform": "web"}).status_code, 200)
+            self.assertEqual(self.client.post("/api/auth/token", json={"id_token": "t", "platform": "mac"}).status_code, 422)
+        self.assertEqual(db._users["signed-up"]["signup_platform"], "ios")
 
     def test_overview_counts(self):
         overview = self.get("/api/admin/overview")

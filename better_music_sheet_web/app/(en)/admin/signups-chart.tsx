@@ -10,6 +10,14 @@ const RANGES = [
   { days: 365, label: "1 year" },
 ] as const;
 
+/** Bottom to top. "unknown" is every account made before the platform was
+ * recorded. */
+const PLATFORMS = [
+  { key: "web", label: "Web" },
+  { key: "ios", label: "Apple (iOS app)" },
+  { key: "unknown", label: "Not recorded" },
+] as const;
+
 const HEIGHT = 220;
 const PAD = { top: 12, right: 8, bottom: 26, left: 36 };
 
@@ -47,6 +55,7 @@ export function SignupsChart() {
 
   const rows = data ?? [];
   const total = rows.reduce((sum, row) => sum + row.count, 0);
+  const totals = Object.fromEntries(PLATFORMS.map(({ key }) => [key, rows.reduce((sum, row) => sum + row[key], 0)]));
   const scale = ticks(Math.max(1, ...rows.map((row) => row.count)));
   const top = scale[scale.length - 1];
   const plotW = Math.max(0, width - PAD.left - PAD.right), plotH = HEIGHT - PAD.top - PAD.bottom;
@@ -88,14 +97,22 @@ export function SignupsChart() {
             ))}
             {rows.map((row, i) => {
               const x = PAD.left + i * slot + gap / 2;
-              const h = y(0) - y(row.count);
               const last = i === rows.length - 1;
+              const present = PLATFORMS.filter(({ key }) => row[key] > 0);
+              let below = 0;
               return (
                 <g key={row.date}>
-                  {row.count > 0 && (
-                    <path className={`admin-chart-bar${hover === i ? " hover" : ""}`}
-                      d={roundedTop(x, y(row.count), barW, h, Math.min(4, barW / 2, h))} />
-                  )}
+                  {present.map(({ key }, j) => {
+                    const base = y(below), top = y(below + row[key]);
+                    below += row[key];
+                    // A 2px gap between segments, taken from the lower one.
+                    const h = Math.max(1, base - top - (j > 0 ? 2 : 0));
+                    const tip = j === present.length - 1;
+                    return (
+                      <path key={key} className={`admin-chart-bar platform ${key}${hover === i ? " hover" : ""}`}
+                        d={tip ? roundedTop(x, top, barW, h, Math.min(4, barW / 2, h)) : `M${x},${top}h${barW}v${h}h${-barW}Z`} />
+                    );
+                  })}
                   {(i % every === (rows.length - 1) % every) && (last || rows.length - 1 - i >= every / 2) && (
                     <text x={x + barW / 2} y={HEIGHT - 8} textAnchor={last ? "end" : "middle"}
                       className="admin-chart-label">{dayLabel(row.date)}</text>
@@ -111,13 +128,29 @@ export function SignupsChart() {
         {shown && hover !== null && (
           <div className="admin-chart-tip" style={{
             left: Math.min(Math.max(PAD.left + (hover + 0.5) * slot, 70), width - 70),
-            top: Math.max(0, y(shown.count) - 48),
+            // Above the bar, however many lines the breakdown takes.
+            top: y(shown.count) - 6, transform: "translate(-50%, -100%)",
           }}>
             <div className="admin-sub">{dayLabel(shown.date, true)}</div>
             <strong>{shown.count.toLocaleString()}</strong> new {shown.count === 1 ? "user" : "users"}
+            {PLATFORMS.filter(({ key }) => shown[key] > 0).map(({ key, label }) => (
+              <div key={key} className="admin-sub">
+                <span className={`admin-chart-key ${key}`} />{label} {shown[key].toLocaleString()}
+              </div>
+            ))}
           </div>
         )}
       </div>
+      {data && (
+        <div className="admin-chart-legend admin-platform-legend">
+          {PLATFORMS.map(({ key, label }) => (
+            <span key={key}>
+              <span className={`admin-chart-key ${key}`} />
+              {label} <strong className="admin-platform-count">{totals[key].toLocaleString()}</strong>
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

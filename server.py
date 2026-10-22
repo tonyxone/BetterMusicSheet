@@ -173,12 +173,16 @@ def health():
 
 class TokenRequest(BaseModel):
     id_token: str
+    # Which client is signing in, kept if this creates the account (see
+    # db.save_user_identity). Optional: an older app sends none.
+    platform: Optional[Literal[db.SIGNUP_PLATFORMS]] = None
 
 
 class SocialTokenRequest(BaseModel):
     """What the callback page posts back after a hosted-UI round trip."""
     code: str = Field(min_length=1, max_length=4096)
     redirect_uri: str = Field(min_length=1, max_length=2048)
+    platform: Optional[Literal[db.SIGNUP_PLATFORMS]] = None
 
 
 class StripeCheckoutRequest(BaseModel):
@@ -203,7 +207,7 @@ class AppleTransactionRequest(BaseModel):
     transaction: str = Field(min_length=1, max_length=32768)
 
 
-def _session_from_id_token(id_token):
+def _session_from_id_token(id_token, platform=None):
     """Verify a Cognito ID token and turn it into one of our own sessions.
 
     Shared by both sign-in routes below so a password sign-in and a social one
@@ -216,7 +220,7 @@ def _session_from_id_token(id_token):
     # being called "Account" no matter how often they sign in again. Writing
     # only the claims that are present also matters for Apple, which sends a
     # name on the first authorization and never again.
-    db.save_user_identity(user_id, email, display_name)
+    db.save_user_identity(user_id, email, display_name, platform)
     return {
         "access_token": mint_backend_token(user_id),
         "token_type": "Bearer",
@@ -228,7 +232,7 @@ def _session_from_id_token(id_token):
 @app.post("/api/auth/token")
 def exchange_token(body: TokenRequest):
     """Sign-in, step 2: trade a verified Cognito ID token for one of ours."""
-    return _session_from_id_token(body.id_token)
+    return _session_from_id_token(body.id_token, body.platform)
 
 
 @app.post("/api/auth/social")
@@ -244,7 +248,7 @@ def exchange_social_code(body: SocialTokenRequest):
     them to an existing password account by email, and this project does not
     link them (see infra/cognito-idp.tf)."""
     id_token, refresh_token = exchange_authorization_code(body.code, body.redirect_uri)
-    session = _session_from_id_token(id_token)
+    session = _session_from_id_token(id_token, body.platform)
     # Unlike the password flow - where the frontend calls Cognito directly and
     # already holds a refresh token - this exchange is the only place a social
     # session ever sees one. Without passing it through, sign-in would work
