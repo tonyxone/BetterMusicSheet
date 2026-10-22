@@ -108,7 +108,7 @@ class UploadRequiresSignInTests(unittest.TestCase):
         self.assertEqual(self.upload(free).status_code, 202)
 
     def test_ads_watched_in_the_ios_app_upload_past_the_free_slot(self):
-        free = "66666666-6666-4666-8666-666666666666"
+        free = "a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1"
         self.finish(self.upload(free).json()["job_id"])
         self.assertEqual(self.upload(free).status_code, 403)
 
@@ -119,7 +119,7 @@ class UploadRequiresSignInTests(unittest.TestCase):
         self.assertEqual(self.upload(free).status_code, 403)
 
     def test_the_ios_apps_free_plan_starts_fifteen_sheets_a_day(self):
-        free = "77777777-7777-4777-8777-777777777777"
+        free = "a2a2a2a2-a2a2-4a2a-8a2a-a2a2a2a2a2a2"
         for _ in range(15):
             response = self.upload(free, ad_unlock=True, app="ios")
             self.assertEqual(response.status_code, 202, response.text)
@@ -130,7 +130,7 @@ class UploadRequiresSignInTests(unittest.TestCase):
         self.assertIn("started 15 sheets today", refused.json()["detail"])
 
     def test_the_webs_free_plan_keeps_five_a_day_and_one_sheet(self):
-        free = "88888888-8888-4888-8888-888888888888"
+        free = "a3a3a3a3-a3a3-4a3a-8a3a-a3a3a3a3a3a3"
         self.started(free, 5)
         self.assertEqual(self.upload(free).status_code, 429)
         self.assertEqual(server._daily_sheet_limit(free), 5)
