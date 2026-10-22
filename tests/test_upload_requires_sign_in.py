@@ -78,10 +78,11 @@ class UploadRequiresSignInTests(unittest.TestCase):
         self.assertEqual(db.get_annotation_job(job_id)["user_id"], USER)
         enqueue.assert_called_once_with(job_id)
 
-    def upload(self, user_id=USER):
+    def upload(self, user_id=USER, ad_unlock=False, app=None):
         files = {"file": ("Song.pdf", b"%PDF-1.4 test", "application/pdf")}
+        data = {**({"ad_unlock": "true"} if ad_unlock else {}), **({"app": app} if app else {})} or None
         with patch.object(server, "enqueue_local"):
-            response = self.client.post("/api/sheets", files=files, headers=self.signed_in(user_id))
+            response = self.client.post("/api/sheets", files=files, data=data, headers=self.signed_in(user_id))
         if response.status_code == 202:
             self.addCleanup(db.delete_annotation_job, response.json()["job_id"])
             self.addCleanup(db.delete_music_sheet, response.json()["music_sheet_id"])
@@ -105,6 +106,46 @@ class UploadRequiresSignInTests(unittest.TestCase):
         self.assertEqual(self.client.delete(f"/api/sheets/{first.json()['job_id']}",
                                             headers=self.signed_in(free)).status_code, 204)
         self.assertEqual(self.upload(free).status_code, 202)
+
+    def test_ads_watched_in_the_ios_app_upload_past_the_free_slot(self):
+        free = "66666666-6666-4666-8666-666666666666"
+        self.finish(self.upload(free).json()["job_id"])
+        self.assertEqual(self.upload(free).status_code, 403)
+
+        second = self.upload(free, ad_unlock=True, app="ios")
+        self.assertEqual(second.status_code, 202, second.text)
+        self.finish(second.json()["job_id"])
+        # Each upload past the slot needs its own ads.
+        self.assertEqual(self.upload(free).status_code, 403)
+
+    def test_the_ios_apps_free_plan_starts_fifteen_sheets_a_day(self):
+        free = "77777777-7777-4777-8777-777777777777"
+        for _ in range(15):
+            response = self.upload(free, ad_unlock=True, app="ios")
+            self.assertEqual(response.status_code, 202, response.text)
+            self.finish(response.json()["job_id"])
+        # Ads never lift the daily limit.
+        refused = self.upload(free, ad_unlock=True, app="ios")
+        self.assertEqual(refused.status_code, 429)
+        self.assertIn("started 15 sheets today", refused.json()["detail"])
+
+    def test_the_webs_free_plan_keeps_five_a_day_and_one_sheet(self):
+        free = "88888888-8888-4888-8888-888888888888"
+        self.started(free, 5)
+        self.assertEqual(self.upload(free).status_code, 429)
+        self.assertEqual(server._daily_sheet_limit(free), 5)
+        self.assertEqual(server._daily_sheet_limit(free, "ios"), 15)
+
+    def test_premium_limits_are_the_same_in_both_apps(self):
+        with patch.object(server, "get_entitlement", return_value={"tier": "premium", "plan": "monthly"}):
+            self.assertEqual(server._daily_sheet_limit(USER, "ios"), 20)
+            self.assertEqual(server._daily_sheet_limit(USER, "web"), 20)
+
+    def test_a_direct_upload_reservation_accepts_the_ad_unlock(self):
+        self.assertTrue(server.UploadRequest(**UPLOAD_BODY, ad_unlock=True).ad_unlock)
+        self.assertFalse(server.UploadRequest(**UPLOAD_BODY).ad_unlock)
+        self.assertEqual(server.UploadRequest(**UPLOAD_BODY).app, "web")
+        self.assertEqual(server.UploadRequest(**UPLOAD_BODY, app="ios").app, "ios")
 
     def test_a_failed_sheet_does_not_use_the_free_slot(self):
         free = "44444444-4444-4444-8444-444444444444"
