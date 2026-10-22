@@ -78,10 +78,11 @@ class UploadRequiresSignInTests(unittest.TestCase):
         self.assertEqual(db.get_annotation_job(job_id)["user_id"], USER)
         enqueue.assert_called_once_with(job_id)
 
-    def upload(self, user_id=USER):
+    def upload(self, user_id=USER, ad_unlock=False):
         files = {"file": ("Song.pdf", b"%PDF-1.4 test", "application/pdf")}
+        data = {"ad_unlock": "true"} if ad_unlock else None
         with patch.object(server, "enqueue_local"):
-            response = self.client.post("/api/sheets", files=files, headers=self.signed_in(user_id))
+            response = self.client.post("/api/sheets", files=files, data=data, headers=self.signed_in(user_id))
         if response.status_code == 202:
             self.addCleanup(db.delete_annotation_job, response.json()["job_id"])
             self.addCleanup(db.delete_music_sheet, response.json()["music_sheet_id"])
@@ -106,6 +107,29 @@ class UploadRequiresSignInTests(unittest.TestCase):
                                             headers=self.signed_in(free)).status_code, 204)
         self.assertEqual(self.upload(free).status_code, 202)
 
+    def test_ads_watched_in_the_ios_app_upload_past_the_free_slot(self):
+        free = "66666666-6666-4666-8666-666666666666"
+        self.finish(self.upload(free).json()["job_id"])
+        self.assertEqual(self.upload(free).status_code, 403)
+
+        second = self.upload(free, ad_unlock=True)
+        self.assertEqual(second.status_code, 202, second.text)
+        self.finish(second.json()["job_id"])
+        # Each upload past the slot needs its own ads.
+        self.assertEqual(self.upload(free).status_code, 403)
+
+    def test_ads_never_lift_the_daily_limit(self):
+        free = "77777777-7777-4777-8777-777777777777"
+        for _ in range(15):
+            response = self.upload(free, ad_unlock=True)
+            self.assertEqual(response.status_code, 202, response.text)
+            self.finish(response.json()["job_id"])
+        self.assertEqual(self.upload(free, ad_unlock=True).status_code, 429)
+
+    def test_a_direct_upload_reservation_accepts_the_ad_unlock(self):
+        self.assertTrue(server.UploadRequest(**UPLOAD_BODY, ad_unlock=True).ad_unlock)
+        self.assertFalse(server.UploadRequest(**UPLOAD_BODY).ad_unlock)
+
     def test_a_failed_sheet_does_not_use_the_free_slot(self):
         free = "44444444-4444-4444-8444-444444444444"
         first = self.upload(free)
@@ -127,19 +151,19 @@ class UploadRequiresSignInTests(unittest.TestCase):
             self.assertEqual(response.status_code, 202, response.text)
             self.finish(response.json()["job_id"], status=status)
 
-    def test_a_free_account_starts_five_sheets_a_day_however_they_end(self):
+    def test_a_free_account_starts_fifteen_sheets_a_day_however_they_end(self):
         free = "d1d1d1d1-d1d1-4d1d-8d1d-d1d1d1d1d1d1"
         # Failed sheets free the one-sheet slot; they still count today.
-        self.started(free, 5)
+        self.started(free, 15)
         refused = self.upload(free)
         self.assertEqual(refused.status_code, 429)
-        self.assertIn("started 5 sheets today", refused.json()["detail"])
+        self.assertIn("started 15 sheets today", refused.json()["detail"])
         self.assertIn("Premium allows 20 a day, or 30 on the yearly plan", refused.json()["detail"])
         self.assertGreater(int(refused.headers["Retry-After"]), 0)
 
     def test_deleting_a_sheet_does_not_give_back_a_days_sheet(self):
         free = "d2d2d2d2-d2d2-4d2d-8d2d-d2d2d2d2d2d2"
-        for _ in range(5):
+        for _ in range(15):
             response = self.upload(free)
             self.finish(response.json()["job_id"])
             self.assertEqual(self.client.delete(f"/api/sheets/{response.json()['job_id']}",
@@ -172,7 +196,7 @@ class UploadRequiresSignInTests(unittest.TestCase):
 
     def test_reading_a_failed_sheet_again_counts_as_a_sheet_started(self):
         free = "d4d4d4d4-d4d4-4d4d-8d4d-d4d4d4d4d4d4"
-        self.started(free, 4)
+        self.started(free, 14)
         last = self.upload(free).json()["job_id"]
         self.finish(last, status="failed")
         db.update_annotation_job(last, storage_version=2, input_version="v1")
@@ -181,7 +205,7 @@ class UploadRequiresSignInTests(unittest.TestCase):
 
     def test_the_days_count_starts_over_at_midnight_utc(self):
         free = "d5d5d5d5-d5d5-4d5d-8d5d-d5d5d5d5d5d5"
-        self.started(free, 5)
+        self.started(free, 15)
         tomorrow = job_state.next_daily_reset(time.time()) + 60
         with patch.object(job_state.time, "time", return_value=tomorrow):
             self.assertEqual(self.upload(free).status_code, 202)

@@ -58,7 +58,7 @@ FREE_SHEET_LIMIT = 1
 # each one used a worker; without it, deleting and uploading again ran sheets
 # back to back for free. Admins have none, for testing the pipeline itself.
 # Shown on the plans pages too: better_music_sheet_web/lib/plan-limits.ts.
-DAILY_SHEET_LIMITS = {"free": 5, "monthly": 20, "yearly": 30}
+DAILY_SHEET_LIMITS = {"free": 15, "monthly": 20, "yearly": 30}
 
 # Fixed values keep rasterization cost predictable. Auto leaves the opening
 # pass at Audiveris's 300-DPI default and can selectively re-read unclear
@@ -481,11 +481,18 @@ class UploadRequest(BaseModel):
     # Validated here rather than at render time, so a bad value is a 422 the
     # uploader can see instead of a job that fails minutes later.
     color: str = Field(default="#000000", pattern=r"^#[0-9a-fA-F]{6}$")
+    # Set by the iOS app once a free user has watched its rewarded ads for this
+    # upload (owner decision): it lifts FREE_SHEET_LIMIT, never the daily limit.
+    # Taken on trust - the web app has no ads and never sends it.
+    ad_unlock: bool = False
 
 
-def _check_free_sheet_limit(user_id):
+def _check_free_sheet_limit(user_id, ad_unlock=False):
     """A free account keeps FREE_SHEET_LIMIT sheets; a failed one doesn't
-    count, so reading it again (retry_sheet) counts it once more."""
+    count, so reading it again (retry_sheet) counts it once more. An upload
+    paid for with ads (UploadRequest.ad_unlock) goes past it."""
+    if ad_unlock:
+        return
     if get_entitlement(user_id)["tier"] != "premium":
         kept = [job for job in db.list_annotation_jobs(user_id)
                 if job["status"] not in ("failed", "deleting", "deleted")]
@@ -539,7 +546,7 @@ def reserve_upload(body, user_id):
         raise HTTPException(409, "You already have a sheet processing. Wait for it to finish.")
     # One job in progress at a time (above, and atomically in job_state), so
     # two concurrent uploads can't both slip under the limit.
-    _check_free_sheet_limit(user_id)
+    _check_free_sheet_limit(user_id, body.ad_unlock)
     limit = _daily_sheet_limit(user_id)
     try:
         return job_state.create(uuid.uuid4().hex, user_id, body.filename,
@@ -593,7 +600,7 @@ async def submit_sheet(
     file: UploadFile = File(...), style: str = Form("unicode"),
     octave: bool = Form(False), notation: str = Form("letters"), font_size: float = Form(6.5),
     dpi: Optional[int] = Form(None), auto_retry: bool = Form(True),
-    color: str = Form("#000000"),
+    color: str = Form("#000000"), ad_unlock: bool = Form(False),
     user_id: str = Depends(get_signed_in_user_id),
 ):
     if user_id is None:
@@ -613,7 +620,7 @@ async def submit_sheet(
         try:
             body = UploadRequest(filename=file.filename or "", size=size, style=style,
                                  octave=octave, notation=notation, font_size=font_size, dpi=dpi, auto_retry=auto_retry,
-                                 color=color)
+                                 color=color, ad_unlock=ad_unlock)
         except ValueError:
             raise HTTPException(400, "Invalid file or annotation options.")
         job = reserve_upload(body, user_id)
