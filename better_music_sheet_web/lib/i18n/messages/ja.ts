@@ -75,6 +75,15 @@ export const ja: Messages = {
     disclaimer: "音名は自動で認識しているため、正確さは保証できません。使う前に元の楽譜と照らし合わせてください。",
   },
 
+  iosApp: {
+    link: "iOS アプリ",
+    title: "iPhone・iPad 版 BetterMusicSheet",
+    lead: "iOS アプリなら、外出先でも楽譜に音名を付けて練習できます。",
+    sameAccount: "このサイトと同じアカウント（Google・Apple・メール）でサインインすると、楽譜もそのまま使えます。",
+    sameSubscription: "プレミアムはどちらでも使えます。サイトかアプリのどちらかで一度登録すれば、同じアカウントでサインインしたすべての端末でプレミアムが有効になります。二重に支払う必要はありません。",
+    download: "App Store からダウンロード",
+  },
+
   landing: {
     title: "楽譜のすべての音符に、自動で音名を",
     lead:

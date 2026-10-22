@@ -76,6 +76,15 @@ export const zhHant: Messages = {
     disclaimer: "音名由程式自動辨識，不能保證一定正確——使用前請對照原譜確認。",
   },
 
+  iosApp: {
+    link: "iOS App",
+    title: "iPhone 與 iPad 版 BetterMusicSheet",
+    lead: "使用 iOS App，隨時隨地為樂譜標註音名並練習。",
+    sameAccount: "使用與本網站相同的帳號（Google、Apple 或電子郵件）登入，你的樂譜也會一併同步。",
+    sameSubscription: "進階版兩邊通用。在網站或 App 中訂閱一次，即可在所有以同一帳號登入的裝置上使用進階版，無需重複付費。",
+    download: "在 App Store 下載",
+  },
+
   landing: {
     title: "自動標記樂譜上的每個音符",
     lead:

@@ -504,6 +504,15 @@ details.options[open] summary::before { content: "▾ "; }
 .delete-modal .modal-sub { line-height: 1.5; margin-top: 14px; }
 .delete-modal .modal-sub strong { color: var(--ink); word-break: break-word; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+.ios-app-modal { max-width: 460px; }
+.ios-app-icon {
+  display: block; width: 72px; height: 72px; margin: 0 auto 16px; border-radius: 22.5%;
+  box-shadow: 0 0 0 1px rgba(46, 33, 23, 0.08), 0 4px 12px rgba(46, 33, 23, 0.14);
+}
+.ios-app-modal .modal-title, .ios-app-modal .modal-sub { text-align: center; }
+.ios-app-modal .modal-sub { line-height: 1.5; margin-top: 10px; }
+.ios-app-points { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 10px; font-size: 14.5px; line-height: 1.5; color: var(--ink); }
+.ios-app-download { display: block; margin-top: 24px; text-align: center; }
 .btn-pill.danger { background: var(--danger); color: #fff; }
 .btn-pill.danger:hover:not(:disabled) { background: var(--accent-deep); }
 

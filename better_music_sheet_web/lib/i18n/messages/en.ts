@@ -89,6 +89,15 @@ export const en = {
       "Note names are recognised automatically and are not always right — check against your original before you rely on them.",
   },
 
+  iosApp: {
+    link: "iOS app",
+    title: "BetterMusicSheet for iPhone and iPad",
+    lead: "Label and practise your sheets on the go with our iOS app.",
+    sameAccount: "Sign in with the same account you use here — Google, Apple or email — and your sheets come with you.",
+    sameSubscription: "Premium works on both. Subscribe once, on the website or in the app, and it unlocks Premium everywhere you sign in — there is no need to pay twice.",
+    download: "Download on the App Store",
+  },
+
   landing: {
     title: "Every note on your sheet music, labelled",
     lead:
