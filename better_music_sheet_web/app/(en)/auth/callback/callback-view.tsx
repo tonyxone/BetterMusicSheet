@@ -68,7 +68,7 @@ export function CallbackView() {
         <>
           <p style={{ color: "var(--danger)" }}>{error}</p>
           <Link href="/" style={{ marginTop: 20, display: "inline-block", color: "var(--accent)" }}>
-            Back to BetterMusicSheet
+            Back to BetterSheetMusic
           </Link>
         </>
       ) : (

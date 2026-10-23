@@ -16,7 +16,7 @@ export function AboutZhHant({ path }: { path: (p: string) => string }) {
         其他人卻得在彈奏途中做算術。
       </p>
       <p>
-        BetterMusicSheet 替您完成這一步。上傳鋼琴譜的 PDF 或照片，您會拿回同一份樂譜，每個音符都標好了音名，
+        BetterSheetMusic 替您完成這一步。上傳鋼琴譜的 PDF 或照片，您會拿回同一份樂譜，每個音符都標好了音名，
         還有一個練習模式，在音符響起時於鍵盤上點亮它們。
       </p>
 

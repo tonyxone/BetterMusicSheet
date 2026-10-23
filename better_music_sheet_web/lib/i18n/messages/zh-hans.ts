@@ -8,15 +8,15 @@ export const zhHans: Messages = {
     siteDescription: "上传钢琴乐谱，我们会标注上音符，还可以使用键盘演奏帮助练习。",
     pageTitle: "{page} | BetterMusicSheet.com",
     about: "关于",
-    aboutDescription: "BetterMusicSheet 如何读谱、标注的含义，以及琴谱识别相关的信息。",
+    aboutDescription: "BetterSheetMusic 如何读谱、标注的含义，以及琴谱识别相关的信息。",
     support: "帮助",
-    supportDescription: "BetterMusicSheet 使用帮助与联系方式。",
+    supportDescription: "BetterSheetMusic 使用帮助与联系方式。",
     privacy: "隐私",
-    privacyDescription: "BetterMusicSheet 收集哪些信息、为什么收集，以及如何删除。",
+    privacyDescription: "BetterSheetMusic 收集哪些信息、为什么收集，以及如何删除。",
     terms: "条款",
-    termsDescription: "使用 BetterMusicSheet 即表示您接受的条款。",
+    termsDescription: "使用 BetterSheetMusic 即表示您接受的条款。",
     plans: "升级高级版",
-    plansDescription: "比较 BetterMusicSheet 高级版的月付与年付套餐，新订阅用户可免费试用 7 天。",
+    plansDescription: "比较 BetterSheetMusic 高级版的月付与年付套餐，新订阅用户可免费试用 7 天。",
   },
 
   common: {
@@ -77,7 +77,7 @@ export const zhHans: Messages = {
 
   iosApp: {
     link: "iOS 应用",
-    title: "iPhone 和 iPad 版 BetterMusicSheet",
+    title: "iPhone 和 iPad 版 BetterSheetMusic",
     lead: "使用 iOS 应用，随时随地为乐谱标注音名并练习。",
     sameAccount: "使用与本网站相同的账号（Google、Apple 或邮箱）登录，你的乐谱也会同步过去。",
     sameSubscription: "高级版两边通用。在网站或应用中订阅一次，即可在所有用同一账号登录的设备上使用高级版，无需重复付费。",

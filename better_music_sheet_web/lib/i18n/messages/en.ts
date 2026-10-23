@@ -16,16 +16,16 @@ export const en = {
     pageTitle: "{page} | BetterMusicSheet.com",
     about: "About",
     aboutDescription:
-      "How BetterMusicSheet reads sheet music, what the annotations mean, and what the recognition can and cannot do.",
+      "How BetterSheetMusic reads sheet music, what the annotations mean, and what the recognition can and cannot do.",
     support: "Support",
-    supportDescription: "Help with BetterMusicSheet, and how to reach us.",
+    supportDescription: "Help with BetterSheetMusic, and how to reach us.",
     privacy: "Privacy",
-    privacyDescription: "What BetterMusicSheet collects, why, and how to get rid of it.",
+    privacyDescription: "What BetterSheetMusic collects, why, and how to get rid of it.",
     terms: "Terms",
-    termsDescription: "The terms you accept by using BetterMusicSheet.",
+    termsDescription: "The terms you accept by using BetterSheetMusic.",
     plans: "Go Premium",
     plansDescription:
-      "Compare the monthly and yearly BetterMusicSheet Premium plans, with a 7-day free trial for new subscribers.",
+      "Compare the monthly and yearly BetterSheetMusic Premium plans, with a 7-day free trial for new subscribers.",
   },
 
   common: {
@@ -91,7 +91,7 @@ export const en = {
 
   iosApp: {
     link: "iOS app",
-    title: "BetterMusicSheet for iPhone and iPad",
+    title: "BetterSheetMusic for iPhone and iPad",
     lead: "Label and practise your sheets on the go with our iOS app.",
     sameAccount: "Sign in with the same account you use here — Google, Apple or email — and your sheets come with you.",
     sameSubscription: "Premium works on both. Subscribe once, on the website or in the app, and it unlocks Premium everywhere you sign in — there is no need to pay twice.",
