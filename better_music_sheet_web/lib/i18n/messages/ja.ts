@@ -258,7 +258,7 @@ export const ja: Messages = {
     nextPage: "次のページ",
     pageOf: "{page} / {count} ページ",
     deleteTitle: "この楽譜を削除しますか？",
-    deleteBody: "{name} と、アップロードした PDF、音名付きの PDF、再生データが完全に削除されます。",
+    deleteBody: "{name} をライブラリから削除します。",
     keepSheet: "この楽譜を残す",
     deleteForever: "この楽譜とファイルを完全に削除する",
     deleteFailed: "この楽譜を削除できませんでした。",

@@ -297,7 +297,7 @@ export const en = {
     nextPage: "Next page",
     pageOf: "Page {page} of {count}",
     deleteTitle: "Delete this sheet?",
-    deleteBody: "{name} and its uploaded PDF, annotated PDF, and playback data will be permanently deleted.",
+    deleteBody: "{name} will be removed from your Library.",
     keepSheet: "Keep this sheet",
     deleteForever: "Permanently delete this sheet and its files",
     deleteFailed: "Could not delete this sheet.",

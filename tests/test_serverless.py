@@ -596,26 +596,39 @@ class ServerlessTests(unittest.TestCase):
         self.s3.put_object(Bucket="new-files", Key=job["input_key"], Body=b"second version")
         self.assertEqual(self.client.delete("/api/sheets/a", headers={"X-Guest-Id": "22222222"}).status_code, 404)
         self.assertEqual(self.client.delete("/api/sheets/a", headers=self.headers).status_code, 204)
-        self.assertFalse(self.s3.list_object_versions(Bucket="new-files").get("Versions"))
         self.assertEqual(self.client.get("/api/sheets", headers=self.headers).json(), [])
-        self.s3.put_object(Bucket="new-files", Key=job["input_key"], Body=b"late upload")
-        controller.reconcile(self.sqs, self.queue, job["upload_expires_at"] + 61)
-        self.assertFalse(self.s3.list_object_versions(Bucket="new-files").get("Versions"))
         self.assertEqual(self.client.get("/api/sheets/a/assets", headers=self.headers).status_code, 404)
+        # Only hidden: the rows and every file version stay, the sweep included.
+        versions = self.s3.list_object_versions(Bucket="new-files").get("Versions")
+        controller.reconcile(self.sqs, self.queue, job["upload_expires_at"] + 61)
+        self.assertEqual(self.s3.list_object_versions(Bucket="new-files").get("Versions"), versions)
+        self.assertEqual(db.get_annotation_job("a")["status"], "deleted")
+        self.assertIsNotNone(db.get_music_sheet("a"))
 
-    def test_cancelling_a_queued_job_removes_it_and_frees_the_upload_slot(self):
+    def test_deleting_the_account_removes_deleted_sheets_files_too(self):
+        job = self.upload()
+        worker.process_job("a", runner=fake_runner)
+        self.assertEqual(self.client.delete("/api/sheets/a", headers=self.headers).status_code, 204)
+        self.assertTrue(self.s3.list_object_versions(Bucket="new-files").get("Versions"))
+        with patch.object(server, "delete_cognito_user"):
+            self.assertEqual(self.client.delete("/api/me", headers=self.signed_in()).status_code, 204)
+        self.assertFalse(self.s3.list_object_versions(Bucket="new-files").get("Versions"))
+        self.assertIsNone(db.get_annotation_job(job["job_id"]))
+        self.assertIsNone(db.get_music_sheet(job["job_id"]))
+
+    def test_cancelling_a_queued_job_hides_it_and_frees_the_upload_slot(self):
         self.upload()
         self.assertEqual(self.client.delete("/api/sheets/a", headers=self.headers).status_code, 204)
         self.assertEqual(self.client.get("/api/sheets", headers=self.headers).json(), [])
         self.assertEqual(self.client.get("/api/sheets/a", headers=self.headers).status_code, 404)
-        self.assertFalse(self.s3.list_object_versions(Bucket="new-files").get("Versions"))
+        self.assertTrue(self.s3.list_object_versions(Bucket="new-files").get("Versions"))
         job_state.create("b", USER, "Next.pdf", OPTIONS, 1)
         # The queue message still arrives; the worker acks it without running.
         runner = Mock(side_effect=fake_runner)
         self.assertTrue(worker.process_job("a", runner=runner))
         runner.assert_not_called()
 
-    def test_cancelling_mid_processing_revokes_the_lease_and_sweeps_late_output(self):
+    def test_cancelling_mid_processing_revokes_the_lease(self):
         self.upload()
         leases = []
 
@@ -636,10 +649,10 @@ class ServerlessTests(unittest.TestCase):
         job_state.create("b", USER, "Next.pdf", OPTIONS, 1)
         tombstone = db.get_annotation_job("a")
         self.assertEqual(tombstone["status"], "deleted")
-        self.assertGreaterEqual(tombstone["next_check_at"], tombstone["lease_until"] + 60)
-        self.assertTrue(self.s3.list_object_versions(Bucket="new-files").get("Versions"))
         controller.reconcile(self.sqs, self.queue, tombstone["next_check_at"])
-        self.assertFalse(self.s3.list_object_versions(Bucket="new-files").get("Versions"))
+        # The sweep only frees the slot; the files stay until the account goes.
+        self.assertNotIn("next_check_at", db.get_annotation_job("a"))
+        self.assertTrue(self.s3.list_object_versions(Bucket="new-files").get("Versions"))
         # Redelivery of the unacked message is a no-op.
         self.assertTrue(worker.process_job("a", runner=fake_runner))
         self.assertEqual(db.get_annotation_job("a")["status"], "deleted")

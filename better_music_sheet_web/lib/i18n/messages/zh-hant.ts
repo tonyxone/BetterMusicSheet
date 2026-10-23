@@ -249,7 +249,7 @@ export const zhHant: Messages = {
     nextPage: "下一頁",
     pageOf: "第 {page} 頁，共 {count} 頁",
     deleteTitle: "刪除這份樂譜？",
-    deleteBody: "{name} 及其上傳的 PDF、標註後的 PDF 和播放資料將被永久刪除。",
+    deleteBody: "{name} 將從您的樂譜庫中移除。",
     keepSheet: "保留這份樂譜",
     deleteForever: "永久刪除這份樂譜及其檔案",
     deleteFailed: "無法刪除這份樂譜。",

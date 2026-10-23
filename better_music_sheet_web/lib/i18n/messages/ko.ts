@@ -256,7 +256,7 @@ export const ko: Messages = {
     nextPage: "다음 페이지",
     pageOf: "{count}페이지 중 {page}페이지",
     deleteTitle: "이 악보를 삭제할까요?",
-    deleteBody: "{name}과(와) 업로드한 PDF, 음이름이 표시된 PDF, 재생 데이터가 영구적으로 삭제됩니다.",
+    deleteBody: "{name}을(를) 보관함에서 삭제합니다.",
     keepSheet: "이 악보 유지",
     deleteForever: "이 악보와 파일을 영구적으로 삭제",
     deleteFailed: "이 악보를 삭제하지 못했습니다.",

@@ -369,16 +369,6 @@ def _timeline_key(user_id, sheet_name):
     return f"{user_id}/output/{_safe_stem(sheet_name)} (timeline).json"
 
 
-def storage_identity(sheet_name):
-    """Return the part of a filename that identifies its shared artifacts.
-
-    Same-named uploads intentionally overwrite the same S3 keys.  Callers
-    use this when deleting history so removing one row cannot break another
-    row that still points at those shared files.
-    """
-    return _safe_stem(sheet_name)
-
-
 if IS_PRODUCTION:
     import os
 

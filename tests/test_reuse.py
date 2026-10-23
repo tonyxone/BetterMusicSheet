@@ -322,10 +322,10 @@ class CacheFailureTests(ReuseCase):
         self.assertIsNone(job["notes_key"])
 
     def test_a_delete_goes_ahead_when_forgetting_the_row_fails(self):
-        first = self.processed("first", ALICE)
+        self.processed("first", ALICE)
         with patch.object(processed_sheets, "discard", side_effect=RuntimeError("table gone")):
             self.assertEqual(server.delete_job("first", ALICE).status_code, 204)
-        self.assertFalse(storage._local_path(first["output_key"]).exists())
+        self.assertEqual(db.get_annotation_job("first")["status"], "deleted")
         # The row left behind is passed over, and dropped, by the next lookup.
         self.assertEqual(self.upload("second", BOB)["status"], "queued")
         self.assertEqual(processed_sheets._rows, {})

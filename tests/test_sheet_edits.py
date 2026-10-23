@@ -90,13 +90,14 @@ class SheetEditsTests(unittest.TestCase):
         response = self.client.put(f"/api/sheets/{self.job_id}/edits", json={"revision": 0, "doc": {"version": 1}})
         self.assertIn(response.status_code, (403, 404))
 
-    def test_deleting_the_sheet_deletes_its_edits(self):
+    def test_deleting_the_sheet_keeps_its_edits(self):
         url = f"/api/sheets/{self.job_id}/edits"
         self.client.put(url, headers=self.owner(), json={"revision": 0, "doc": {"version": 1}})
         path = storage._LOCAL_DIR / storage._edits_key(db.get_annotation_job(self.job_id), OWNER)
         self.assertTrue(path.exists())
         self.assertEqual(self.client.delete(f"/api/sheets/{self.job_id}", headers=self.owner()).status_code, 204)
-        self.assertFalse(path.exists())
+        self.assertTrue(path.exists())
+        self.assertEqual(self.client.get(url, headers=self.owner()).status_code, 404)
 
 
 class DemoEditsTests(unittest.TestCase):

@@ -248,7 +248,7 @@ export const zhHans: Messages = {
     nextPage: "下一页",
     pageOf: "第 {page} 页，共 {count} 页",
     deleteTitle: "删除这份乐谱？",
-    deleteBody: "{name} 及其上传的 PDF、标注后的 PDF 和回放数据将被永久删除。",
+    deleteBody: "{name} 将从您的乐谱库中移除。",
     keepSheet: "保留这份乐谱",
     deleteForever: "永久删除这份乐谱及其文件",
     deleteFailed: "无法删除这份乐谱。",
