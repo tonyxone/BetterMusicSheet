@@ -441,27 +441,39 @@ def delete_account(user_id: str = Depends(get_signed_in_user_id)):
     """Delete the signed-in user's account - required by Apple's App Store
     guideline 5.1.1(v) for any app that supports account creation.
 
-    Deletes the Cognito account itself (not just this backend's row - a
-    resurrectable "deletion" isn't one), then every row this backend holds
-    for the user: their music_sheet and annotation_job history, and the
-    users row last. Uploaded files in S3 are deliberately left alone for
-    now - only the database and the identity go.
+    Deletes every sheet's files - the deleted ones too, which delete_job
+    only hides - then the Cognito account itself (not just this backend's
+    row - a resurrectable "deletion" isn't one), then every row this backend
+    holds for the user: their music_sheet and annotation_job history, and the
+    users row last.
 
-    Cognito goes first and any failure there aborts the whole thing: if it
-    fails partway through, "account still exists in Cognito, rows already
-    gone" is worse than "nothing happened yet, try again" - the former lets
-    a later sign-in quietly recreate the users row and look like the
-    deletion never took full effect."""
+    Files go first, while the account still exists: deleting them is
+    idempotent, so if anything later fails the user can simply try again.
+    Cognito goes next and any failure there aborts the rest: "account still
+    exists in Cognito, rows already gone" is worse than "files gone, try
+    again" - the former lets a later sign-in quietly recreate the users row
+    and look like the deletion never took full effect."""
     if user_id is None:
         raise HTTPException(401, "not signed in")
     if db.get_in_progress_job(user_id):
         raise HTTPException(409, "Wait for your current upload to finish before deleting your account.")
-    delete_cognito_user(user_id)
-    for job in db.list_annotation_jobs(user_id):
+    jobs = db.list_annotation_jobs(user_id)
+    sheets = db.list_music_sheets(user_id)
+    for job in jobs:
         # Their sheets are no longer offered to anyone else's uploads.
         processed_sheets.remove(job)
+        if job.get("storage_version") == 2:
+            storage.delete_job_files(job)
+        else:
+            storage.delete_edits(job)
+            shutil.rmtree(JOBS_DIR / job["job_id"], ignore_errors=True)
+    for sheet in sheets:
+        if sheet.get("storage_version") != 2:
+            storage.delete_sheet_files(user_id, sheet["sheet_name"])
+    delete_cognito_user(user_id)
+    for job in jobs:
         db.delete_annotation_job(job["job_id"])
-    for sheet in db.list_music_sheets(user_id):
+    for sheet in sheets:
         db.delete_music_sheet(sheet["music_sheet_id"])
     try:
         usage.forget(user_id)
@@ -744,15 +756,15 @@ def retry_sheet(job_id: str, user_id: str = Depends(get_signed_in_user_id)):
 
 @app.delete("/api/sheets/{job_id}", status_code=204)
 def delete_job(job_id: str, user_id: str = Depends(get_current_user_id)):
-    """Delete one history item and, when no other row shares them, its files.
+    """Delete one history item - softly: the job is only marked deleted, so
+    it leaves the reader's history and every route 404s it, but its rows,
+    files and edits are all kept. Only deleting the account (delete_account)
+    removes them.
 
     Deleting an active job is how the user cancels it. The worker's leased
     writes fence on status, so its next heartbeat (within 30s) raises
-    LeaseLost and stops the recognition process; anything it publishes in
-    between is swept by the tombstone's later reconcile pass. Legacy rows
-    have no such fencing and still refuse. Same-named legacy uploads share
-    storage keys by design, so those files are retained while another
-    history item still needs them.
+    LeaseLost and stops the recognition process. Legacy rows have no such
+    fencing and still refuse.
     """
     if job_id == DEMO_JOB_ID:
         # Explicit, regardless of who's asking: the demo's read carve-out
@@ -767,58 +779,23 @@ def delete_job(job_id: str, user_id: str = Depends(get_current_user_id)):
         for _ in range(3):
             if job["status"] in ("deleting", "deleted"):
                 return Response(status_code=204)
-            if job_state.change(job_id, {"status": job["status"]}, status="deleting", next_check_at=int(time.time())):
+            now = int(time.time())
+            # next_check_at: the controller frees the upload slot again should
+            # the release below not happen, as for a finished job.
+            if job_state.change(job_id, {"status": job["status"]}, status="deleted",
+                                deleted_at=now, next_check_at=now):
                 break
             job = _owned_job_or_404(job_id, user_id)
         else:
             raise HTTPException(409, "This sheet changed; refresh and try again.")
-        # Before the files, so a new upload of the same file is never sent
-        # to copy them while they're going.
+        # A deleted sheet is never offered to anyone else's uploads.
         processed_sheets.remove(job)
-        storage.delete_job_files(job)
-        db.delete_music_sheet(job["music_sheet_id"])
         job_state.release(job)
-        # Tombstones survive until outstanding upload URLs expire, and past a
-        # cancelled worker's lease. The reconciler removes late uploads and
-        # late-published outputs too, so neither can resurrect files.
-        now = int(time.time())
-        job_state.change(job_id, {"status": "deleting"}, status="deleted",
-                         next_check_at=max(now + 60, job["upload_expires_at"] + 60,
-                                           int(job.get("lease_until") or 0) + 60))
         return Response(status_code=204)
 
     if job["status"] in job_state.ACTIVE:
         raise HTTPException(409, "Wait for this sheet to finish processing before deleting it.")
-
-    jobs = db.list_annotation_jobs(user_id)
-    other_jobs = [candidate for candidate in jobs if candidate["job_id"] != job_id]
-    sheet_id = job["music_sheet_id"]
-    sheet = db.get_music_sheet(sheet_id)
-
-    # A future reprocess flow may create more than one job for one sheet row.
-    # In that case only this history entry belongs to this delete operation.
-    sheet_is_still_used = any(candidate["music_sheet_id"] == sheet_id for candidate in other_jobs)
-    if not sheet_is_still_used and sheet is not None:
-        sheet_name = sheet["sheet_name"]
-        selected_identity = storage.storage_identity(sheet_name)
-        other_sheets = [
-            candidate for candidate in db.list_music_sheets(user_id)
-            if candidate["music_sheet_id"] != sheet_id
-        ]
-        files_are_shared = any(
-            storage.storage_identity(candidate["sheet_name"]) == selected_identity
-            for candidate in other_sheets
-        )
-        if not files_are_shared:
-            # Delete storage first.  If S3 is unavailable the database rows
-            # stay visible, allowing the user to retry rather than leaving
-            # inaccessible orphaned objects behind.
-            storage.delete_sheet_files(user_id, sheet_name)
-        db.delete_music_sheet(sheet_id)
-
-    storage.delete_edits(job)
-    db.delete_annotation_job(job_id)
-    shutil.rmtree(JOBS_DIR / job_id, ignore_errors=True)
+    db.update_annotation_job(job_id, status="deleted", deleted_at=int(time.time()))
     return Response(status_code=204)
 
 

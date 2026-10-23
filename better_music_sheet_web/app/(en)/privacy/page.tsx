@@ -76,11 +76,12 @@ export default async function PrivacyPage() {
 
       <h2>Keeping and removing your data</h2>
       <p>
-        Your sheets are kept until you delete them, which you can do from your{" "}
-        <Link href={path("/history")}>Library</Link>. To delete your account, choose Delete
-        account from the menu under your name at the top of the page. Delete your
-        sheets first if you want them gone too, and cancel any subscription
-        first: deleting your account doesn&apos;t cancel it.
+        Your sheets are kept for as long as you have an account. Deleting a sheet
+        from your <Link href={path("/history")}>Library</Link> removes it from your
+        Library, but we keep its files. To have them all removed, delete your
+        account: choose Delete account from the menu under your name at the top
+        of the page, and every sheet you uploaded is deleted with it. Cancel any
+        subscription first: deleting your account doesn&apos;t cancel it.
       </p>
       <p>
         To ask what we hold about you, or to have anything removed, email{" "}

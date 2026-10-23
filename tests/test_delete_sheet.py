@@ -75,66 +75,41 @@ class DeleteSheetTests(unittest.TestCase):
                 server.delete_job("job-1", USER_ID)
         self.assertEqual(error.exception.status_code, 409)
 
-    def test_delete_removes_files_sheet_job_and_local_working_directory(self):
-        job = _job()
-        sheet = {"music_sheet_id": "sheet-1", "user_id": USER_ID, "sheet_name": "Song.pdf"}
-        with tempfile.TemporaryDirectory() as directory:
-            jobs_dir = Path(directory)
-            (jobs_dir / "job-1").mkdir()
-            with (
-                patch.object(server, "JOBS_DIR", jobs_dir),
-                patch.object(server.db, "get_annotation_job", return_value=job),
-                patch.object(server.db, "list_annotation_jobs", return_value=[job]),
-                patch.object(server.db, "get_music_sheet", return_value=sheet),
-                patch.object(server.db, "list_music_sheets", return_value=[sheet]),
-                patch.object(server.storage, "delete_sheet_files") as delete_files,
-                patch.object(server.db, "delete_music_sheet") as delete_sheet,
-                patch.object(server.db, "delete_annotation_job") as delete_job,
-            ):
-                response = server.delete_job("job-1", USER_ID)
-
-            self.assertEqual(response.status_code, 204)
-            delete_files.assert_called_once_with(USER_ID, "Song.pdf")
-            delete_sheet.assert_called_once_with("sheet-1")
-            delete_job.assert_called_once_with("job-1")
-            self.assertFalse((jobs_dir / "job-1").exists())
-
-    def test_delete_keeps_files_used_by_a_same_named_upload(self):
-        job = _job()
-        sheet = {"music_sheet_id": "sheet-1", "user_id": USER_ID, "sheet_name": "Song.pdf"}
-        other_sheet = {"music_sheet_id": "sheet-2", "user_id": USER_ID, "sheet_name": "Song.png"}
+    def test_delete_only_marks_the_job_deleted(self):
         with (
-            patch.object(server.db, "get_annotation_job", return_value=job),
-            patch.object(server.db, "list_annotation_jobs", return_value=[job]),
-            patch.object(server.db, "get_music_sheet", return_value=sheet),
-            patch.object(server.db, "list_music_sheets", return_value=[sheet, other_sheet]),
+            patch.object(server.db, "get_annotation_job", return_value=_job()),
+            patch.object(server.db, "update_annotation_job") as update_job,
             patch.object(server.storage, "delete_sheet_files") as delete_files,
+            patch.object(server.storage, "delete_edits") as delete_edits,
             patch.object(server.db, "delete_music_sheet") as delete_sheet,
             patch.object(server.db, "delete_annotation_job") as delete_job,
         ):
-            server.delete_job("job-1", USER_ID)
+            response = server.delete_job("job-1", USER_ID)
 
+        self.assertEqual(response.status_code, 204)
+        update_job.assert_called_once()
+        self.assertEqual(update_job.call_args.args, ("job-1",))
+        self.assertEqual(update_job.call_args.kwargs["status"], "deleted")
         delete_files.assert_not_called()
-        delete_sheet.assert_called_once_with("sheet-1")
-        delete_job.assert_called_once_with("job-1")
-
-    def test_delete_keeps_sheet_and_files_used_by_another_job(self):
-        job = _job()
-        other_job = _job(job_id="job-2")
-        with (
-            patch.object(server.db, "get_annotation_job", return_value=job),
-            patch.object(server.db, "list_annotation_jobs", return_value=[job, other_job]),
-            patch.object(server.db, "get_music_sheet") as get_sheet,
-            patch.object(server.storage, "delete_sheet_files") as delete_files,
-            patch.object(server.db, "delete_music_sheet") as delete_sheet,
-            patch.object(server.db, "delete_annotation_job") as delete_job,
-        ):
-            server.delete_job("job-1", USER_ID)
-
-        get_sheet.assert_called_once_with("sheet-1")
-        delete_files.assert_not_called()
+        delete_edits.assert_not_called()
         delete_sheet.assert_not_called()
-        delete_job.assert_called_once_with("job-1")
+        delete_job.assert_not_called()
+
+    def test_a_deleted_job_is_hidden_from_history_and_reads(self):
+        db.create_music_sheet("soft-sheet", USER_ID, "Soft.pdf")
+        db.create_annotation_job("soft-job", USER_ID, "soft-sheet", "unicode", False, 6.5, None, True)
+        self.addCleanup(db.delete_annotation_job, "soft-job")
+        self.addCleanup(db.delete_music_sheet, "soft-sheet")
+        db.update_annotation_job("soft-job", status="done")
+
+        server.delete_job("soft-job", USER_ID)
+
+        self.assertNotIn("soft-job", [j["job_id"] for j in server.job_history(USER_ID)])
+        with self.assertRaises(HTTPException) as error:
+            server.job_status("soft-job", USER_ID)
+        self.assertEqual(error.exception.status_code, 404)
+        self.assertEqual(db.get_annotation_job("soft-job")["status"], "deleted")
+        self.assertIsNotNone(db.get_music_sheet("soft-sheet"))
 
 
 class DeleteStorageVersion2Tests(unittest.TestCase):
@@ -153,27 +128,32 @@ class DeleteStorageVersion2Tests(unittest.TestCase):
         self.assertTrue(worker.process_job(job["job_id"], runner=fake_runner))
         return db.get_annotation_job(job_id)
 
-    def test_delete_removes_every_storage_key_for_the_job(self):
-        job = self._seed()
+    def test_delete_keeps_every_storage_key_for_the_job(self):
+        self._seed()
         with patch.object(server.storage, "delete_job_files") as delete_files:
             response = server.delete_job("v2-job", USER_ID)
         self.assertEqual(response.status_code, 204)
-        delete_files.assert_called_once_with(job)
-        self.assertEqual(db.get_annotation_job("v2-job")["status"], "deleted")
+        delete_files.assert_not_called()
+        job = db.get_annotation_job("v2-job")
+        self.assertEqual(job["status"], "deleted")
+        self.assertIn("deleted_at", job)
+        self.assertIsNotNone(db.get_music_sheet("v2-job"))
 
-    def test_delete_actually_removes_the_files_on_disk(self):
+    def test_delete_leaves_the_files_on_disk(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(storage, "_LOCAL_DIR", Path(directory)):
             job = self._seed()
-            input_path = storage._local_path(job["input_key"])
-            output_path = storage._local_path(job["output_key"])
-            timeline_path = storage._local_path(job["timeline_key"])
-            self.assertTrue(input_path.exists() and output_path.exists() and timeline_path.exists())
+            paths = [storage._local_path(job[key]) for key in ("input_key", "output_key", "timeline_key")]
 
             server.delete_job("v2-job", USER_ID)
 
-            self.assertFalse(input_path.exists())
-            self.assertFalse(output_path.exists())
-            self.assertFalse(timeline_path.exists())
+            self.assertTrue(all(path.exists() for path in paths))
+
+    def test_deleting_twice_is_fine(self):
+        self._seed()
+        self.assertEqual(server.delete_job("v2-job", USER_ID).status_code, 204)
+        with self.assertRaises(HTTPException) as error:
+            server.delete_job("v2-job", USER_ID)
+        self.assertEqual(error.exception.status_code, 404)
 
     def test_delete_never_touches_a_different_jobs_files(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(storage, "_LOCAL_DIR", Path(directory)):

@@ -26,19 +26,19 @@ def reconcile(sqs, queue_url, now):
             if not storage.is_own_job(job):
                 continue
             try:
-                if status in ("done", "failed"):
+                if status in ("done", "failed", "deleted"):
+                    # A deleted sheet keeps its files (see server.delete_job);
+                    # only deleting the account removes them.
                     job_state.release(job)
                     job_state.forget_check(job)
-                elif status in ("deleted", "deleting"):
+                elif status == "deleting":
+                    # Left by the hard delete sheets had before: finish it.
                     processed_sheets.remove(job)
                     storage.delete_job_files(job)
                     db.delete_music_sheet(job["music_sheet_id"])
                     job_state.release(job)
-                    if status == "deleting":
-                        job_state.change(job["job_id"], {"status": status}, status="deleted",
-                                         next_check_at=max(now + 60, job["upload_expires_at"] + 60))
-                    else:
-                        job_state.forget_check(job)
+                    job_state.change(job["job_id"], {"status": status}, status="deleted",
+                                     next_check_at=max(now + 60, job["upload_expires_at"] + 60))
                 elif status == "uploading":
                     updated = accept_input(job["job_id"])
                     if updated["status"] == "uploading":

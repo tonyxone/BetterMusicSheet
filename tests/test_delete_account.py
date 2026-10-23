@@ -28,12 +28,14 @@ class DeleteAccountTests(unittest.TestCase):
         self.assertEqual(error.exception.status_code, 409)
         delete_cognito.assert_not_called()
 
-    def test_deletes_cognito_account_then_every_row_but_not_files(self):
-        jobs = [{"job_id": "job-1"}, {"job_id": "job-2"}]
-        sheets = [{"music_sheet_id": "sheet-1"}, {"music_sheet_id": "sheet-2"}]
+    def test_deletes_files_then_cognito_account_then_every_row(self):
+        jobs = [{"job_id": "job-1", "storage_version": 2}, {"job_id": "job-2", "status": "deleted"}]
+        sheets = [{"music_sheet_id": "job-1", "storage_version": 2, "sheet_name": "New.pdf"},
+                  {"music_sheet_id": "sheet-2", "sheet_name": "Old.pdf"}]
+        calls = []
         with (
             patch.object(server.db, "get_in_progress_job", return_value=None),
-            patch.object(server, "delete_cognito_user") as delete_cognito,
+            patch.object(server, "delete_cognito_user", side_effect=lambda _: calls.append("cognito")) as delete_cognito,
             patch.object(server.db, "list_annotation_jobs", return_value=jobs),
             patch.object(server.db, "list_music_sheets", return_value=sheets),
             patch.object(server.db, "delete_annotation_job") as delete_job,
@@ -41,17 +43,37 @@ class DeleteAccountTests(unittest.TestCase):
             patch.object(server.db, "delete_user") as delete_user,
             patch.object(server, "storage") as storage,
         ):
+            storage.delete_job_files.side_effect = lambda _: calls.append("files")
+            storage.delete_sheet_files.side_effect = lambda *_: calls.append("files")
             response = server.delete_account(USER_ID)
 
         self.assertEqual(response.status_code, 204)
         delete_cognito.assert_called_once_with(USER_ID)
+        self.assertEqual(calls, ["files", "files", "cognito"])
+        storage.delete_job_files.assert_called_once_with(jobs[0])
+        # The legacy sheet: its edits, and its files by name.
+        storage.delete_edits.assert_called_once_with(jobs[1])
+        storage.delete_sheet_files.assert_called_once_with(USER_ID, "Old.pdf")
         delete_job.assert_any_call("job-1")
         delete_job.assert_any_call("job-2")
-        delete_sheet.assert_any_call("sheet-1")
+        delete_sheet.assert_any_call("job-1")
         delete_sheet.assert_any_call("sheet-2")
         delete_user.assert_called_once_with(USER_ID)
-        storage.delete_sheet_files.assert_not_called()
-        storage.delete_job_files.assert_not_called()
+
+    def test_a_file_failure_keeps_the_account(self):
+        with (
+            patch.object(server.db, "get_in_progress_job", return_value=None),
+            patch.object(server, "delete_cognito_user") as delete_cognito,
+            patch.object(server.db, "list_annotation_jobs", return_value=[{"job_id": "job-1", "storage_version": 2}]),
+            patch.object(server.db, "list_music_sheets", return_value=[]),
+            patch.object(server.db, "delete_user") as delete_user,
+            patch.object(server, "storage") as storage,
+        ):
+            storage.delete_job_files.side_effect = RuntimeError("S3 down")
+            with self.assertRaises(RuntimeError):
+                server.delete_account(USER_ID)
+        delete_cognito.assert_not_called()
+        delete_user.assert_not_called()
 
     def test_local_delete_user_removes_the_row(self):
         db.create_user_if_missing("delete-account-test", "a@b.com", "A")
