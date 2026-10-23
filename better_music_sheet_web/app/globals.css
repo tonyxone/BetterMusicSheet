@@ -78,7 +78,7 @@ main {
   border-bottom: 1px solid var(--paper-deep);
 }
 .site-header .logo { cursor: pointer; display: flex; align-items: center; }
-.site-header .logo svg { width: 220px; height: 70px; overflow: visible; }
+.site-header .logo img { width: 220px; height: auto; display: block; }
 .nav-btn {
   display: flex;
   align-items: center;

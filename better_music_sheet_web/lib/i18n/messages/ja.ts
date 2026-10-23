@@ -8,15 +8,15 @@ export const ja: Messages = {
     siteDescription: "ピアノの楽譜をアップロードすると、音符に音名を付けます。鍵盤での再生を使って練習することもできます。",
     pageTitle: "{page} | BetterMusicSheet.com",
     about: "このサイトについて",
-    aboutDescription: "BetterMusicSheet が楽譜をどう読むか、表示の意味、そして楽譜認識に関する情報。",
+    aboutDescription: "BetterSheetMusic が楽譜をどう読むか、表示の意味、そして楽譜認識に関する情報。",
     support: "サポート",
-    supportDescription: "BetterMusicSheet のヘルプとお問い合わせ先。",
+    supportDescription: "BetterSheetMusic のヘルプとお問い合わせ先。",
     privacy: "プライバシー",
-    privacyDescription: "BetterMusicSheet が集める情報、その理由、削除の方法。",
+    privacyDescription: "BetterSheetMusic が集める情報、その理由、削除の方法。",
     terms: "利用規約",
-    termsDescription: "BetterMusicSheet の利用によって同意いただく規約。",
+    termsDescription: "BetterSheetMusic の利用によって同意いただく規約。",
     plans: "プレミアムにアップグレード",
-    plansDescription: "BetterMusicSheet プレミアムの月額・年額プランを比較。新規登録なら7日間の無料トライアル付き。",
+    plansDescription: "BetterSheetMusic プレミアムの月額・年額プランを比較。新規登録なら7日間の無料トライアル付き。",
   },
 
   common: {
@@ -77,7 +77,7 @@ export const ja: Messages = {
 
   iosApp: {
     link: "iOS アプリ",
-    title: "iPhone・iPad 版 BetterMusicSheet",
+    title: "iPhone・iPad 版 BetterSheetMusic",
     lead: "iOS アプリなら、外出先でも楽譜に音名を付けて練習できます。",
     sameAccount: "このサイトと同じアカウント（Google・Apple・メール）でサインインすると、楽譜もそのまま使えます。",
     sameSubscription: "プレミアムはどちらでも使えます。サイトかアプリのどちらかで一度登録すれば、同じアカウントでサインインしたすべての端末でプレミアムが有効になります。二重に支払う必要はありません。",

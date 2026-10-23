@@ -16,7 +16,7 @@ export function AboutKo({ path }: { path: (p: string) => string }) {
         다른 사람들은 곡을 치는 도중에 계산을 하고 있는 셈입니다.
       </p>
       <p>
-        BetterMusicSheet가 그 단계를 대신해 드립니다. 피아노 악보 PDF나 사진을 업로드하면 모든 음표에 음이름이 표시된 같은 악보를 돌려받고,
+        BetterSheetMusic가 그 단계를 대신해 드립니다. 피아노 악보 PDF나 사진을 업로드하면 모든 음표에 음이름이 표시된 같은 악보를 돌려받고,
         소리가 날 때 건반 위의 음을 밝혀 주는 연습 모드도 쓸 수 있습니다.
       </p>
 

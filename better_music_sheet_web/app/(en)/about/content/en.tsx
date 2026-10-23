@@ -17,7 +17,7 @@ export function AboutEn({ path }: { path: (p: string) => string }) {
         step. Everyone else is doing arithmetic in the middle of a piece.
       </p>
       <p>
-        BetterMusicSheet does that step for you. Upload a PDF or a photo of
+        BetterSheetMusic does that step for you. Upload a PDF or a photo of
         piano music and you get the same score back with every note labelled,
         plus a practice mode that lights the notes up on a keyboard as they
         sound.

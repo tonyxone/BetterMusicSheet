@@ -16,7 +16,7 @@ export default function TermsPage() {
       <div className="sub">Last updated 28 September 2026</div>
 
       <p>
-        By using BetterMusicSheet you accept these terms. They are short on
+        By using BetterSheetMusic you accept these terms. They are short on
         purpose.
       </p>
 

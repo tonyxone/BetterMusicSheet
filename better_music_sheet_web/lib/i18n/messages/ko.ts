@@ -8,15 +8,15 @@ export const ko: Messages = {
     siteDescription: "피아노 악보를 업로드하면 음표에 음이름을 표시해 드리며, 건반 재생으로 연습할 수도 있습니다.",
     pageTitle: "{page} | BetterMusicSheet.com",
     about: "소개",
-    aboutDescription: "BetterMusicSheet가 악보를 읽는 방식, 표시의 의미, 그리고 악보 인식에 관한 정보.",
+    aboutDescription: "BetterSheetMusic가 악보를 읽는 방식, 표시의 의미, 그리고 악보 인식에 관한 정보.",
     support: "고객 지원",
-    supportDescription: "BetterMusicSheet 도움말과 문의 방법.",
+    supportDescription: "BetterSheetMusic 도움말과 문의 방법.",
     privacy: "개인정보",
-    privacyDescription: "BetterMusicSheet가 수집하는 정보와 그 이유, 그리고 삭제하는 방법.",
+    privacyDescription: "BetterSheetMusic가 수집하는 정보와 그 이유, 그리고 삭제하는 방법.",
     terms: "이용약관",
-    termsDescription: "BetterMusicSheet를 이용하면 동의하게 되는 약관.",
+    termsDescription: "BetterSheetMusic를 이용하면 동의하게 되는 약관.",
     plans: "프리미엄 시작하기",
-    plansDescription: "BetterMusicSheet 프리미엄 월간·연간 요금제를 비교하세요. 신규 구독자는 7일 무료 체험을 이용할 수 있습니다.",
+    plansDescription: "BetterSheetMusic 프리미엄 월간·연간 요금제를 비교하세요. 신규 구독자는 7일 무료 체험을 이용할 수 있습니다.",
   },
 
   common: {
@@ -77,7 +77,7 @@ export const ko: Messages = {
 
   iosApp: {
     link: "iOS 앱",
-    title: "iPhone·iPad용 BetterMusicSheet",
+    title: "iPhone·iPad용 BetterSheetMusic",
     lead: "iOS 앱으로 이동 중에도 악보에 계이름을 붙이고 연습하세요.",
     sameAccount: "이 사이트와 같은 계정(Google·Apple·이메일)으로 로그인하면 악보도 그대로 이어집니다.",
     sameSubscription: "프리미엄은 양쪽에서 모두 쓸 수 있습니다. 웹사이트나 앱 중 한 곳에서 한 번만 구독하면, 같은 계정으로 로그인한 모든 기기에서 프리미엄이 적용됩니다. 두 번 결제할 필요가 없습니다.",

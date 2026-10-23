@@ -22,7 +22,7 @@ export default async function PrivacyPage() {
       <div className="sub">Last updated 19 October 2026</div>
 
       <p>
-        This page explains what BetterMusicSheet keeps about you, why, and how
+        This page explains what BetterSheetMusic keeps about you, why, and how
         to remove it.
       </p>
 

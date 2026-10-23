@@ -9,15 +9,15 @@ export const zhHant: Messages = {
     siteDescription: "上傳鋼琴樂譜，我們會標註上音符，還可以使用鍵盤演奏幫助練習。",
     pageTitle: "{page} | BetterMusicSheet.com",
     about: "關於",
-    aboutDescription: "BetterMusicSheet 如何讀譜、標註的意義，以及樂譜辨識相關的資訊。",
+    aboutDescription: "BetterSheetMusic 如何讀譜、標註的意義，以及樂譜辨識相關的資訊。",
     support: "支援",
-    supportDescription: "BetterMusicSheet 使用說明與聯絡方式。",
+    supportDescription: "BetterSheetMusic 使用說明與聯絡方式。",
     privacy: "隱私權",
-    privacyDescription: "BetterMusicSheet 蒐集哪些資料、為什麼蒐集，以及如何刪除。",
+    privacyDescription: "BetterSheetMusic 蒐集哪些資料、為什麼蒐集，以及如何刪除。",
     terms: "條款",
-    termsDescription: "使用 BetterMusicSheet 即表示您接受的條款。",
+    termsDescription: "使用 BetterSheetMusic 即表示您接受的條款。",
     plans: "升級進階版",
-    plansDescription: "比較 BetterMusicSheet 進階版的月繳與年繳方案，新訂閱者可免費試用 7 天。",
+    plansDescription: "比較 BetterSheetMusic 進階版的月繳與年繳方案，新訂閱者可免費試用 7 天。",
   },
 
   common: {
@@ -78,7 +78,7 @@ export const zhHant: Messages = {
 
   iosApp: {
     link: "iOS App",
-    title: "iPhone 與 iPad 版 BetterMusicSheet",
+    title: "iPhone 與 iPad 版 BetterSheetMusic",
     lead: "使用 iOS App，隨時隨地為樂譜標註音名並練習。",
     sameAccount: "使用與本網站相同的帳號（Google、Apple 或電子郵件）登入，你的樂譜也會一併同步。",
     sameSubscription: "進階版兩邊通用。在網站或 App 中訂閱一次，即可在所有以同一帳號登入的裝置上使用進階版，無需重複付費。",
