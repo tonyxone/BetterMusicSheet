@@ -282,6 +282,169 @@ class ResampleTests(unittest.TestCase):
         self.assertEqual(audiveris.call_args[0][0][-1], str(self.path / "work" / "resampled" / "input.pdf"))
 
 
+def screen_photo(path, pages=1):
+    """A phone photo of a sheet on a monitor, as the upload that needed
+    smoothing was: grey paper, 3px staff lines 12px apart, and the screen's
+    pixel grid as a stripe every third column that flickers about INK_LEVEL.
+    300x240 px at 300 DPI."""
+    import random
+    width, height, interline = 300, 240, 12
+    noise = random.Random(7296)
+    samples = bytearray(max(0, min(255, (165 if x % 3 == 0 else 215) + noise.randint(-25, 25)))
+                        for _ in range(height) for x in range(width))
+    for top in (30, 114):
+        for line in range(5):
+            for y in range(top + line * interline, top + line * interline + 3):
+                samples[y * width:(y + 1) * width] = bytes([50]) * width
+    pix = pymupdf.Pixmap(pymupdf.csGRAY, width, height, bytes(samples), False)
+    with pymupdf.open() as doc:
+        for _ in range(pages):
+            page = doc.new_page(width=width * 72 / 300, height=height * 72 / 300)
+            page.insert_image(page.rect, pixmap=pix)
+        doc.save(path)
+    return path
+
+
+class SmoothPhotoTests(unittest.TestCase):
+    """A photo of a screen whose pixel grid hid the staff spacing is read
+    again blurred - see scan.SMOOTHING_RADIUS."""
+    scan_pdf = BinarizeTests.scan_pdf
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def paper_runs(self, path, page=0):
+        """The commonest length of paper down the picture's columns: what
+        Audiveris measures the staff spacing from."""
+        from collections import Counter
+        with pymupdf.open(path) as doc:
+            pix = doc[page].get_pixmap(dpi=300, colorspace=pymupdf.csGRAY)
+        runs = Counter()
+        for x in range(pix.width):
+            column = [pix.samples[y * pix.width + x] < scan.INK_LEVEL for y in range(pix.height)]
+            length = 1
+            for ink, below in zip(column, column[1:]):
+                if ink == below:
+                    length += 1
+                    continue
+                if not ink:
+                    runs[length] += 1
+                length = 1
+        return runs.most_common(1)[0][0]
+
+    def test_the_screen_grid_is_smoothed_out_of_a_photo_on_the_same_page(self):
+        source = screen_photo(self.path / "input.pdf")
+        copy = scan.smooth_photos(source, self.path / "out")
+        self.assertEqual(copy, self.path / "out" / "input.pdf")
+        with pymupdf.open(copy) as doc, pymupdf.open(source) as original:
+            self.assertEqual(doc[0].rect, original[0].rect)
+        # The grid cuts the paper into runs of a pixel or two; smoothed, the
+        # runs are the paper between staff lines again.
+        self.assertLessEqual(self.paper_runs(source), 3)
+        self.assertGreaterEqual(self.paper_runs(copy), 6)
+
+    def test_a_clean_screenshot_is_left_alone(self):
+        source = self.scan_pdf("sheet.pdf")
+        self.assertEqual(scan.smooth_photos(source, self.path / "out"), source)
+
+    def test_a_vector_page_is_left_alone(self):
+        source = self.path / "vector.pdf"
+        with pymupdf.open() as doc:
+            page = doc.new_page(width=300, height=200)
+            for y in range(50, 100, 10):
+                page.draw_line((20, y), (280, y))
+            doc.save(source)
+        self.assertEqual(scan.smooth_photos(source, self.path / "out"), source)
+
+    def test_only_the_pages_being_read_are_smoothed(self):
+        source = screen_photo(self.path / "two.pdf", pages=2)
+        copy = scan.smooth_photos(source, self.path / "out", pages=[2])
+        self.assertLessEqual(self.paper_runs(copy, 0), 3)
+        self.assertGreaterEqual(self.paper_runs(copy, 1), 6)
+
+
+PURPLE, BLUE = (48, 26, 75), (128, 196, 255)  # the app's buttons and its playback cursor
+
+
+def app_screenshot(path, background=(255, 255, 255)):
+    """A screenshot of a score app, as the upload that needed this was: a
+    black staff with a dark purple button on it and a light blue playback
+    cursor running down through it. 300x200 px at 300 DPI."""
+    width, height = 300, 200
+    pixels = [list(background) for _ in range(width * height)]
+    for line in range(5):
+        for y in range(60 + line * 12, 63 + line * 12):
+            for x in range(20, 280):
+                pixels[y * width + x] = [0, 0, 0]
+    for y in range(40, 160):
+        for x in range(150, 153):
+            pixels[y * width + x] = list(BLUE)
+    for y in range(50, 110):
+        for x in range(220, 270):
+            if (x - 245) ** 2 + (y - 80) ** 2 <= 25 ** 2:
+                pixels[y * width + x] = list(PURPLE)
+    pix = pymupdf.Pixmap(pymupdf.csRGB, width, height, bytes(v for p in pixels for v in p), False)
+    with pymupdf.open() as doc:
+        page = doc.new_page(width=width * 72 / 300, height=height * 72 / 300)
+        page.insert_image(page.rect, pixmap=pix)
+        doc.save(path)
+    return path
+
+
+class ColourTests(unittest.TestCase):
+    """A score app's coloured cursor and buttons are not read as ink - see scan.COLOUR_CHROMA."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def grey(self, path, x, y):
+        with pymupdf.open(path) as doc:
+            pix = doc[0].get_pixmap(dpi=300, colorspace=pymupdf.csGRAY)
+        return pix.samples[y * pix.width + x]
+
+    def test_the_cursor_and_buttons_are_whitened_and_the_staff_kept(self):
+        source = app_screenshot(self.path / "input.pdf")
+        copy = scan.whiten_colour(source, self.path / "out")
+        self.assertEqual(copy, self.path / "out" / "input.pdf")
+        with pymupdf.open(copy) as doc, pymupdf.open(source) as original:
+            self.assertEqual(doc[0].rect, original[0].rect)
+        self.assertLess(self.grey(source, 245, 80), scan.INK_LEVEL)  # the button, before
+        self.assertEqual(self.grey(copy, 245, 80), 255)
+        self.assertEqual(self.grey(copy, 151, 140), 255)  # the cursor below the staff
+        self.assertEqual(self.grey(copy, 100, 61), 0)  # a staff line away from both
+
+    def test_a_screenshot_without_colour_is_left_alone(self):
+        source = BinarizeTests.scan_pdf(self, "sheet.pdf")
+        self.assertEqual(scan.whiten_colour(source, self.path / "out"), source)
+
+    def test_a_photo_is_left_alone(self):
+        source = app_screenshot(self.path / "photo.pdf", background=(205, 200, 190))
+        self.assertEqual(scan.whiten_colour(source, self.path / "out"), source)
+
+    def test_a_binarized_copy_drops_the_colour_too(self):
+        source = app_screenshot(self.path / "input.pdf")
+        copy = scan.prepare_for_recognition(source, self.path / "out")
+        self.assertEqual(self.grey(copy, 245, 80), 255)
+        self.assertEqual(self.grey(copy, 100, 61), 0)
+
+    def test_audiveris_reads_the_whitened_copy_with_more_of_the_memory(self):
+        source = app_screenshot(self.path / "input.pdf")
+        with patch.object(run.sys, "platform", "linux"), patch.object(run.subprocess, "run") as audiveris, \
+                self.assertRaises(RuntimeError):
+            run.run_audiveris(source, self.path / "work")  # it wrote no output
+        cmd = audiveris.call_args[0][0]
+        self.assertEqual(cmd[-1], str(self.path / "work" / "uncoloured" / "input.pdf"))
+        self.assertIn(f"-XX:MaxRAMPercentage={run.JAVA_HEAP_PERCENT}", cmd)
+
+
 class RereadTests(unittest.TestCase):
     def test_missing_staves_counts_against_the_fullest_system(self):
         groups = {1: [[1, 2], [3]], 2: [[1], [2]], 3: [[1, 2]]}

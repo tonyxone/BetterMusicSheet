@@ -193,11 +193,12 @@ class CrashRerunTests(unittest.TestCase):
         """A run_audiveris stand-in: each call writes its own log, then
         crashes with that log line, splits into movements, or succeeds."""
         calls = iter(outcomes)
-        self.runs, self.sheets = [], []
+        self.runs, self.sheets, self.read = [], [], []
 
         def fake(pdf_path, out_dir, dpi=None, sheets=None, constants=None):
             self.runs.append((dpi, constants))
             self.sheets.append(sheets)
+            self.read.append(pdf_path)
             outcome = next(calls)
             (out_dir / "input.omr").write_text("partial book")
             if outcome.startswith("ok"):
@@ -283,6 +284,27 @@ class CrashRerunTests(unittest.TestCase):
         with self.assertRaises(run.NotMusic):
             self.recognize(self.no_spacing(), self.no_spacing())
         self.assertEqual(len(self.runs), 2)
+
+    def test_a_photo_of_a_screen_is_read_again_smoothed_before_it_is_not_music(self):
+        # An iPhone photo of a clarinet part on a monitor: no staff spacing
+        # at its own size or smaller, until the screen's grid was blurred out.
+        from test_scan import screen_photo
+        screen_photo(self.pdf, pages=3)
+        result, calls, log = self.recognize(self.no_spacing(), self.no_spacing(), "ok")
+        smoothed = self.work / "smoothed" / "input.pdf"
+        self.assertEqual(result, (self.work / "input.mxl", self.work / "input.omr", None))
+        self.assertEqual(self.read, [self.pdf, self.pdf, smoothed])
+        self.assertEqual([dpi for dpi, _ in self.runs], [None, round(run.DEFAULT_DPI * run.SHRINK_RATIO), None])
+        self.assertIn("reading a smoothed copy", log[-1])
+
+    def test_a_smoothed_photo_with_no_staff_spacing_is_not_music(self):
+        from test_scan import screen_photo
+        screen_photo(self.pdf, pages=3)
+        with self.assertRaises(run.NotMusic):
+            # Smoothed once, then read smaller once more, as any photo is.
+            self.recognize(*[self.no_spacing()] * 4)
+        self.assertEqual(len(self.runs), 4)
+        self.assertEqual(self.read[2:], [self.work / "smoothed" / "input.pdf"] * 2)
 
     def test_a_page_with_no_music_is_left_out_not_rerun(self):
         # A cover picture: Audiveris drops it, then refuses to export the book.

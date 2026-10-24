@@ -79,15 +79,84 @@ def is_scanned(page):
     return bool(page.get_images()) and not vector_staff_rule_ys(page)
 
 
+# A screenshot of a score app carries the app's own controls over the music:
+# on an iPad screenshot of a two-staff piece, a light blue playback cursor ran
+# down through both staves and four dark purple buttons sat on the first
+# system. Read as ink, the cursor is one long stem through a column of heads,
+# and Audiveris ran out of memory weighing the ways to attach them - in its
+# STEMS step, on every read, at every resolution. Engraved music on a screen
+# is black and grey: every pixel of that piece's notation had a chroma (its
+# largest RGB channel less its smallest) of 0, the purple 49 and the blue
+# about 127. So a clean picture's coloured pixels are taken for the app's and
+# turned white before recognition, and COLOUR_MARGIN pixels round them too,
+# for the anti-aliased edge where a control fades into the paper. A score
+# that prints its notes in colour would lose them; none uploaded so far has.
+COLOUR_CHROMA = 24
+COLOUR_MARGIN = 2
+
+
+def _grey(page, dpi):
+    """The page as a grey pixmap at ``dpi``, and whether it had coloured
+    pixels to whiten (see COLOUR_CHROMA)."""
+    from PIL import Image, ImageChops, ImageFilter
+
+    pix = page.get_pixmap(dpi=dpi, colorspace=pymupdf.csRGB, alpha=False)
+    rgb = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+    red, green, blue = rgb.split()
+    chroma = ImageChops.subtract(ImageChops.lighter(ImageChops.lighter(red, green), blue),
+                                 ImageChops.darker(ImageChops.darker(red, green), blue))
+    colour = chroma.point(lambda v: 255 if v >= COLOUR_CHROMA else 0)
+    if not colour.getbbox():
+        return page.get_pixmap(dpi=dpi, colorspace=pymupdf.csGRAY, alpha=False), False
+    grey = rgb.convert("L")
+    grey.paste(255, mask=colour.filter(ImageFilter.MaxFilter(2 * COLOUR_MARGIN + 1)))
+    return pymupdf.Pixmap(pymupdf.csGRAY, pix.width, pix.height, grey.tobytes(), False), True
+
+
+def _is_clean(samples):
+    """Whether grey ``samples`` are a digitally clean picture (see MIN_WHITE_FRACTION)."""
+    return samples.translate(_WHITE).count(1) >= MIN_WHITE_FRACTION * len(samples)
+
+
 def _clean_binary(page, dpi):
-    """The page as a black-and-white pixmap at ``dpi``, or None when it is not
-    a digitally clean picture (see MIN_WHITE_FRACTION)."""
-    pix = page.get_pixmap(dpi=dpi, colorspace=pymupdf.csGRAY, alpha=False)
+    """The page as a black-and-white pixmap at ``dpi``, with any coloured app
+    controls whitened, or None when it is not a digitally clean picture
+    (see MIN_WHITE_FRACTION)."""
+    pix, _ = _grey(page, dpi)
     samples = pix.samples
-    if samples.translate(_WHITE).count(1) < MIN_WHITE_FRACTION * len(samples):
+    if not _is_clean(samples):
         return None
     return pymupdf.Pixmap(pymupdf.csGRAY, pix.width, pix.height,
                           samples.translate(_BINARY), False)
+
+
+def whiten_colour(pdf_path, out_dir, pages=None):
+    """The PDF Audiveris should read: ``pdf_path`` itself, or a copy in which
+    every digitally clean picture page with colour on it is grey, its
+    coloured pixels white (see COLOUR_CHROMA), at its picture's own
+    resolution. A photo is left as it is: its paper and lighting are never
+    quite grey. Pages keep their size, and the copy its name, as in
+    prepare_for_recognition."""
+    pdf_path = Path(pdf_path)
+    whitened = 0
+    with pymupdf.open(pdf_path) as src, pymupdf.open() as out:
+        for index, page in enumerate(src):
+            native = picture_dpi(page) if is_scanned(page) else None
+            pix, coloured = (_grey(page, max(1, round(native)))
+                             if native and (pages is None or index + 1 in pages) else (None, False))
+            if not coloured or not _is_clean(pix.samples):
+                out.insert_pdf(src, from_page=index, to_page=index)
+                continue
+            copy = out.new_page(width=page.rect.width, height=page.rect.height)
+            copy.insert_image(copy.rect, pixmap=pix)
+            whitened += 1
+        if not whitened:
+            return pdf_path
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        target = out_dir / pdf_path.name
+        out.save(target, garbage=3, deflate=True)
+    return target
 
 
 def picture_dpi(page):
@@ -184,6 +253,56 @@ def prepare_for_recognition(pdf_path, out_dir, dpi=None, pages=None):
             copy.insert_image(copy.rect, pixmap=binary)
             cleaned += 1
         if not cleaned:
+            return pdf_path
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        target = out_dir / pdf_path.name
+        out.save(target, garbage=3, deflate=True)
+    return target
+
+
+# A phone photo of a sheet shown on a monitor carries the screen's pixel grid
+# as fine stripes across the whole page, a few pixels apart. Audiveris
+# measures the staff spacing from the lengths of runs of ink and of paper
+# down each column, and the stripes cut every column into runs of 1-3px: an
+# iPhone photo of a clarinet part, its staff lines 11-12px apart, was
+# measured at an interline of 3px, its page dropped, and read again at 800
+# and 560 DPI - which only enlarged the stripes - and failed as "no music".
+# Blurred by 1.5px at its own resolution, the stripes went: the commonest
+# paper run down its columns went from 1px to 11-12px, the staff spacing.
+# A blur that small leaves staff lines 11px apart well apart, and only ever
+# runs on a page that otherwise reads as no music at all.
+SMOOTHING_RADIUS = 1.5
+
+
+def smooth_photos(pdf_path, out_dir, pages=None):
+    """The PDF to read when Audiveris found no staff spacing on a photo: a
+    copy with every photographed page blurred by SMOOTHING_RADIUS at its
+    picture's own resolution, or ``pdf_path`` itself when no page is one.
+
+    A digitally clean picture (see MIN_WHITE_FRACTION) is no photo of a
+    screen, and a vector page has no picture, so both are copied unchanged.
+    Pages keep their size, and the copy its name, as in prepare_for_recognition.
+    """
+    from PIL import Image, ImageFilter
+
+    pdf_path = Path(pdf_path)
+    smoothed = 0
+    with pymupdf.open(pdf_path) as src, pymupdf.open() as out:
+        for index, page in enumerate(src):
+            native = picture_dpi(page) if is_scanned(page) else None
+            if ((pages is not None and index + 1 not in pages) or not native
+                    or _clean_binary(page, max(1, round(native))) is not None):
+                out.insert_pdf(src, from_page=index, to_page=index)
+                continue
+            pix = page.get_pixmap(dpi=max(1, round(native)), colorspace=pymupdf.csGRAY, alpha=False)
+            picture = (Image.frombytes("L", (pix.width, pix.height), pix.samples)
+                       .filter(ImageFilter.GaussianBlur(SMOOTHING_RADIUS)))
+            copy = out.new_page(width=page.rect.width, height=page.rect.height)
+            copy.insert_image(copy.rect, pixmap=pymupdf.Pixmap(pymupdf.csGRAY, pix.width, pix.height,
+                                                               picture.tobytes(), False))
+            smoothed += 1
+        if not smoothed:
             return pdf_path
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)

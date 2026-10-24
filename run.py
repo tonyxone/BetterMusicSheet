@@ -23,6 +23,11 @@ from audiveris_heads import (
 AUDIVERIS_DIR = Path(__file__).parent / "tools" / "Audiveris" / "Audiveris"
 AUDIVERIS_EXE = AUDIVERIS_DIR / "Audiveris.exe"  # Windows launcher (jpackage), bundles its own JRE
 AUDIVERIS_APP_DIR = AUDIVERIS_DIR / "app"  # same jars work with a system `java` on Linux
+# The share of the machine's memory Audiveris's heap may grow to. Java's own
+# default is a quarter: 2 of the worker's 8 GB, which an iPad screenshot ran
+# out of in Audiveris's STEMS step. The worker runs one job, so one
+# Audiveris, at a time; the rest is for Python and the PDF work around it.
+JAVA_HEAP_PERCENT = 70
 
 # Measured, not assumed. On the page this retry exists for - a Liszt etude
 # printing 738 noteheads that 300 DPI reads 74 of - 400 DPI finds 712 in 66s
@@ -171,7 +176,10 @@ def run_audiveris(pdf_path, out_dir, dpi=None, sheets=None, switches=None, binar
     at a forced ``dpi`` one finer than it is shrunk (scan.resample_pictures).
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    source = scan.resample_pictures(pdf_path, out_dir / "resampled", dpi or scan.DEFAULT_DPI, sheets,
+    # A score app's coloured cursor and buttons go first (scan.COLOUR_CHROMA),
+    # at the picture's own resolution, before anything resamples it.
+    source = scan.whiten_colour(pdf_path, out_dir / "uncoloured", sheets)
+    source = scan.resample_pictures(source, out_dir / "resampled", dpi or scan.DEFAULT_DPI, sheets,
                                     shrink=dpi is not None)
     if binarize:
         source = scan.prepare_for_recognition(source, out_dir / "input", dpi, sheets)
@@ -180,7 +188,7 @@ def run_audiveris(pdf_path, out_dir, dpi=None, sheets=None, switches=None, binar
     else:
         # Audiveris.exe is a jpackage launcher bundling a Windows JRE; on Linux
         # run the same app jars directly with the system `java` instead.
-        cmd = ["java", "-cp", str(AUDIVERIS_APP_DIR / "*"), "Audiveris",
+        cmd = ["java", f"-XX:MaxRAMPercentage={JAVA_HEAP_PERCENT}", "-cp", str(AUDIVERIS_APP_DIR / "*"), "Audiveris",
                "-batch", "-export", "-output", str(out_dir)]
     if dpi is not None:
         # Audiveris's default 300dpi PDF rasterization can be too coarse for
@@ -347,10 +355,13 @@ def recognize_book(pdf_path, work_dir, dpi=None, log=print):
     constants, runs, crashes, sheets = None, 0, 0, None
     fallbacks = list(CRASH_FALLBACK_DPIS)
     shrunk = False
+    # The PDF Audiveris reads: the upload, or a smoothed copy of its photos
+    # (scan.smooth_photos), which keeps its name and pages.
+    source, first_dpi = pdf_path, dpi
     while True:
         runs += 1
         try:
-            mxl, omr = run_audiveris(pdf_path, work_dir, dpi=dpi, sheets=sheets, constants=constants)
+            mxl, omr = run_audiveris(source, work_dir, dpi=dpi, sheets=sheets, constants=constants)
             stem = pdf_path.stem
             dropped = _dropped_sheets(work_dir, stem)
             # Audiveris drops a page whose staves are too fine and exports the
@@ -414,6 +425,14 @@ def recognize_book(pdf_path, work_dir, dpi=None, log=print):
                     shrunk = True
                     dpi = round((dpi or DEFAULT_DPI) * SHRINK_RATIO)
                     log(f"[1/3] The staff spacing could not be measured; reading the pages again at {dpi} DPI ...")
+                elif (failed and not kept and all(failed.values()) and source == pdf_path and within_job
+                      and (smoothed := scan.smooth_photos(pdf_path, work_dir / "smoothed")) != pdf_path):
+                    # Last before giving up: a photo of a screen, whose
+                    # pixel grid hid its staff spacing. Read from the start
+                    # again, finer and smaller included, as a new picture.
+                    source, dpi, shrunk = smoothed, first_dpi, False
+                    log("[1/3] No staff spacing could be measured on the photo; "
+                        "reading a smoothed copy of it ...")
                 elif failed and not kept and all(failed.values()):
                     raise NotMusic(NOT_MUSIC_MESSAGE)
                 elif _a_sheet_crashed(work_dir, stem) and fallbacks and within_budget:
