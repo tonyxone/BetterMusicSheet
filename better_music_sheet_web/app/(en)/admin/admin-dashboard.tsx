@@ -4,8 +4,8 @@ import { Fragment, useEffect, useState } from "react";
 import { useAuth } from "../../auth-context";
 import { clientApiFetch } from "@/lib/client-api";
 import {
-  USAGE_EVENTS, type AdminEngagement, type AdminOverview, type AdminPage, type AdminPayments, type AdminSession,
-  type AdminSubscriptionState, type AdminSubscriptions, type AdminSystem, type AdminUpload, type AdminUploads, type AdminUser,
+  USAGE_EVENTS, grantMaster, revokeMaster, type AdminEngagement, type AdminMaster, type AdminOverview, type AdminPage,
+  type AdminPayments, type AdminSession, type AdminSignupPlatform, type AdminSubscriptionState, type AdminSubscriptions, type AdminSystem, type AdminUpload, type AdminUploads, type AdminUser,
 } from "@/lib/admin";
 import {
   Badge, LoadState, Pager, PaymentsTable, SubscriptionBadge, UploadsTable, date, duration, useAdminData,
@@ -19,6 +19,7 @@ const TABS = [
   { id: "users", label: "Users" },
   { id: "engagement", label: "Engagement" },
   { id: "subscriptions", label: "Subscriptions" },
+  { id: "masters", label: "Master users" },
   { id: "uploads", label: "Uploads" },
   { id: "system", label: "System" },
 ] as const;
@@ -84,6 +85,7 @@ function Dashboard() {
       {tab === "users" && <UsersTab />}
       {tab === "engagement" && <EngagementTab />}
       {tab === "subscriptions" && <SubscriptionsTab />}
+      {tab === "masters" && <MastersTab />}
       {tab === "uploads" && <UploadsTab />}
       {tab === "system" && <SystemTab />}
     </div>
@@ -263,7 +265,20 @@ const UPLOAD_COUNTS: Option[] = [
   { id: "failed", label: "Has a failure" },
 ];
 
-const USER_FILTERS = ["q", "joined", "plan", "subscribed", "canceled", "uploads"] as const;
+const SIGNUP_PLATFORMS: Option[] = [
+  { id: "", label: "Anywhere" },
+  { id: "web", label: "Web" },
+  { id: "ios", label: "Apple (iOS app)" },
+  { id: "unknown", label: "Not recorded" },
+];
+
+/** Where an account was made. */
+function SignupPlatform({ platform }: { platform: AdminSignupPlatform }) {
+  if (!platform) return <span className="admin-sub" title="Made before this was recorded">—</span>;
+  return <Badge tone={platform === "ios" ? "info" : "muted"}>{platform === "ios" ? "Apple" : "Web"}</Badge>;
+}
+
+const USER_FILTERS = ["q", "joined", "platform", "plan", "subscribed", "canceled", "uploads"] as const;
 
 function UsersTab() {
   const { filters, set, any, clear, setPage, query: search } = useFilters(USER_FILTERS);
@@ -282,13 +297,15 @@ function UsersTab() {
           <table className="admin-table">
             <thead>
               <tr>
-                <th>User</th><th>Joined</th><th>Plan</th><th>Subscribed</th><th>Canceled</th>
+                <th>User</th><th>Joined</th><th>Signed up on</th><th>Plan</th><th>Subscribed</th><th>Canceled</th>
                 <th className="num">Uploads</th>
                 <th className="num">Active, 30 days</th><th>Last active</th>
               </tr>
               <tr className="admin-filter-row">
                 <th><ColumnSearch label="user ID" value={filters.q} onChange={set("q")} /></th>
                 <th><ColumnSelect label="joined" value={filters.joined} options={WITHIN} onChange={set("joined")} /></th>
+                <th><ColumnSelect label="where they signed up" value={filters.platform} options={SIGNUP_PLATFORMS}
+                  onChange={set("platform")} /></th>
                 <th><ColumnSelect label="plan" value={filters.plan} options={PLANS} onChange={set("plan")} /></th>
                 <th><ColumnSelect label="subscribed" value={filters.subscribed} options={WITHIN} onChange={set("subscribed")} /></th>
                 <th><ColumnSelect label="canceled" value={filters.canceled} options={WITHIN} onChange={set("canceled")} /></th>
@@ -309,6 +326,7 @@ function UsersTab() {
                         <span className="admin-id">{u.user_id}</span>
                       </td>
                       <td className="nowrap">{date(u.created_at)}</td>
+                      <td><SignupPlatform platform={u.signup_platform} /></td>
                       <td><SubscriptionBadge subscription={s} master={u.master} /></td>
                       <td className="nowrap">{date(s?.started_at)}</td>
                       <td className="nowrap">
@@ -326,7 +344,7 @@ function UsersTab() {
                     </tr>
                     {expanded && (
                       <tr className="admin-expanded">
-                        <td colSpan={8}>
+                        <td colSpan={9}>
                           {/* Only an account that has subscribed has a store to ask. */}
                           {s && (
                             <>
@@ -351,6 +369,89 @@ function UsersTab() {
       )}
       {data && <Pager page={data.page} pages={data.pages} total={data.total} noun="users"
         onPage={(next) => { setPage(next); setOpen(null); }} />}
+    </section>
+  );
+}
+
+/** Who has master (free Premium) access, and granting or taking it back. */
+function MastersTab() {
+  const { data, error, loading, reload } = useAdminData<AdminMaster[]>("/masters");
+  const [who, setWho] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+
+  async function grant(event: React.FormEvent) {
+    event.preventDefault();
+    if (!who.trim() || busy) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const { granted, already } = await grantMaster(who.trim());
+      const parts = [];
+      if (granted.length) parts.push(`Granted to ${granted.join(", ")}.`);
+      if (already.length) parts.push(`${already.join(", ")} already had it.`);
+      setMessage({ tone: "ok", text: parts.join(" ") });
+      setWho("");
+      reload();
+    } catch (failure) {
+      setMessage({ tone: "error", text: (failure as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function revoke(userId: string) {
+    if (!window.confirm(`Take master access away from ${userId}? Any subscription they have stays.`)) return;
+    setMessage(null);
+    try {
+      await revokeMaster(userId);
+      setMessage({ tone: "ok", text: `Took master access away from ${userId}.` });
+      reload();
+    } catch (failure) {
+      setMessage({ tone: "error", text: (failure as Error).message });
+    }
+  }
+
+  return (
+    <section>
+      <form className="admin-toolbar" onSubmit={(event) => void grant(event)}>
+        <input className="admin-input" placeholder="User ID or sign-in email" aria-label="User ID or sign-in email"
+          value={who} onChange={(event) => setWho(event.target.value)} disabled={busy} />
+        <button type="submit" className="btn-pill admin-small" disabled={busy || !who.trim()}>
+          {busy ? "Granting…" : "Grant master"}
+        </button>
+        <div className="admin-toolbar-end"><LoadState loading={loading} error={error} onReload={reload} /></div>
+      </form>
+      <p className="admin-sub">
+        Master users get Premium on the web and in the iOS app without a subscription. An email grants every account
+        that signs in with it.
+      </p>
+      {message && <p className={message.tone === "error" ? "admin-error-text" : "admin-sub"} role="status">{message.text}</p>}
+      {data && (
+        <div className="admin-table-wrap">
+          <table className="admin-table">
+            <thead>
+              <tr><th>User</th><th>Joined</th><th>Signed up on</th><th>Granted</th><th>Granted by</th><th /></tr>
+            </thead>
+            <tbody>
+              {data.map((m) => (
+                <tr key={m.user_id}>
+                  <td>
+                    <span className="admin-id">{m.user_id}</span>
+                    {!m.account && <div className="admin-sub">No signed-in account</div>}
+                  </td>
+                  <td className="nowrap">{date(m.created_at)}</td>
+                  <td><SignupPlatform platform={m.signup_platform} /></td>
+                  <td className="nowrap">{m.granted_at ? date(m.granted_at) : <span className="admin-sub">By hand</span>}</td>
+                  <td>{m.granted_by ? <span className="admin-id">{m.granted_by}</span> : "—"}</td>
+                  <td><button type="button" className="admin-link admin-small-text" onClick={() => void revoke(m.user_id)}>Revoke</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!data.length && <p className="admin-sub admin-empty">No master users yet.</p>}
+        </div>
+      )}
     </section>
   );
 }

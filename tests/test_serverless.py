@@ -167,13 +167,21 @@ class ServerlessTests(unittest.TestCase):
 
     def test_master_user_store_round_trips_through_dynamodb(self):
         self.assertFalse(db.is_master_user(USER))
-        db.add_master_user(USER)
+        db.add_master_user(USER, granted_by="admin")
         self.assertTrue(db.is_master_user(USER))
-        self.assertEqual(self.ddb.get_item(TableName="test-master-users", Key={"user_id": {"S": USER}})["Item"],
-                         {"user_id": {"S": USER}})
+        item = self.ddb.get_item(TableName="test-master-users", Key={"user_id": {"S": USER}})["Item"]
+        self.assertEqual((item["user_id"], item["granted_by"]), ({"S": USER}, {"S": "admin"}))
+        self.assertEqual([(row["user_id"], type(row["granted_at"])) for row in db.master_user_rows()], [(USER, int)])
         self.assertEqual(auth.get_entitlement(USER)["tier"], "premium")
         db.remove_master_user(USER)
         self.assertFalse(db.is_master_user(USER))
+
+    def test_accounts_are_found_by_email_any_case(self):
+        db.save_user_identity(USER, "Reader@Example.com", None)
+        db.save_user_identity("other", "someone@example.com", None)
+        db.save_user_identity("no-email", None, None)
+        self.assertEqual(db.account_ids_with_email(" reader@example.COM "), [USER])
+        self.assertEqual(db.account_ids_with_email("nobody@example.com"), [])
 
     def processed_rows(self):
         return self.ddb.scan(TableName="test-processed")["Items"]

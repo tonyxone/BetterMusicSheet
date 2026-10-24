@@ -28,7 +28,7 @@ SUBSCRIBER = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 
 ROUTES = ["/api/admin/me", "/api/admin/overview", "/api/admin/users", "/api/admin/users/signups", f"/api/admin/users/{MEMBER}/uploads",
           f"/api/admin/users/{MEMBER}/payments", f"/api/admin/users/{MEMBER}/usage", "/api/admin/engagement",
-          "/api/admin/uploads", "/api/admin/uploads?status=failed", "/api/admin/subscriptions", "/api/admin/system",
+          "/api/admin/uploads", "/api/admin/uploads?status=failed", "/api/admin/subscriptions", "/api/admin/system", "/api/admin/masters",
           "/api/admin/uploads/member-done/files", "/api/admin/uploads/member-done/file/input"]
 
 
@@ -47,7 +47,7 @@ def add_job(test, job_id, user_id, status, created_at, **fields):
 
 def isolate(test):
     """Other test files share db's in-memory store; start each test empty."""
-    for store in (db._users, db._subscriptions, db._music_sheets, db._annotation_jobs):
+    for store in (db._users, db._subscriptions, db._music_sheets, db._annotation_jobs, db._master_users):
         patcher = patch.dict(store, clear=True)
         patcher.start()
         test.addCleanup(patcher.stop)
@@ -82,6 +82,15 @@ class HiddenFromEveryoneElseTests(AdminTestCase):
             for route in ROUTES:
                 response = self.client.get(route, headers=headers)
                 self.assertEqual((route, response.status_code, response.json()), (route, 404, missing.json()))
+
+    def test_granting_and_revoking_master_look_missing_to_non_admins(self):
+        missing = self.client.get("/api/no-such-route").json()
+        for headers in ({}, {"X-Guest-Id": GUEST}, token(MEMBER)):
+            granted = self.client.post("/api/admin/masters", json={"who": MEMBER}, headers=headers)
+            self.assertEqual((granted.status_code, granted.json()), (404, missing))
+            revoked = self.client.delete(f"/api/admin/masters/{MEMBER}", headers=headers)
+            self.assertEqual((revoked.status_code, revoked.json()), (404, missing))
+        self.assertFalse(db.is_master_user(MEMBER))
 
     def test_a_guest_id_naming_the_admin_is_not_the_admin(self):
         self.assertEqual(self.client.get("/api/admin/me", headers={"X-Guest-Id": ADMIN}).status_code, 404)
@@ -230,6 +239,14 @@ class DashboardDataTests(AdminTestCase):
         days = self.get("/api/admin/users/signups?days=30")
         self.assertEqual(days[-1], {"date": days[-1]["date"], "count": 2, "web": 1, "ios": 1, "unknown": 0})
         self.assertEqual(sum(d["unknown"] for d in days), 1)  # MEMBER, 3 days ago
+
+    def test_users_show_and_filter_by_where_they_signed_up(self):
+        db._users[MEMBER]["signup_platform"] = "ios"
+        db._users[SUBSCRIBER]["signup_platform"] = "web"
+        platforms = {u["user_id"]: u["signup_platform"] for u in self.get("/api/admin/users")["items"]}
+        self.assertEqual(platforms, {MEMBER: "ios", SUBSCRIBER: "web", ADMIN: None})
+        for platform, wanted in (("ios", [MEMBER]), ("web", [SUBSCRIBER]), ("unknown", [ADMIN])):
+            self.assertEqual([u["user_id"] for u in self.get(f"/api/admin/users?platform={platform}")["items"]], wanted)
 
     def test_sign_in_records_the_platform_only_for_a_new_account(self):
         with patch.object(server, "verify_cognito_id_token", return_value=("signed-up", None, None)):
@@ -456,3 +473,43 @@ class PaymentTests(AdminTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MasterUserTests(AdminTestCase):
+    def grant(self, who):
+        return self.client.post("/api/admin/masters", json={"who": who}, headers=token(ADMIN))
+
+    def test_grant_by_user_id(self):
+        response = self.grant(f" {MEMBER} ")
+        self.assertEqual((response.status_code, response.json()), (200, {"granted": [MEMBER], "already": []}))
+        self.assertTrue(db.is_master_user(MEMBER))
+        self.assertTrue(auth.get_entitlement(MEMBER)["master"])
+        self.assertEqual(self.grant(MEMBER).json(), {"granted": [], "already": [MEMBER]})
+        listed = self.client.get("/api/admin/masters", headers=token(ADMIN)).json()
+        self.assertEqual([(m["user_id"], m["granted_by"], m["account"]) for m in listed], [(MEMBER, ADMIN, True)])
+        self.assertTrue(listed[0]["granted_at"])
+
+    def test_grant_by_email_any_case_without_returning_it(self):
+        db._users["second"] = {"user_id": "second", "email": "Member@Example.com", "created_at": 1}
+        response = self.grant("MEMBER@example.COM")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(sorted(response.json()["granted"]), sorted([MEMBER, "second"]))
+        self.assertNotIn("example", response.text.lower())
+        self.assertNotIn("example", self.client.get("/api/admin/masters", headers=token(ADMIN)).text.lower())
+
+    def test_nothing_is_granted_to_an_unknown_id_or_email(self):
+        for who in (GUEST, "nobody@example.com", "  "):
+            self.assertEqual((who, self.grant(who).status_code), (who, 404))
+        self.assertEqual(db.all_master_users(), set())
+
+    def test_revoke(self):
+        self.grant(MEMBER)
+        self.assertEqual(self.client.delete(f"/api/admin/masters/{MEMBER}", headers=token(ADMIN)).status_code, 204)
+        self.assertFalse(db.is_master_user(MEMBER))
+        self.assertEqual(self.client.delete(f"/api/admin/masters/{MEMBER}", headers=token(ADMIN)).status_code, 404)
+
+    def test_a_grant_made_by_hand_is_listed_too(self):
+        db._master_users["by-hand"] = {"user_id": "by-hand"}
+        self.assertEqual(self.client.get("/api/admin/masters", headers=token(ADMIN)).json(),
+                         [{"user_id": "by-hand", "granted_at": None, "granted_by": None, "account": False,
+                           "created_at": None, "signup_platform": None}])

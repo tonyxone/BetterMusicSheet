@@ -16,7 +16,9 @@ blocks).
 The all_* functions read a whole table, for the admin dashboard only (see
 admin.py). Fine at this project's size; nothing a visitor calls uses them.
 all_accounts reads only ACCOUNT_FIELDS: the dashboard identifies people by id
-alone, so their names and emails are never even fetched for it.
+alone, so their names and emails are never fetched to be shown. The one read
+of emails, account_ids_with_email, only turns an email the admin typed into
+user ids.
 
 Wherever DynamoDB is used, its Decimal numbers are converted to int/float so
 callers (server.py) never touch boto3 types directly.
@@ -278,6 +280,13 @@ if IS_PRODUCTION:
     def all_accounts():
         return _scan(_users_table, ACCOUNT_FIELDS)
 
+    def account_ids_with_email(email):
+        """The accounts signed in with this email, any case - for granting by
+        email in the admin dashboard. The emails themselves go no further."""
+        wanted = email.strip().lower()
+        return [row["user_id"] for row in _scan(_users_table, ("user_id", "email"))
+                if (row.get("email") or "").lower() == wanted]
+
     def all_music_sheets():
         return _scan(_music_sheet_table)
 
@@ -492,6 +501,13 @@ else:
         with _lock:
             return [{k: u[k] for k in ACCOUNT_FIELDS if k in u} for u in _users.values()]
 
+    def account_ids_with_email(email):
+        """The accounts signed in with this email, any case - for granting by
+        email in the admin dashboard. The emails themselves go no further."""
+        wanted = email.strip().lower()
+        with _lock:
+            return [u["user_id"] for u in _users.values() if (u.get("email") or "").lower() == wanted]
+
     def all_music_sheets():
         with _lock:
             return [dict(s) for s in _music_sheets.values()]
@@ -598,10 +614,11 @@ if SUBSCRIPTIONS_TABLE:
 
 # ---- master users: accounts that bypass every subscription check ----
 #
-# The table holds nothing but user_id: a row's presence is the whole grant
-# (see auth.get_entitlement). Rows are added and removed by hand, in the AWS
-# console or CLI - no endpoint writes them. Without a table (local dev and
-# tests by default) the set starts empty; add_master_user exists for tests.
+# A row's presence is the whole grant (see auth.get_entitlement); besides
+# user_id it only records when and by which admin it was granted, for the
+# dashboard. Rows are added and removed from the admin dashboard's Master
+# users tab (admin.py) or by hand in the AWS console or CLI. Without a table
+# (local dev and tests by default) the set starts empty.
 if MASTER_USERS_TABLE:
     import os
 
@@ -614,30 +631,41 @@ if MASTER_USERS_TABLE:
     def is_master_user(user_id):
         return "Item" in _master_users_table.get_item(Key={"user_id": user_id})
 
-    def add_master_user(user_id):
-        _master_users_table.put_item(Item={"user_id": user_id})
+    def add_master_user(user_id, granted_by=None):
+        item = {"user_id": user_id, "granted_at": int(time.time())}
+        if granted_by:
+            item["granted_by"] = granted_by
+        _master_users_table.put_item(Item=item)
 
     def remove_master_user(user_id):
         _master_users_table.delete_item(Key={"user_id": user_id})
 
+    def master_user_rows():
+        return _scan(_master_users_table)
+
     def all_master_users():
-        return {row["user_id"] for row in _scan(_master_users_table)}
+        return {row["user_id"] for row in master_user_rows()}
 
 else:
-    _master_users = set()
+    _master_users = {}
     _master_users_lock = threading.Lock()
 
     def is_master_user(user_id):
         with _master_users_lock:
             return user_id in _master_users
 
-    def add_master_user(user_id):
+    def add_master_user(user_id, granted_by=None):
         with _master_users_lock:
-            _master_users.add(user_id)
+            _master_users[user_id] = {"user_id": user_id, "granted_at": int(time.time()),
+                                      **({"granted_by": granted_by} if granted_by else {})}
 
     def remove_master_user(user_id):
         with _master_users_lock:
-            _master_users.discard(user_id)
+            _master_users.pop(user_id, None)
+
+    def master_user_rows():
+        with _master_users_lock:
+            return [dict(row) for row in _master_users.values()]
 
     def all_master_users():
         with _master_users_lock:

@@ -13,15 +13,15 @@ locals {
     Effect   = "Allow", Action = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:TransactWriteItems", "dynamodb:ConditionCheckItem"],
     Resource = concat(local.table_arns, [for arn in local.table_arns : "${arn}/index/*"])
   }
-  # Read-only on purpose: being listed here grants premium everywhere (see
-  # ../../../auth.py get_entitlement), so rows are added by hand with an
-  # operator's own credentials and no code path in the app may write one.
+  # Being listed here grants premium everywhere (see ../../../auth.py
+  # get_entitlement). The only code that writes a row is the admin dashboard's
+  # Master users tab (../../../admin.py /masters), behind the admin check.
   master_users_statement = {
-    Effect   = "Allow", Action = ["dynamodb:GetItem"],
+    Effect   = "Allow", Action = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"],
     Resource = "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.master_users_table}"
   }
-  # The admin dashboard (../../../admin.py): who may open it (read-only for
-  # the same reason as master_users_statement), whole-table reads for its
+  # The admin dashboard (../../../admin.py): who may open it (read-only: no
+  # code path in the app may make an admin), whole-table reads for its
   # lists, and a look at this region's queue and worker service.
   admin_statements = [
     { Effect = "Allow", Action = ["dynamodb:GetItem"], Resource = "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.admin_table}" },

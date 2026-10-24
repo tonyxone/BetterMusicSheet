@@ -4,7 +4,8 @@ import { clientApiFetch } from "./client-api";
 
 // Shapes of the admin dashboard's API (see ../../admin.py). Times are Unix
 // seconds throughout, and null wherever something hasn't happened. People are
-// identified by user id alone - no name or email ever reaches the dashboard.
+// identified by user id alone - no name or email ever reaches the dashboard
+// (granting master access by email sends one, but only ids come back).
 
 export type AdminSubscription = {
   status: "trialing" | "active" | "canceled" | "expired" | "past_due";
@@ -20,9 +21,13 @@ export type AdminSubscription = {
   premium: boolean;
 };
 
+/** Where an account was made; null for accounts made before that was recorded. */
+export type AdminSignupPlatform = "web" | "ios" | null;
+
 export type AdminUser = {
   user_id: string;
   created_at: number | null;
+  signup_platform: AdminSignupPlatform;
   master: boolean;
   subscription: AdminSubscription | null;
   uploads: number;
@@ -184,6 +189,18 @@ export type AdminSession = {
   events: Partial<Record<AdminUsageEvent, number>>;
 };
 
+/** An account with master (free Premium) access. */
+export type AdminMaster = {
+  user_id: string;
+  /** Null for grants made by hand, before the dashboard could make them. */
+  granted_at: number | null;
+  granted_by: string | null;
+  /** False for an id with no signed-in account behind it. */
+  account: boolean;
+  created_at: number | null;
+  signup_platform: AdminSignupPlatform;
+};
+
 /** One page of a list, and where it sits in the whole. */
 export type AdminPage<T> = { items: T[]; total: number; page: number; pages: number; page_size: number };
 
@@ -218,11 +235,28 @@ export async function reprocessUpload(jobId: string, reason: string): Promise<Ad
   const response = await clientApiFetch(`/api/admin/uploads/${encodeURIComponent(jobId)}/reprocess`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason }),
   });
-  if (!response.ok) {
-    const detail = await response.json().then((body: { detail?: unknown }) => body.detail, () => null);
-    throw new Error(typeof detail === "string" ? detail : `The server answered ${response.status}.`);
-  }
+  if (!response.ok) throw await failure(response);
   return (await response.json()) as AdminUpload;
+}
+
+async function failure(response: Response) {
+  const detail = await response.json().then((body: { detail?: unknown }) => body.detail, () => null);
+  return new Error(typeof detail === "string" ? detail : `The server answered ${response.status}.`);
+}
+
+/** Give master access to the account(s) with this user id or sign-in email.
+ * Resolves with the user ids granted now and those that already had it. */
+export async function grantMaster(who: string): Promise<{ granted: string[]; already: string[] }> {
+  const response = await clientApiFetch("/api/admin/masters", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ who }),
+  });
+  if (!response.ok) throw await failure(response);
+  return (await response.json()) as { granted: string[]; already: string[] };
+}
+
+export async function revokeMaster(userId: string): Promise<void> {
+  const response = await clientApiFetch(`/api/admin/masters/${encodeURIComponent(userId)}`, { method: "DELETE" });
+  if (!response.ok) throw await failure(response);
 }
 
 /** Open an upload's original file or annotated result in a new tab. */
