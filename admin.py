@@ -6,13 +6,15 @@ listed in the admin table (see db.is_admin). A visitor, a guest, an expired
 or forged token and an ordinary account all get the same answer, so nothing
 here even confirms the dashboard exists.
 
-Read-only on purpose, with one exception: an admin may have a sheet read
+Read-only on purpose, with two exceptions: an admin may have a sheet read
 again (reprocess.py), which passes the new reading on to every sheet made
-from the same file. Nothing here changes a user or a subscription, and no
+from the same file; and an admin may grant or take back master (free
+Premium) access - see /masters. Nothing here changes a subscription, and no
 reader's own edits are ever touched.
 
-People appear by user id only (owner decision): no name or email is shown,
-returned or even read for it - see db.all_accounts.
+People appear by user id only (owner decision): no name or email is shown or
+returned - see db.all_accounts. The one place an email goes in is granting
+master access by email, which only turns it into user ids.
 And isolated: an error in any route here is that one request's 500, and
 server.py still serves everything else if this module can't even be loaded.
 """
@@ -234,12 +236,13 @@ def _within(when, days, now):
 
 @router.get("/users")
 def users(q: str = "", joined: int = 0, plan: str = "", subscribed: int = 0, canceled: int = 0,
-          uploads: str = "", page: int = 1, page_size: int = PAGE_SIZE):
+          uploads: str = "", platform: str = "", page: int = 1, page_size: int = PAGE_SIZE):
     """Accounts, newest first, one page at a time. Each filter narrows one
     column: `q` user ids containing it; `joined`, `subscribed` and `canceled`
     to the last that many days; `plan` to "free", "master" or a subscription
     state (see _subscription_state); `uploads` to "none", "some" or
-    "failed" (at least one failed)."""
+    "failed" (at least one failed); `platform` to where the account was made,
+    "web", "ios" or "unknown" (before that was recorded)."""
     now = int(time.time())
     subscriptions = {s["user_id"]: s for s in db.all_subscriptions()}
     masters = db.all_master_users()
@@ -257,12 +260,16 @@ def users(q: str = "", joined: int = 0, plan: str = "", subscribed: int = 0, can
     for user in db.all_accounts():
         if not _matching(user["user_id"], q) or not _within(user.get("created_at"), joined, now):
             continue
+        signup_platform = user.get("signup_platform") if user.get("signup_platform") in db.SIGNUP_PLATFORMS else None
+        if platform and (signup_platform or "unknown") != platform:
+            continue
         mine = jobs_by_user.get(user["user_id"], [])
         subscription = _subscription_view(subscriptions.get(user["user_id"]), now)
         master = user["user_id"] in masters
         row = {
             "user_id": user["user_id"],
             "created_at": user.get("created_at"),
+            "signup_platform": signup_platform,
             "master": master,
             "subscription": subscription,
             "uploads": len(mine),
@@ -403,6 +410,60 @@ def engagement(days: int = 30, offset: int = 0):
         "controls": controls,
         "sheets": top,
     }
+
+
+@router.get("/masters")
+def masters():
+    """Every account with master access, most recently granted first: who
+    granted it and when (unknown for grants made by hand before the
+    dashboard could), and the account as the Users tab shows it. `account`
+    is false for an id with no signed-in account - granted by hand."""
+    accounts = {user["user_id"]: user for user in db.all_accounts()}
+    rows = []
+    for grant in db.master_user_rows():
+        account = accounts.get(grant["user_id"])
+        rows.append({
+            "user_id": grant["user_id"],
+            "granted_at": grant.get("granted_at"),
+            "granted_by": grant.get("granted_by"),
+            "account": account is not None,
+            "created_at": account and account.get("created_at"),
+            "signup_platform": account and account.get("signup_platform"),
+        })
+    rows.sort(key=lambda row: row["granted_at"] or 0, reverse=True)
+    return rows
+
+
+@router.post("/masters")
+def grant_master(who: str = Body(..., embed=True, max_length=320), admin_id: str = Depends(require_admin)):
+    """Give master access to an account, named by its user id or by the email
+    it signs in with. An email can belong to more than one account (say, one
+    made with Google and one with a password), and every one of them is
+    granted. 404 when no account matches: an id must be a signed-in account's,
+    so a typo or a guest id never becomes a grant. The answer has user ids
+    only - never the email."""
+    who = who.strip()
+    if "@" in who:
+        user_ids = db.account_ids_with_email(who)
+        if not user_ids:
+            raise HTTPException(404, "No account signs in with that email.")
+    else:
+        if not who or db.get_user(who) is None:
+            raise HTTPException(404, "No account has that user ID.")
+        user_ids = [who]
+    already = db.all_master_users()
+    for user_id in user_ids:
+        if user_id not in already:
+            db.add_master_user(user_id, granted_by=admin_id)
+    return {"granted": [u for u in user_ids if u not in already], "already": [u for u in user_ids if u in already]}
+
+
+@router.delete("/masters/{user_id}", status_code=204)
+def revoke_master(user_id: str):
+    """Take master access back. The account keeps any subscription it has."""
+    if not db.is_master_user(user_id):
+        raise HTTPException(404, "That account doesn't have master access.")
+    db.remove_master_user(user_id)
 
 
 @router.get("/subscriptions")
