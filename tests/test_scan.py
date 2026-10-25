@@ -429,6 +429,15 @@ class ColourTests(unittest.TestCase):
         source = app_screenshot(self.path / "photo.pdf", background=(205, 200, 190))
         self.assertEqual(scan.whiten_colour(source, self.path / "out"), source)
 
+    def test_a_photo_of_cream_paper_is_left_alone(self):
+        # Upload b7c3a3a4: a phone photo whose warm paper had a chroma over
+        # COLOUR_CHROMA. Whitening took the paper, and most of the warm ink
+        # with it, and the photo then passed for a clean picture.
+        source = app_screenshot(self.path / "photo.pdf", background=(232, 214, 186))
+        self.assertEqual(scan.whiten_colour(source, self.path / "out"), source)
+        with pymupdf.open(source) as doc:
+            self.assertIsNone(scan._clean_binary(doc[0], 300))
+
     def test_a_binarized_copy_drops_the_colour_too(self):
         source = app_screenshot(self.path / "input.pdf")
         copy = scan.prepare_for_recognition(source, self.path / "out")
