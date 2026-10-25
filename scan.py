@@ -96,21 +96,29 @@ COLOUR_MARGIN = 2
 
 
 def _grey(page, dpi):
-    """The page as a grey pixmap at ``dpi``, and whether it had coloured
-    pixels to whiten (see COLOUR_CHROMA)."""
+    """The page as a grey pixmap at ``dpi``, whether it had coloured pixels
+    to whiten (see COLOUR_CHROMA), and whether it is a digitally clean
+    picture.
+
+    Clean is judged on the page as it came, before any whitening: on a phone
+    photo of cream paper the paper itself has a chroma over COLOUR_CHROMA, so
+    whitening turned the paper white - and with it most of the warm-toned
+    ink - and the photo then passed for a clean picture (0.2% white before,
+    76% after). Only a clean picture is whitened."""
     from PIL import Image, ImageChops, ImageFilter
 
     pix = page.get_pixmap(dpi=dpi, colorspace=pymupdf.csRGB, alpha=False)
     rgb = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+    grey = rgb.convert("L")
+    clean = _is_clean(grey.tobytes())
     red, green, blue = rgb.split()
     chroma = ImageChops.subtract(ImageChops.lighter(ImageChops.lighter(red, green), blue),
                                  ImageChops.darker(ImageChops.darker(red, green), blue))
     colour = chroma.point(lambda v: 255 if v >= COLOUR_CHROMA else 0)
-    if not colour.getbbox():
-        return page.get_pixmap(dpi=dpi, colorspace=pymupdf.csGRAY, alpha=False), False
-    grey = rgb.convert("L")
-    grey.paste(255, mask=colour.filter(ImageFilter.MaxFilter(2 * COLOUR_MARGIN + 1)))
-    return pymupdf.Pixmap(pymupdf.csGRAY, pix.width, pix.height, grey.tobytes(), False), True
+    coloured = clean and bool(colour.getbbox())
+    if coloured:
+        grey.paste(255, mask=colour.filter(ImageFilter.MaxFilter(2 * COLOUR_MARGIN + 1)))
+    return pymupdf.Pixmap(pymupdf.csGRAY, pix.width, pix.height, grey.tobytes(), False), coloured, clean
 
 
 def _is_clean(samples):
@@ -122,10 +130,10 @@ def _clean_binary(page, dpi):
     """The page as a black-and-white pixmap at ``dpi``, with any coloured app
     controls whitened, or None when it is not a digitally clean picture
     (see MIN_WHITE_FRACTION)."""
-    pix, _ = _grey(page, dpi)
-    samples = pix.samples
-    if not _is_clean(samples):
+    pix, _, clean = _grey(page, dpi)
+    if not clean:
         return None
+    samples = pix.samples
     return pymupdf.Pixmap(pymupdf.csGRAY, pix.width, pix.height,
                           samples.translate(_BINARY), False)
 
@@ -142,9 +150,9 @@ def whiten_colour(pdf_path, out_dir, pages=None):
     with pymupdf.open(pdf_path) as src, pymupdf.open() as out:
         for index, page in enumerate(src):
             native = picture_dpi(page) if is_scanned(page) else None
-            pix, coloured = (_grey(page, max(1, round(native)))
-                             if native and (pages is None or index + 1 in pages) else (None, False))
-            if not coloured or not _is_clean(pix.samples):
+            pix, coloured, _ = (_grey(page, max(1, round(native)))
+                                if native and (pages is None or index + 1 in pages) else (None, False, False))
+            if not coloured:
                 out.insert_pdf(src, from_page=index, to_page=index)
                 continue
             copy = out.new_page(width=page.rect.width, height=page.rect.height)
