@@ -704,6 +704,24 @@ class AccuracyTests(unittest.TestCase):
         ms = [{'repeat_forward': True}, {'repeat_forward': True}, {'repeat_backward': 2}, {'repeat_backward': 2}]
         self.assertEqual(musicxml.performance_order(ms)[0], [0, 1, 2, 1, 2, 3, 0, 1, 2, 1, 2, 3])
 
+    def test_repeat_without_start_goes_back_to_its_section(self):
+        # After an earlier repeat and its endings, or after a double barline
+        ms = [{'repeat_forward': True}, {'repeat_backward': 2, 'endings': [1]}, {'endings': [2]}, {}, {'repeat_backward': 2}]
+        self.assertEqual(musicxml.performance_order(ms)[0], [0, 1, 0, 2, 3, 4, 3, 4])
+        ms = [{}, {'section_end': True}, {}, {'repeat_backward': 2}]
+        self.assertEqual(musicxml.performance_order(ms)[0], [0, 1, 2, 3, 2, 3])
+
+    def test_repeat_without_start_ignores_double_bar_at_key_change(self):
+        ms = [{}, {'section_end': True}, {'signature': True}, {'repeat_backward': 2}]
+        self.assertEqual(musicxml.performance_order(ms)[0], [0, 1, 2, 3, 0, 1, 2, 3])
+
+    def test_double_barline_parsed(self):
+        body = measure(ATTR + note(duration=4) + '<barline location="right"><bar-style>light-light</bar-style></barline>')
+        body += measure(note('D', duration=4) + '<barline><repeat direction="backward"/></barline>', 2)
+        _, ms = self.parse(body)
+        self.assertTrue(ms[0]['section_end'])
+        self.assertEqual(musicxml.performance_order(ms)[0], [0, 1, 1])
+
     def test_da_capo_al_fine(self):
         ms = [{}, {'navigation': {'fine': 'yes'}}, {'navigation': {'dacapo': 'yes'}}]
         self.assertEqual(musicxml.performance_order(ms)[0], [0, 1, 2, 0, 1])
