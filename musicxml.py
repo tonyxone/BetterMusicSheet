@@ -113,6 +113,9 @@ def _direction(el, cursor, divisions, staff, part, shifts, meta, stops):
                                            beat_unit_quarters=quarters))
             elif kind == 'wedge':
                 events.append(dict(base, kind='wedge', value=mark.get('type'), number=mark.get('number', '1')))
+            elif kind == 'words' and re.match(r'\s*trio\b', mark.text or '', re.I):
+                # The trio of a minuet or scherzo, which a da capo with no fine stops before
+                meta['navigation']['trio'] = 'yes'
             elif kind in ('segno', 'coda'):
                 meta['navigation'].setdefault(kind, '1')
             elif kind == 'words':
@@ -378,12 +381,17 @@ def performance_order(measures):
             section = i + 1
     counts, result, warnings = {}, [], []
     i, last_pass, jumped = 0, 1, False
+    # "Menuetto D.C." with no fine: the da capo ends where the trio starts
+    trio_ends_da_capo = not any(m.get('navigation', {}).get('fine') for m in measures)
+    da_capo = False
     used_jumps = set()
     limit = max(1024, len(measures) * 64)
     steps = 0
     while 0 <= i < len(measures) and steps < limit:
         steps += 1
         m = measures[i]
+        if da_capo and trio_ends_da_capo and m.get('navigation', {}).get('trio'):
+            break
         enclosing = [(end, start) for end, start in pairs.items() if start <= i <= end]
         pass_no = counts.get(min(enclosing)[0], 0) + 1 if enclosing else last_pass
         orphan_ending = bool(m.get('endings')) and not enclosing and last_pass == 1
@@ -408,6 +416,7 @@ def performance_order(measures):
                      if x.get('navigation', {}).get('segno') == nav.get('dalsegno')), None)
             if dest is not None:
                 jumped, i = True, dest
+                da_capo = nav.get('dacapo') == 'yes'
                 continue
             warnings.append('Segno destination was not found.')
         if i in pairs:
