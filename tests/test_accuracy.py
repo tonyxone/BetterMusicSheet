@@ -729,6 +729,14 @@ class AccuracyTests(unittest.TestCase):
         _, ms = self.parse(body)
         self.assertEqual(ms[0]['navigation'].get('trio'), 'yes')
 
+    def test_da_capo_goes_back_to_the_start_of_its_movement(self):
+        ms = [{}, {'final': True}, {}, {'navigation': {'dacapo': 'yes'}}, {}]
+        self.assertEqual(musicxml.performance_order(ms)[0], [0, 1, 2, 3, 2, 3, 4])
+
+    def test_after_a_da_capo_the_next_movement_plays(self):
+        ms = [{}, {'navigation': {'trio': 'yes'}}, {'navigation': {'dacapo': 'yes'}, 'final': True}, {}]
+        self.assertEqual(musicxml.performance_order(ms)[0], [0, 1, 2, 0, 3])
+
     def test_da_capo_al_fine(self):
         ms = [{}, {'navigation': {'fine': 'yes'}}, {'navigation': {'dacapo': 'yes'}}]
         self.assertEqual(musicxml.performance_order(ms)[0], [0, 1, 2, 0, 1])
