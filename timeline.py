@@ -915,7 +915,7 @@ def prepare_score(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=No
 
 
 def _audio_events(notes, events, total_beats, warnings):
-    audio, pending = [], {}
+    audio, pending, struck = [], {}, {}
     dynamic = defaultdict(lambda: 80.0)
     dynamics = sorted([e for e in events if e['kind'] == 'dynamic'], key=lambda e: e['start_beat'])
     d = 0
@@ -962,6 +962,15 @@ def _audio_events(notes, events, total_beats, warnings):
                               'velocity': n['velocity']})
             n['attack'] = True
             continue
+        plain = not n['tie_start'] and not n['tie_stop'] and not n['is_grace']
+        shared = struck.get((n['part'], n['midi'], round(n['start_beat'], 6))) if plain else None
+        if shared:
+            # A head two voices share is one key struck once: it sounds as long as the longer note.
+            shared['duration_beats'] = max(shared['duration_beats'], n['key_duration_beats'])
+            shared['velocity'] = max(shared['velocity'], n['velocity'])
+            shared['segment_ids'].append(n['source_id'])
+            n['attack'] = True
+            continue
         if n['tie_stop'] and previous and abs(previous['written_end'] - n['start_beat']) < 1e-6:
             event = previous
             event['duration_beats'] = n['start_beat'] + n['key_duration_beats'] - event['start_beat']
@@ -973,6 +982,8 @@ def _audio_events(notes, events, total_beats, warnings):
                      'segment_ids': [n['source_id']]}
             audio.append(event)
             n['attack'] = True
+            if plain:
+                struck[(n['part'], n['midi'], round(n['start_beat'], 6))] = event
             if n['tie_stop']:
                 warnings.append('A tie continuation has no adjacent start; check recognition or navigation.')
         event['written_end'] = n['start_beat'] + n['duration_beats']
