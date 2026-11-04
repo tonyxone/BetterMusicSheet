@@ -184,7 +184,11 @@ def _parse_part(part, part_ordinal, default_staff):
                         nominal = sum(sum(_number(b) for b in (a.text or '').split('+'))
                                       * 4 / max(1, _int_text(t, 4)) for a, t in pairs)
                 for key in el.findall('{*}key'):
-                    keys[int(key.get('number', '0'))] = _int_text(key.find('{*}fifths'))
+                    number = int(key.get('number', '0'))
+                    if number == 0:
+                        # A key for all staves replaces the keys set for one staff
+                        keys.clear()
+                    keys[number] = _int_text(key.find('{*}fifths'))
                 for clef in el.findall('{*}clef'):
                     clef_staff = default_staff if staffless else int(clef.get('number', '1'))
                     clefs[clef_staff] = {

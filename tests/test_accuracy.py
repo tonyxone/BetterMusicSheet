@@ -704,6 +704,14 @@ class AccuracyTests(unittest.TestCase):
         ms = [{'repeat_forward': True}, {'repeat_forward': True}, {'repeat_backward': 2}, {'repeat_backward': 2}]
         self.assertEqual(musicxml.performance_order(ms)[0], [0, 1, 2, 1, 2, 3, 0, 1, 2, 1, 2, 3])
 
+    def test_a_key_for_all_staves_replaces_the_keys_of_one_staff(self):
+        body = measure('<attributes><divisions>1</divisions><key number="1"><fifths>-1</fifths></key>'
+                       '<key number="2"><fifths>-3</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time>'
+                       '<clef><sign>G</sign><line>2</line></clef></attributes>' + note(duration=4))
+        body += measure('<attributes><key><fifths>2</fifths></key></attributes>' + note('D', duration=4), 2)
+        ns, _ = self.parse(body)
+        self.assertEqual([n['key_fifths'] for n in ns], [-1, 2])
+
     def test_da_capo_al_fine(self):
         ms = [{}, {'navigation': {'fine': 'yes'}}, {'navigation': {'dacapo': 'yes'}}]
         self.assertEqual(musicxml.performance_order(ms)[0], [0, 1, 2, 0, 1])
