@@ -278,9 +278,12 @@ def _realize_graces(notes, warnings):
                 start = previous[0]['start_beat_in_measure'] + previous[0]['duration_beats'] - amount
                 for p in previous:
                     p['duration_beats'] -= amount
-                for i, group in enumerate(pending):
-                    for g in group:
-                        g['start_beat_in_measure'], g['duration_beats'] = start + i * amount / len(pending), amount / len(pending)
+            else:
+                # Alone in its voice, with only rests around it, it still sounds where it stands.
+                amount, start = .25 * len(pending), pending[0][0]['start_beat_in_measure']
+            for i, group in enumerate(pending):
+                for g in group:
+                    g['start_beat_in_measure'], g['duration_beats'] = start + i * amount / len(pending), amount / len(pending)
     # Explicit make-time shifts all voices/rest boundaries together. Grace
     # notes themselves occupy the inserted interval rather than being shifted.
     for at, amount in sorted(set(inserts), reverse=True):
