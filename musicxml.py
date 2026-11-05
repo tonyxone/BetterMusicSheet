@@ -52,6 +52,7 @@ def _ending_numbers(value):
 
 _DYNAMICS = {'ppp': 28, 'pp': 40, 'p': 52, 'mp': 64, 'mf': 80,
              'f': 96, 'ff': 110, 'fff': 120, 'sfz': 112, 'fp': 96}
+_DOUBLE_BARS = ('light-light', 'light-heavy', 'heavy-light', 'heavy-heavy')
 _UNITS = {'whole': 4, 'half': 2, 'quarter': 1, 'eighth': .5, '16th': .25, '32nd': .125, '64th': .0625}
 
 
@@ -112,6 +113,9 @@ def _direction(el, cursor, divisions, staff, part, shifts, meta, stops):
                                            beat_unit_quarters=quarters))
             elif kind == 'wedge':
                 events.append(dict(base, kind='wedge', value=mark.get('type'), number=mark.get('number', '1')))
+            elif kind == 'words' and re.match(r'\s*trio\b', mark.text or '', re.I):
+                # The trio of a minuet or scherzo, which a da capo with no fine stops before
+                meta['navigation']['trio'] = 'yes'
             elif kind in ('segno', 'coda'):
                 meta['navigation'].setdefault(kind, '1')
             elif kind == 'words':
@@ -161,7 +165,9 @@ def _parse_part(part, part_ordinal, default_staff):
                 'implicit': measure.get('implicit') == 'yes',
                 'width': _number(measure.get('width')), 'events': [],
                 'warnings': [], 'rests': [], 'repeat_forward': False,
-                'repeat_backward': 0, 'endings': list(active_endings), 'navigation': {}}
+                'repeat_backward': 0, 'endings': list(active_endings), 'navigation': {},
+                'section_start': False, 'section_end': False, 'signature': False,
+                'final': False}
         if rest_bars_left and system_measure:
             rest_bars_left -= 1
             meta.update(system_measure=system_measure - 1, rest_continuation=True)
@@ -176,6 +182,8 @@ def _parse_part(part, part_ordinal, default_staff):
                 if div is not None and _number(div) > 0:
                     divisions = Fraction(div)
                 time = el.find('{*}time')
+                if time is not None or el.find('{*}key') is not None:
+                    meta['signature'] = True
                 if time is not None:
                     if time.find('{*}senza-misura') is not None:
                         nominal = 0.0
@@ -217,6 +225,12 @@ def _parse_part(part, part_ordinal, default_staff):
             elif tag in ('direction', 'sound'):
                 _direction(el, cursor, divisions, _int_text(el.find('{*}staff'), default_staff), part_ordinal, shifts, meta, stops)
             elif tag == 'barline':
+                if el.findtext('{*}bar-style') in _DOUBLE_BARS:
+                    meta['section_end' if el.get('location', 'right') == 'right' else 'section_start'] = True
+                if (el.findtext('{*}bar-style') == 'light-heavy' and el.get('location', 'right') == 'right'
+                        and el.find('{*}repeat') is None):
+                    # A final barline: the end of a piece, or of a movement in a book
+                    meta['final'] = True
                 repeat = el.find('{*}repeat')
                 if repeat is not None:
                     if repeat.get('direction') == 'forward':
@@ -331,6 +345,8 @@ def load_score_notes(mxl_path):
                 old['rests'].extend(m['rests'])
                 old['navigation'].update(m['navigation'])
                 old['repeat_forward'] |= m['repeat_forward']
+                for field in ('section_start', 'section_end', 'signature', 'final'):
+                    old[field] |= m[field]
                 old['repeat_backward'] = max(old['repeat_backward'], m['repeat_backward'])
                 old['endings'] = sorted(set(old['endings'] + m['endings']))
     measures = []
@@ -356,19 +372,40 @@ def load_score_notes(mxl_path):
 def performance_order(measures):
     """Bounded repeat/ending and D.C./D.S./coda traversal of printed measures."""
     pairs, stack = {}, []
+    # With no forward repeat, a repeat goes back to the start of its section:
+    # after the previous repeat (and the endings that close it), or after a
+    # double barline that changes no key or time, else to the beginning.
+    section = 0
     for i, m in enumerate(measures):
+        if m.get('section_start') and not m.get('signature'):
+            section = i
+        if i == section and m.get('endings'):
+            section = i + 1
         if m.get('repeat_forward'):
             stack.append(i)
         if m.get('repeat_backward'):
-            pairs[i] = stack.pop() if stack else 0
+            pairs[i] = stack.pop() if stack else section
+            section = i + 1
+        elif m.get('section_end') and not (i + 1 < len(measures) and measures[i + 1].get('signature')):
+            section = i + 1
     counts, result, warnings = {}, [], []
     i, last_pass, jumped = 0, 1, False
+    # "Menuetto D.C." with no fine: the da capo ends where the trio starts
+    trio_ends_da_capo = not any(m.get('navigation', {}).get('fine') for m in measures)
+    da_capo = False
+    jump_from = None  # where a da capo or dal segno was taken: playing resumes after it
     used_jumps = set()
     limit = max(1024, len(measures) * 64)
     steps = 0
     while 0 <= i < len(measures) and steps < limit:
         steps += 1
         m = measures[i]
+        if da_capo and trio_ends_da_capo and m.get('navigation', {}).get('trio'):
+            # The repeated section ends here: on to whatever follows the da capo, as the next
+            # movement of a book
+            jumped = da_capo = False
+            i = jump_from + 1
+            continue
         enclosing = [(end, start) for end, start in pairs.items() if start <= i <= end]
         pass_no = counts.get(min(enclosing)[0], 0) + 1 if enclosing else last_pass
         orphan_ending = bool(m.get('endings')) and not enclosing and last_pass == 1
@@ -379,7 +416,11 @@ def performance_order(measures):
             result.append(i)
         nav = m.get('navigation', {})
         if allowed and jumped and nav.get('fine'):
-            break
+            if jump_from is None:
+                break
+            jumped = da_capo = False
+            i = jump_from + 1
+            continue
         if allowed and jumped and nav.get('tocoda') and ('coda', i) not in used_jumps:
             dest = next((j for j, x in enumerate(measures) if x.get('navigation', {}).get('coda') == nav['tocoda']), None)
             used_jumps.add(('coda', i))
@@ -389,10 +430,13 @@ def performance_order(measures):
             warnings.append('Coda destination was not found.')
         if allowed and (nav.get('dacapo') == 'yes' or nav.get('dalsegno')) and ('jump', i) not in used_jumps:
             used_jumps.add(('jump', i))
-            dest = 0 if nav.get('dacapo') == 'yes' else next((j for j, x in enumerate(measures)
+            # Da capo: the start of the movement, after the last final barline before
+            dest = next((j + 1 for j in range(i - 1, -1, -1) if measures[j].get('final')), 0) \
+                if nav.get('dacapo') == 'yes' else next((j for j, x in enumerate(measures)
                      if x.get('navigation', {}).get('segno') == nav.get('dalsegno')), None)
             if dest is not None:
-                jumped, i = True, dest
+                jumped, jump_from, i = True, i, dest
+                da_capo = nav.get('dacapo') == 'yes'
                 continue
             warnings.append('Segno destination was not found.')
         if i in pairs:

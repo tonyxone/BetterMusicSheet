@@ -687,6 +687,31 @@ class AccuracyTests(unittest.TestCase):
         self.assertEqual(inserts, [(0, 1)])
         self.assertEqual(ns[1]['start_beat_in_measure'], 1)
 
+    def test_make_time_cadenza_ending_a_voice_takes_its_time(self):
+        ns, _ = self.parse(measure(ATTR + note(duration=1) + note('D', duration=0, extra='<grace make-time="1"/>')
+                                   + note('E', duration=0, extra='<grace/>')))
+        warnings = []
+        inserts = timeline._realize_graces(ns, warnings)
+        self.assertEqual(inserts, [(1, 1)])
+        self.assertEqual([n['start_beat_in_measure'] for n in ns], [0, 1, 1.5])
+        self.assertEqual([n['duration_beats'] for n in ns], [1, .5, .5])
+        self.assertEqual(warnings, [])
+
+    def test_make_time_cadenza_alone_in_a_voice_starts_the_bar(self):
+        ns, _ = self.parse(measure(ATTR + note('D', duration=0, extra='<grace make-time="1"/>')
+                                   + note('E', duration=0, extra='<grace/>')))
+        inserts = timeline._realize_graces(ns, [])
+        self.assertEqual(inserts, [(0, 1)])
+        self.assertEqual([n['start_beat_in_measure'] for n in ns], [0, .5])
+        self.assertTrue(all(n['duration_beats'] == .5 for n in ns))
+
+    def test_lone_grace_among_rests_still_sounds(self):
+        ns, _ = self.parse(measure(ATTR + note('G', duration=0, extra='<grace/>') + '<note><rest/><duration>4</duration></note>'))
+        warnings = []
+        timeline._realize_graces(ns, warnings)
+        self.assertEqual([(n['start_beat_in_measure'], n['duration_beats']) for n in ns], [(0, .25)])
+        self.assertEqual(warnings, ['Unattached grace notes need timing review.'])
+
     def test_repeat_and_first_second_endings(self):
         body = measure(ATTR + '<barline location="left"><repeat direction="forward"/></barline>' + note(duration=4))
         body += measure('<barline location="left"><ending number="1" type="start"/></barline>' + note('D', duration=4) + '<barline><ending number="1" type="stop"/><repeat direction="backward"/></barline>', 2)
@@ -703,6 +728,39 @@ class AccuracyTests(unittest.TestCase):
     def test_nested_repeats(self):
         ms = [{'repeat_forward': True}, {'repeat_forward': True}, {'repeat_backward': 2}, {'repeat_backward': 2}]
         self.assertEqual(musicxml.performance_order(ms)[0], [0, 1, 2, 1, 2, 3, 0, 1, 2, 1, 2, 3])
+
+    def test_repeat_without_start_goes_back_to_its_section(self):
+        # After an earlier repeat and its endings, or after a double barline
+        ms = [{'repeat_forward': True}, {'repeat_backward': 2, 'endings': [1]}, {'endings': [2]}, {}, {'repeat_backward': 2}]
+        self.assertEqual(musicxml.performance_order(ms)[0], [0, 1, 0, 2, 3, 4, 3, 4])
+        ms = [{}, {'section_end': True}, {}, {'repeat_backward': 2}]
+        self.assertEqual(musicxml.performance_order(ms)[0], [0, 1, 2, 3, 2, 3])
+
+    def test_repeat_without_start_ignores_double_bar_at_key_change(self):
+        ms = [{}, {'section_end': True}, {'signature': True}, {'repeat_backward': 2}]
+        self.assertEqual(musicxml.performance_order(ms)[0], [0, 1, 2, 3, 0, 1, 2, 3])
+
+    def test_double_barline_parsed(self):
+        body = measure(ATTR + note(duration=4) + '<barline location="right"><bar-style>light-light</bar-style></barline>')
+        body += measure(note('D', duration=4) + '<barline><repeat direction="backward"/></barline>', 2)
+        _, ms = self.parse(body)
+        self.assertTrue(ms[0]['section_end'])
+        self.assertEqual(musicxml.performance_order(ms)[0], [0, 1, 1])
+
+    def test_da_capo_with_no_fine_stops_before_the_trio(self):
+        ms = [{}, {'repeat_backward': 2}, {'navigation': {'trio': 'yes'}}, {'navigation': {'dacapo': 'yes'}}]
+        self.assertEqual(musicxml.performance_order(ms)[0], [0, 1, 0, 1, 2, 3, 0, 1])
+        body = measure(ATTR + '<direction><direction-type><words>Trio.</words></direction-type></direction>' + note(duration=4))
+        _, ms = self.parse(body)
+        self.assertEqual(ms[0]['navigation'].get('trio'), 'yes')
+
+    def test_da_capo_goes_back_to_the_start_of_its_movement(self):
+        ms = [{}, {'final': True}, {}, {'navigation': {'dacapo': 'yes'}}, {}]
+        self.assertEqual(musicxml.performance_order(ms)[0], [0, 1, 2, 3, 2, 3, 4])
+
+    def test_after_a_da_capo_the_next_movement_plays(self):
+        ms = [{}, {'navigation': {'trio': 'yes'}}, {'navigation': {'dacapo': 'yes'}, 'final': True}, {}]
+        self.assertEqual(musicxml.performance_order(ms)[0], [0, 1, 2, 0, 3])
 
     def test_a_key_for_all_staves_replaces_the_keys_of_one_staff(self):
         body = measure('<attributes><divisions>1</divisions><key number="1"><fifths>-1</fifths></key>'
