@@ -127,6 +127,9 @@ def _split_glued_rests(printed, start_numbers=None):
             rest = dict(m, identity=(*m['identity'], 'rest', k), implicit=False,
                         events=[], warnings=[], navigation={}, repeat_forward=False,
                         repeat_backward=repeat_backward if k == bars - 1 else 0,
+                        section_start=m.get('section_start', False) and k == 0,
+                        section_end=m.get('section_end', False) and k == bars - 1,
+                        signature=m.get('signature', False) and k == 0,
                         rests=[],
                         content_length_beats=0.0, length_beats=nominal, endings=list(m['endings']))
             rest.pop('multiple_rest', None)
