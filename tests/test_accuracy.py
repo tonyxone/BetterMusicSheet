@@ -705,6 +705,13 @@ class AccuracyTests(unittest.TestCase):
         self.assertEqual([n['start_beat_in_measure'] for n in ns], [0, .5])
         self.assertTrue(all(n['duration_beats'] == .5 for n in ns))
 
+    def test_lone_grace_among_rests_still_sounds(self):
+        ns, _ = self.parse(measure(ATTR + note('G', duration=0, extra='<grace/>') + '<note><rest/><duration>4</duration></note>'))
+        warnings = []
+        timeline._realize_graces(ns, warnings)
+        self.assertEqual([(n['start_beat_in_measure'], n['duration_beats']) for n in ns], [(0, .25)])
+        self.assertEqual(warnings, ['Unattached grace notes need timing review.'])
+
     def test_repeat_and_first_second_endings(self):
         body = measure(ATTR + '<barline location="left"><repeat direction="forward"/></barline>' + note(duration=4))
         body += measure('<barline location="left"><ending number="1" type="start"/></barline>' + note('D', duration=4) + '<barline><ending number="1" type="stop"/><repeat direction="backward"/></barline>', 2)
