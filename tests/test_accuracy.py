@@ -687,6 +687,24 @@ class AccuracyTests(unittest.TestCase):
         self.assertEqual(inserts, [(0, 1)])
         self.assertEqual(ns[1]['start_beat_in_measure'], 1)
 
+    def test_make_time_cadenza_ending_a_voice_takes_its_time(self):
+        ns, _ = self.parse(measure(ATTR + note(duration=1) + note('D', duration=0, extra='<grace make-time="1"/>')
+                                   + note('E', duration=0, extra='<grace/>')))
+        warnings = []
+        inserts = timeline._realize_graces(ns, warnings)
+        self.assertEqual(inserts, [(1, 1)])
+        self.assertEqual([n['start_beat_in_measure'] for n in ns], [0, 1, 1.5])
+        self.assertEqual([n['duration_beats'] for n in ns], [1, .5, .5])
+        self.assertEqual(warnings, [])
+
+    def test_make_time_cadenza_alone_in_a_voice_starts_the_bar(self):
+        ns, _ = self.parse(measure(ATTR + note('D', duration=0, extra='<grace make-time="1"/>')
+                                   + note('E', duration=0, extra='<grace/>')))
+        inserts = timeline._realize_graces(ns, [])
+        self.assertEqual(inserts, [(0, 1)])
+        self.assertEqual([n['start_beat_in_measure'] for n in ns], [0, .5])
+        self.assertTrue(all(n['duration_beats'] == .5 for n in ns))
+
     def test_repeat_and_first_second_endings(self):
         body = measure(ATTR + '<barline location="left"><repeat direction="forward"/></barline>' + note(duration=4))
         body += measure('<barline location="left"><ending number="1" type="start"/></barline>' + note('D', duration=4) + '<barline><ending number="1" type="stop"/><repeat direction="backward"/></barline>', 2)

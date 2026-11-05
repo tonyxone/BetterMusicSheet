@@ -262,6 +262,16 @@ def _realize_graces(notes, warnings):
             else:
                 previous = [n]
         if pending:
+            amount = musicxml._number(pending[0][0]['grace'].get('make-time-beats'))
+            if amount:
+                # A cadenza with nothing after it still takes the time it asks for.
+                start = previous[0]['start_beat_in_measure'] + previous[0]['duration_beats'] if previous else 0
+                inserts.append((start, amount))
+                for i, group in enumerate(pending):
+                    for g in group:
+                        g['_make_time_at'] = start
+                        g['start_beat_in_measure'], g['duration_beats'] = start + i * amount / len(pending), amount / len(pending)
+                continue
             warnings.append('Unattached grace notes need timing review.')
             if previous:
                 amount = min(.25, previous[0]['duration_beats'] * .25)
@@ -1057,6 +1067,9 @@ def build_timeline(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=N
             for e in m['events']:
                 if e['beat'] >= at:
                     e['beat'] += amount
+        if inserts and all(n['is_grace'] for n in ns):
+            # A bar of nothing but a cadenza lasts as long as the cadenza, with no silence after it.
+            m['length_beats'] = sum(amount for _, amount in inserts)
         _realize_fermatas(ns, m, m['warnings'])
     order, warnings = musicxml.performance_order([m for m, _ in printed])
     if fallback_warning:
