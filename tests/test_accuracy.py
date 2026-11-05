@@ -747,6 +747,21 @@ class AccuracyTests(unittest.TestCase):
         self.assertTrue(ms[0]['section_end'])
         self.assertEqual(musicxml.performance_order(ms)[0], [0, 1, 1])
 
+    def test_da_capo_with_no_fine_stops_before_the_trio(self):
+        ms = [{}, {'repeat_backward': 2}, {'navigation': {'trio': 'yes'}}, {'navigation': {'dacapo': 'yes'}}]
+        self.assertEqual(musicxml.performance_order(ms)[0], [0, 1, 0, 1, 2, 3, 0, 1])
+        body = measure(ATTR + '<direction><direction-type><words>Trio.</words></direction-type></direction>' + note(duration=4))
+        _, ms = self.parse(body)
+        self.assertEqual(ms[0]['navigation'].get('trio'), 'yes')
+
+    def test_da_capo_goes_back_to_the_start_of_its_movement(self):
+        ms = [{}, {'final': True}, {}, {'navigation': {'dacapo': 'yes'}}, {}]
+        self.assertEqual(musicxml.performance_order(ms)[0], [0, 1, 2, 3, 2, 3, 4])
+
+    def test_after_a_da_capo_the_next_movement_plays(self):
+        ms = [{}, {'navigation': {'trio': 'yes'}}, {'navigation': {'dacapo': 'yes'}, 'final': True}, {}]
+        self.assertEqual(musicxml.performance_order(ms)[0], [0, 1, 2, 0, 3])
+
     def test_da_capo_al_fine(self):
         ms = [{}, {'navigation': {'fine': 'yes'}}, {'navigation': {'dacapo': 'yes'}}]
         self.assertEqual(musicxml.performance_order(ms)[0], [0, 1, 2, 0, 1])
