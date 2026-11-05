@@ -984,6 +984,17 @@ class AccuracyTests(unittest.TestCase):
         t = self.system_missing_one_measure((1, 2))
         self.assertEqual([m['bbox_pt'] for m in t['measures']], [None, None])
 
+    def test_head_shared_by_two_voices_is_struck_once(self):
+        def written(source_id, voice, midi, duration):
+            return {'source_id': source_id, 'part': 1, 'voice': voice, 'staff': 1, 'role': 1, 'midi': midi,
+                    'start_beat': 0, 'duration_beats': duration, 'articulations': [], 'ornaments': [],
+                    'tie_start': False, 'tie_stop': False, 'is_grace': False}
+        notes = [written('a', 1, 57, .25), written('b', 2, 57, .5), written('c', 2, 59, .5)]
+        audio = timeline._audio_events(notes, [], 4, [])
+        self.assertEqual([(a['midi'], a['duration_beats'], a['segment_ids']) for a in audio],
+                         [(57, .5, ['a', 'b']), (59, .5, ['c'])])
+        self.assertTrue(all(n['attack'] for n in notes))
+
     def test_pedal_sustain_does_not_keep_key_held(self):
         start = '<direction><direction-type><pedal type="start"/><dynamics><p/></dynamics></direction-type></direction>'
         stop = '<forward><duration>3</duration></forward><direction><direction-type><pedal type="stop"/></direction-type></direction>'
