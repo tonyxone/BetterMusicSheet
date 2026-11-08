@@ -440,6 +440,17 @@ class AccuracyTests(unittest.TestCase):
         self.assertEqual(timeline._recover_measure_tail(m, ns, heads, used), 4)
         self.assertEqual(sorted(n['start_beat_in_measure'] for n in ns[-4:]), [4.5, 4.5, 5, 5.5])
 
+    def test_bar_numbers_skip_superscript_digits(self):
+        # Mozart's Fantasia K. 475 marks a footnote with a superscript "¹": it
+        # counts as a digit for isdigit() and broke the whole PDF matching.
+        spans = [{'text': '12', 'bbox': (0, 0, 8, 6), 'size': 9},
+                 {'text': '¹', 'bbox': (20, 0, 23, 4), 'size': 6},
+                 {'text': '٣', 'bbox': (30, 0, 33, 6), 'size': 9}]
+        class Page:
+            def get_text(self, kind):
+                return {'blocks': [{'lines': [{'spans': spans}]}]}
+        self.assertEqual(pdf_marks.number_texts(Page()), [(0, 0, 8, 6, 12)])
+
     def test_pdf_meter_reads_twelve_eight_and_common_time(self):
         chars = [{'c': chr(0xE081), 'origin': (10, 20)},
                  {'c': chr(0xE082), 'origin': (16, 20)},
