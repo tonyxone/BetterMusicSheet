@@ -921,6 +921,19 @@ class AccuracyTests(unittest.TestCase):
         regular = dict(grace, is_grace=False)
         self.assertEqual(timeline._match_head(regular, candidates, set())['source_id'], 'main')
 
+    def test_two_voices_share_the_one_head_recognition_keeps(self):
+        # A head two voices share is kept once: the second voice's note takes
+        # it too, at its time and staff slot, but never a free head elsewhere.
+        clef = {'sign': 'G', 'line': 2, 'octave': 0}
+        ref = timeline.clef_reference('G', 2)
+        note = {'clef': clef, 'step': 'E', 'octave': 4, 'staff': 1,
+                'start_beat_in_measure': 2.0, 'voice': '2', 'octave_shift': 0}
+        slot = 34 - (4 * 7 + 'CDEFGAB'.index('E')) - ref
+        candidates = [{'source_id': 'shared', 'role': 0, 'onset': 2.0, 'pitch': slot},
+                      {'source_id': 'later', 'role': 0, 'onset': 3.0, 'pitch': slot}]
+        self.assertEqual(timeline._match_head(note, candidates, {'shared'})['source_id'], 'shared')
+        self.assertIsNone(timeline._match_head(dict(note, start_beat_in_measure=1.0), candidates, {'shared'}))
+
     def test_missing_page_geometry_does_not_shift_music(self):
         pages = [[[(6, 0, 1, None)]], [[(5, 0, 1, None)]]]
         resolved = self.resolved(pages)

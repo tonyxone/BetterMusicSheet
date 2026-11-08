@@ -212,6 +212,15 @@ def _match_head(n, candidates, used):
         possible = voice_matches
     if n.get('is_grace') and possible:
         return min(possible, key=lambda h: h['bbox_pt'][0] if h.get('bbox_pt') else float('inf'))
+    if not possible and not n.get('is_grace'):
+        # A head two voices share is one head on the page, and recognition
+        # keeps it once: the second voice's note takes it too, if it is the
+        # only head already taken at its time and staff slot.
+        shared = [h for h in candidates if h['source_id'] in used and h['role'] == _role(n)
+                  and h.get('onset') is not None
+                  and abs(h['onset'] - n['start_beat_in_measure']) < 1e-6
+                  and h['pitch'] == written_slot]
+        return shared[0] if len(shared) == 1 else None
     # Refuse ambiguous unisons. Count equality alone is never a match.
     return possible[0] if len(possible) == 1 else None
 
