@@ -987,6 +987,18 @@ class AccuracyTests(unittest.TestCase):
             _, ms = self.parse(measure(ATTR + body, 1))
             self.assertNotIn('glued_rest', ms[0])
 
+    def test_a_clef_change_in_one_voice_takes_effect_at_its_time(self):
+        # Moonlight bar 64: a bass clef bar where a later voice of the same
+        # staff brings a treble clef after the first beat. The first voice's
+        # note before it stays in bass clef, whatever the order written.
+        bass = '<attributes><clef number="1"><sign>F</sign><line>4</line></clef></attributes>'
+        treble = '<attributes><clef number="1"><sign>G</sign><line>2</line></clef></attributes>'
+        body = (ATTR + bass + '<forward><duration>1</duration></forward>' + treble
+                + note('E', 4, duration=3, voice=2) + '<backup><duration>4</duration></backup>'
+                + note('E', 3, duration=4, voice=1))
+        notes, _ = self.parse(measure(body) + measure(note('G', 4, duration=4), 2))
+        self.assertEqual([(n['octave'], n['clef']['sign']) for n in notes], [(3, 'F'), (4, 'G'), (4, 'G')])
+
     def test_a_glued_rest_is_as_long_as_the_printed_bar_numbers_say(self):
         # Saints: system 5 starts at bar 32 and holds 32, 33, then 43 glued to
         # a rest read as 1 bar; the next system is printed as starting at 49.
