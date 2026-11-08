@@ -899,6 +899,28 @@ class AccuracyTests(unittest.TestCase):
         high_head = timeline._match_head(high, candidates, used)
         self.assertEqual((low_head['source_id'], high_head['source_id']), ('low', 'high'))
 
+    def test_grace_notes_take_the_timeless_heads_in_printed_order(self):
+        # Mozart's Rondo alla Turca: three small heads before the beat have no
+        # time slot of their own, so the grace notes were left without a place
+        # on the page. Two graces of one pitch take the heads left to right.
+        clef = {'sign': 'G', 'line': 2, 'octave': 0}
+        ref = timeline.clef_reference('G', 2)
+        grace = {'is_grace': True, 'clef': clef, 'step': 'C', 'octave': 5, 'staff': 1,
+                 'start_beat_in_measure': 1.0, 'voice': '1', 'octave_shift': 0}
+        written = 34 - (5 * 7 + 'CDEFGAB'.index('C'))
+        def head(sid, x, onset):
+            return {'source_id': sid, 'role': 0, 'onset': onset, 'pitch': written - ref,
+                    'bbox_pt': [x, 0, x + 5, 5]}
+        candidates = [head('main', 30, 1.0), head('right', 20, None), head('left', 10, None)]
+        used = set()
+        first = timeline._match_head(grace, candidates, used)
+        used.add(first['source_id'])
+        second = timeline._match_head(grace, candidates, used)
+        self.assertEqual((first['source_id'], second['source_id']), ('left', 'right'))
+        # A regular note still needs a head at its time.
+        regular = dict(grace, is_grace=False)
+        self.assertEqual(timeline._match_head(regular, candidates, set())['source_id'], 'main')
+
     def test_missing_page_geometry_does_not_shift_music(self):
         pages = [[[(6, 0, 1, None)]], [[(5, 0, 1, None)]]]
         resolved = self.resolved(pages)

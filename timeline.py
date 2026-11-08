@@ -183,10 +183,17 @@ def _match_head(n, candidates, used):
     # octave-spaced unison: shifting before matching turns both candidates
     # into the same pitch class and leaves one of them unmatched.
     written = 34 - (n['octave'] * 7 + 'CDEFGAB'.index(n['step']))
-    positioned = [h for h in candidates if h['source_id'] not in used
-                and h['role'] == _role(n)
-                and h.get('onset') is not None
-                and abs(h['onset'] - n['start_beat_in_measure']) < 1e-6]
+    if n.get('is_grace'):
+        # A grace head has no time slot of its own: it is one of the heads
+        # left without one. Graces come in printed order, so the leftmost
+        # free one of the right pitch is the next grace's.
+        positioned = [h for h in candidates if h['source_id'] not in used
+                      and h['role'] == _role(n) and h.get('onset') is None]
+    else:
+        positioned = [h for h in candidates if h['source_id'] not in used
+                      and h['role'] == _role(n)
+                      and h.get('onset') is not None
+                      and abs(h['onset'] - n['start_beat_in_measure']) < 1e-6]
     written_slot = written - ref
     possible = [h for h in positioned if h['pitch'] == written_slot]
     if not possible:
@@ -203,6 +210,8 @@ def _match_head(n, candidates, used):
     voice_matches = [h for h in possible if h.get('voice') == n['voice']]
     if voice_matches:
         possible = voice_matches
+    if n.get('is_grace') and possible:
+        return min(possible, key=lambda h: h['bbox_pt'][0] if h.get('bbox_pt') else float('inf'))
     # Refuse ambiguous unisons. Count equality alone is never a match.
     return possible[0] if len(possible) == 1 else None
 
@@ -860,7 +869,17 @@ def prepare_score(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=No
             n['xml_midi'] = step_octave_to_midi(n['step'], n['octave'], n['alter']) + n['transpose']
             n['midi'] = n['xml_midi']
             h = _match_head(n, candidates, used)
-            if h:
+            placed_grace = bool(h) and n.get('is_grace')
+            if placed_grace:
+                # A grace head is matched loosely, by staff slot among the heads
+                # with no time: it gives the note its place on the page, and
+                # the written pitch stands.
+                used.add(h['source_id'])
+                n.update(bbox_pt=h['bbox_pt'], pitch_source='grace-position',
+                         confidence=h['confidence'], head_id=h['source_id'])
+                stats['notes_matched'] += 1
+                h = None
+            elif h:
                 used.add(h['source_id'])
                 # Corrected PDF clef is authoritative. Otherwise prefer the XML
                 # accidental/key semantics on a positively identified head -
@@ -893,7 +912,7 @@ def prepare_score(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=No
                 n['head_id'] = h['source_id']
                 stats['notes_matched'] += 1
                 stats['pitch_corrections'] += n['midi'] != n['xml_midi']
-            else:
+            elif not placed_grace:
                 n.update(bbox_pt=None, pitch_source='musicxml-unmatched', confidence=None, head_id=None)
                 stats['notes_unmatched'] += 1
             tie_key = (n['part'], n['voice'], n['xml_midi'])
