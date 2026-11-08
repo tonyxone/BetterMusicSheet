@@ -31,6 +31,18 @@ def _number(value, default=0):
         return default
 
 
+def _clef_at(staff, start, start_clefs, clef_changes):
+    """The clef of a staff at a time of its bar: the last change set at or
+    before it, in time and then in the order written, else the clef the bar
+    started with."""
+    clef = start_clefs.get(staff, {'sign': 'G', 'line': 2, 'octave': 0})
+    at = None
+    for s, when, change in clef_changes:
+        if s == staff and when <= start and (at is None or when >= at):
+            clef, at = change, when
+    return clef
+
+
 def _int_text(el, default=0):
     return int(_number(el.text if el is not None else None, default))
 
@@ -175,6 +187,10 @@ def _parse_part(part, part_ordinal, default_staff):
             rest_bars_left = 0
             system_measure += 1
         stops = {}
+        # Clefs in force as the bar starts, and the changes within it with the
+        # time they take effect: a bar is written voice after voice, so a change
+        # set in one voice must not reach notes of another voice before it.
+        start_clefs, clef_changes = dict(clefs), []
         for el in measure:
             tag = _tag(el)
             if tag == 'attributes':
@@ -199,9 +215,9 @@ def _parse_part(part, part_ordinal, default_staff):
                     keys[number] = _int_text(key.find('{*}fifths'))
                 for clef in el.findall('{*}clef'):
                     clef_staff = default_staff if staffless else int(clef.get('number', '1'))
-                    clefs[clef_staff] = {
+                    clef_changes.append((clef_staff, cursor, {
                         'sign': clef.findtext('{*}sign', 'G'), 'line': _int_text(clef.find('{*}line'), 2),
-                        'octave': _int_text(clef.find('{*}clef-octave-change'))}
+                        'octave': _int_text(clef.find('{*}clef-octave-change'))}))
                 for tr in el.findall('{*}transpose'):
                     transposes[int(tr.get('number', '0'))] = _int_text(tr.find('{*}chromatic')) + 12 * _int_text(tr.find('{*}octave-change'))
                 bars = _int_text(el.find('{*}measure-style/{*}multiple-rest'))
@@ -261,7 +277,7 @@ def _parse_part(part, part_ordinal, default_staff):
                                           'start': float(start), 'duration': float(duration)})
                 if pitch is not None and el.find('{*}cue') is None:
                     staff = _int_text(el.find('{*}staff'), default_staff)
-                    clef = clefs.get(staff, {'sign': 'G', 'line': 2, 'octave': 0})
+                    clef = _clef_at(staff, start, start_clefs, clef_changes)
                     shift = sum(v for (s, _), v in shifts.items() if s == staff)
                     ties = [t.get('type') for t in el.findall('{*}tie')]
                     arts = [_tag(a) for a in el.findall('{*}notations/{*}articulations/*')]
@@ -299,6 +315,9 @@ def _parse_part(part, part_ordinal, default_staff):
                         cursor += duration
         meta.update(nominal_length_beats=nominal, content_length_beats=float(high))
         measures.append(meta)
+        # The next bar starts with each staff's last clef in time
+        for staff, _, clef in sorted(clef_changes, key=lambda c: c[1]):
+            clefs[staff] = clef
     return notes, measures
 
 
