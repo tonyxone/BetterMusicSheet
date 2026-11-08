@@ -88,7 +88,9 @@ def number_texts(page):
     found = []
     for span in text_spans(page):
         text = span['text'].strip()
-        if text.isdigit() and span.get('size', 0) <= 14:
+        # Only plain digits: a footnote's superscript "¹" counts as a digit for
+        # isdigit() but not for int()
+        if text.isdecimal() and text.isascii() and span.get('size', 0) <= 14:
             found.append((*span['bbox'], int(text)))
     return found
 
