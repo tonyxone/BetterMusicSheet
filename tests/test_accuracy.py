@@ -999,6 +999,18 @@ class AccuracyTests(unittest.TestCase):
         notes, _ = self.parse(measure(body) + measure(note('G', 4, duration=4), 2))
         self.assertEqual([(n['octave'], n['clef']['sign']) for n in notes], [(3, 'F'), (4, 'G'), (4, 'G')])
 
+    def test_the_next_bar_starts_with_the_last_clef_written(self):
+        # Liszt's second Ballade, bar 263: the bass clef that closes the bar is
+        # written last, in a voice whose misread rhythm puts it before the
+        # treble clef in time. The next bar starts in bass clef all the same.
+        treble = '<attributes><clef number="1"><sign>G</sign><line>2</line></clef></attributes>'
+        bass = '<attributes><clef number="1"><sign>F</sign><line>4</line></clef></attributes>'
+        body = (ATTR + '<forward><duration>2</duration></forward>' + treble + note('E', 4, duration=2, voice=1)
+                + '<backup><duration>4</duration></backup>' + note('G', 2, duration=1, voice=2)
+                + bass + note('B', 2, duration=3, voice=2))
+        notes, _ = self.parse(measure(body) + measure(note('C', 3, duration=4), 2))
+        self.assertEqual(notes[-1]['clef']['sign'], 'F')
+
     def test_a_glued_rest_is_as_long_as_the_printed_bar_numbers_say(self):
         # Saints: system 5 starts at bar 32 and holds 32, 33, then 43 glued to
         # a rest read as 1 bar; the next system is printed as starting at 49.

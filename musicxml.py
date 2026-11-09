@@ -315,8 +315,11 @@ def _parse_part(part, part_ordinal, default_staff):
                         cursor += duration
         meta.update(nominal_length_beats=nominal, content_length_beats=float(high))
         measures.append(meta)
-        # The next bar starts with each staff's last clef in time
-        for staff, _, clef in sorted(clef_changes, key=lambda c: c[1]):
+        # The next bar starts with each staff's last clef as written: the
+        # changes of a staff are written in their order on the page, while the
+        # time of one comes from its voice, which a misread rhythm can put
+        # before the page order (Liszt's second Ballade, bar 263)
+        for staff, _, clef in clef_changes:
             clefs[staff] = clef
     return notes, measures
 
