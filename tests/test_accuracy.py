@@ -1011,6 +1011,15 @@ class AccuracyTests(unittest.TestCase):
         notes, _ = self.parse(measure(body) + measure(note('C', 3, duration=4), 2))
         self.assertEqual(notes[-1]['clef']['sign'], 'F')
 
+    def test_recognized_clef_kinds_have_a_pitch_reference(self):
+        # A tenor or baritone clef the recognition reports by kind used to give
+        # no reference, and every head after it was left out of the page.
+        from score_notes import clef_reference
+        self.assertEqual(clef_reference('TENOR'), clef_reference('C', 4))
+        self.assertEqual(clef_reference('ALTO'), clef_reference('C', 3))
+        self.assertEqual(clef_reference('BARITONE'), clef_reference('F', 3))
+        self.assertIsNone(clef_reference('PERCUSSION'))
+
     def test_a_glued_rest_is_as_long_as_the_printed_bar_numbers_say(self):
         # Saints: system 5 starts at bar 32 and holds 32, 33, then 43 glued to
         # a rest read as 1 bar; the next system is printed as starting at 49.

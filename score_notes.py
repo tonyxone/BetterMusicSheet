@@ -103,8 +103,16 @@ def midi_of(diatonic, alter=0):
     return (octave_of(diatonic) + 1) * 12 + STEP[step_of(diatonic)] + alter
 
 
+# Clef kinds recognition reports besides treble and bass, as sign and line: a
+# head after one was left out of the page with no reference for its pitch.
+CLEF_KINDS = {'ALTO': ('C', 3), 'TENOR': ('C', 4), 'MEZZO_SOPRANO': ('C', 2),
+              'SOPRANO': ('C', 1), 'BARITONE': ('F', 3)}
+
+
 def clef_reference(sign, line=None):
     # Reference pitch at the middle staff line, 0 = B4.
+    if sign in CLEF_KINDS and line is None:
+        sign, line = CLEF_KINDS[sign]
     defaults = {'G': (2, 0), 'F': (4, 12), 'C': (3, 6)}
     if sign not in defaults:
         return None
