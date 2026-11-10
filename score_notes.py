@@ -339,22 +339,27 @@ def page_structure(root, staff_lines):
         # against the export and none of them gets its notes placed.
         stacks = [s for s in system.findall('stack') if s.get('special') != 'CAUTIONARY']
         for local, stack in enumerate(stacks):
+            # A repeat sign inside a bar splits its stack in two that share the
+            # bar's number; the second half's measures are named with an X,
+            # as in the export. Looked up by the bare number, both halves find
+            # the first half's measure and the second half's notes find none.
+            measure_id = ('X' if stack.get('special') == 'SECOND_HALF' else '') + stack.get('id')
             pad = max(8, (max(ys) - min(ys)) * .12) if ys else 0
             bbox = [float(stack.get('left')), min(ys) - pad,
                     float(stack.get('right')), max(ys) + pad] if ys else None
             region = {'system': system_index, 'system_measure': local,
-                      'label': stack.get('id'), 'bbox_px': bbox, 'staff_ids': ids,
+                      'label': measure_id, 'bbox_px': bbox, 'staff_ids': ids,
                       'part_roles': part_roles}
             regions.append(region)
             slots = {s.get('id'): float(Fraction(s.get('time-offset'))) * 4
                      for s in stack.findall('slot') if s.get('time-offset') is not None}
             for part_index, part in enumerate(system.findall('part')):
                 measures = part.findall('measure')
-                measure = next((m for m in measures if m.get('id') == stack.get('id')), None)
+                measure = next((m for m in measures if m.get('id') == measure_id), None)
                 if measure is None:
                     continue
                 defaults = {'system': system_index, 'system_measure': local,
-                            'measure_label': stack.get('id'), 'part': part_index,
+                            'measure_label': measure_id, 'part': part_index,
                             'onset': None, 'voice': None}
                 for cid in measure.findtext('head-chords', '').split():
                     chord_meta[cid] = dict(defaults)
