@@ -338,6 +338,11 @@ def page_structure(root, staff_lines):
         # out of the MusicXML. Counted, it shifts every bar of the system
         # against the export and none of them gets its notes placed.
         stacks = [s for s in system.findall('stack') if s.get('special') != 'CAUTIONARY']
+        # Stacks and their measures come in the same order. Two stacks can
+        # share a number - a bar read as a multimeasure rest takes the next
+        # bar's number too - so each finds the first of its measures not yet
+        # taken by an earlier stack.
+        taken = set()
         for local, stack in enumerate(stacks):
             # A repeat sign inside a bar splits its stack in two that share the
             # bar's number; the second half's measures are named with an X,
@@ -355,9 +360,10 @@ def page_structure(root, staff_lines):
                      for s in stack.findall('slot') if s.get('time-offset') is not None}
             for part_index, part in enumerate(system.findall('part')):
                 measures = part.findall('measure')
-                measure = next((m for m in measures if m.get('id') == measure_id), None)
+                measure = next((m for m in measures if m.get('id') == measure_id and id(m) not in taken), None)
                 if measure is None:
                     continue
+                taken.add(id(measure))
                 defaults = {'system': system_index, 'system_measure': local,
                             'measure_label': measure_id, 'part': part_index,
                             'onset': None, 'voice': None}

@@ -868,7 +868,9 @@ def prepare_score(pdf_path, mxl_path, omr_path, num_pages, page_omr_overrides=No
                 m['events'].append(event)
         # A rest's bars hold no notes, even where the printed slot they share
         # also holds the bar Audiveris glued them to - its heads are that bar's.
-        resting = m.get('multiple_rest') or m.get('rest_continuation')
+        # A bar with notes of its own is no rest, whatever a misread rest sign
+        # over its staff made of it.
+        resting = (m.get('multiple_rest') or m.get('rest_continuation')) and not notes
         candidates = [h for h in page['notes'] if region and not resting and h['system'] == region['system']
                       and h['system_measure'] == region['system_measure']]
         _place_on_system_staves(notes, m.get('rests', []), region)
