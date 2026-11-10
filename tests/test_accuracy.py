@@ -975,6 +975,15 @@ class AccuracyTests(unittest.TestCase):
         self.assertTrue(all(m['bbox_pt'] for m in t['measures']))
         self.assertFalse(any(w.startswith('Recognized duration') for m in t['measures'] for w in m['warnings']))
 
+    def test_a_bar_with_notes_is_no_rest_whatever_its_mark(self):
+        # Dumka bar 123: a rest sign misread over a bar of music marks the bar
+        # as a multimeasure rest; its notes are still placed on its heads.
+        resolved = self.resolved([[[(6, 0, 1, None)]]])
+        body = measure(ATTR + self.MULTI.format(1) + note(duration=4), 1)
+        p = timeline.prepare_score(None, mxl(self.path / 'score.mxl', body), None, 1, resolved_notes=resolved)
+        t = timeline.build_timeline(None, None, None, 1, prepared_score=p)
+        self.assertEqual(t['stats']['notes_unmatched'], 0)
+
     def test_a_one_bar_rest_inside_a_bar_is_not_split_off_unconfirmed(self):
         # A half rest's block read as a "1-bar multirest": nothing to split.
         _, ms = self.parse(measure(ATTR + note(duration=4) + self.MULTI.format(1) + self.REST, 1))

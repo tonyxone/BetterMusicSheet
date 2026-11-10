@@ -35,6 +35,19 @@ class CautionaryStackTests(unittest.TestCase):
         self.assertEqual({cid: meta['system_measure'] for cid, meta in chord_meta.items()},
                          {'11': 0, '12': 1, '13': 1})
 
+    def test_a_stack_sharing_its_number_finds_its_own_measure(self):
+        # Dumka: a bar read as a multimeasure rest numbers its neighbour too.
+        root = ET.fromstring(
+            '<sheet><system><part id="1"><staff id="1"/>'
+            '<measure id="15"><head-chords>21 22</head-chords></measure>'
+            '<measure id="15"><head-chords>23</head-chords></measure></part>'
+            '<stack id="15" left="1378" right="1999" special="MULTI_REST" duration="1"/>'
+            '<stack id="15" left="1999" right="2360" duration="1"/>'
+            '</system></sheet>')
+        chord_meta = page_structure(root, {})[1]
+        self.assertEqual({cid: meta['system_measure'] for cid, meta in chord_meta.items()},
+                         {'21': 0, '22': 0, '23': 1})
+
 
 if __name__ == '__main__':
     unittest.main()
