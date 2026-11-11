@@ -20,7 +20,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 import db
 import processed_sheets
@@ -484,8 +484,41 @@ def delete_account(user_id: str = Depends(get_signed_in_user_id)):
     return Response(status_code=204)
 
 
+# A sheet's title is what the reader calls it - chosen when uploading (the
+# apps ask for one when the pages are photos, which have no useful filename)
+# or changed later (rename_sheet). It is only ever shown: sheet_name stays the
+# uploaded filename, which is what the file's type and legacy storage keys
+# come from (storage.upload_media_type, storage._input_key), so a rename never
+# moves or retypes a file.
+TITLE_MAX_LENGTH = 255
+
+
+def clean_title(value):
+    """A title as stored: whitespace runs (newlines and tabs among them)
+    become one space, other control characters go - a title ends up in a
+    Content-Disposition header - and the ends are trimmed. None when nothing
+    is left."""
+    if value is None:
+        return None
+    text = "".join(ch for ch in str(value) if ch.isspace() or unicodedata.category(ch) != "Cc")
+    return " ".join(text.split()) or None
+
+
+def sheet_title(job, sheet_name=None):
+    """What to call a sheet: its own title, else the uploaded filename
+    without its extension (as uploads were always named before titles)."""
+    if job.get("title"):
+        return job["title"]
+    name = sheet_name or job.get("sheet_name")
+    if not name:
+        return None
+    return Path(name).stem or name
+
+
 class UploadRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=255)
+    # What to call the sheet, when not its filename (see TITLE_MAX_LENGTH).
+    title: Optional[str] = Field(default=None, max_length=TITLE_MAX_LENGTH)
     size: int = Field(gt=0, le=MAX_UPLOAD_BYTES)
     content_type: str = "application/octet-stream"
     style: str = "unicode"
@@ -503,6 +536,11 @@ class UploadRequest(BaseModel):
     # upload (owner decision): it lifts FREE_SHEET_LIMIT, never the daily limit.
     # Taken on trust - the web app has no ads and never sends it.
     ad_unlock: bool = False
+
+    @field_validator("title")
+    @classmethod
+    def _clean_title(cls, value):
+        return clean_title(value)
 
 
 def _check_free_sheet_limit(user_id, ad_unlock=False):
@@ -569,9 +607,11 @@ def reserve_upload(body, user_id):
     # two concurrent uploads can't both slip under the limit.
     _check_free_sheet_limit(user_id, body.ad_unlock)
     limit = _daily_sheet_limit(user_id, body.app)
+    options = body.model_dump(include={"style", "octave", "notation", "font_size", "dpi", "auto_retry", "color"})
+    if body.title:
+        options["title"] = body.title
     try:
-        return job_state.create(uuid.uuid4().hex, user_id, body.filename,
-                                body.model_dump(include={"style", "octave", "notation", "font_size", "dpi", "auto_retry", "color"}),
+        return job_state.create(uuid.uuid4().hex, user_id, body.filename, options,
                                 body.size, daily_limit=limit)
     except job_state.Busy as exc:
         raise HTTPException(409, str(exc)) from exc
@@ -622,7 +662,7 @@ async def submit_sheet(
     octave: bool = Form(False), notation: str = Form("letters"), font_size: float = Form(6.5),
     dpi: Optional[int] = Form(None), auto_retry: bool = Form(True),
     color: str = Form("#000000"), app: str = Form("web"), ad_unlock: bool = Form(False),
-    user_id: str = Depends(get_signed_in_user_id),
+    title: Optional[str] = Form(None), user_id: str = Depends(get_signed_in_user_id),
 ):
     if user_id is None:
         raise HTTPException(401, "Sign in to upload a sheet.")
@@ -641,7 +681,7 @@ async def submit_sheet(
         try:
             body = UploadRequest(filename=file.filename or "", size=size, style=style,
                                  octave=octave, notation=notation, font_size=font_size, dpi=dpi, auto_retry=auto_retry,
-                                 color=color, app=app, ad_unlock=ad_unlock)
+                                 color=color, app=app, ad_unlock=ad_unlock, title=title)
         except ValueError:
             raise HTTPException(400, "Invalid file or annotation options.")
         job = reserve_upload(body, user_id)
@@ -701,7 +741,7 @@ def _original_ready(job):
 
 
 def _with_readiness(job, sheet_name):
-    return {**job, "sheet_name": sheet_name,
+    return {**job, "sheet_name": sheet_name, "title": sheet_title(job, sheet_name),
             "original_ready": _original_ready(job), "can_retry": job_state.can_retry(job)}
 
 
@@ -717,6 +757,36 @@ def job_status(job_id: str, user_id: str = Depends(get_current_user_id)):
     job = _readable_job_or_404(job_id, user_id)
     sheet = db.get_music_sheet(job["music_sheet_id"])
     return _with_readiness(job, sheet["sheet_name"] if sheet else None)
+
+
+class RenameRequest(BaseModel):
+    title: str = Field(max_length=TITLE_MAX_LENGTH)
+
+    @field_validator("title")
+    @classmethod
+    def _clean_title(cls, value):
+        cleaned = clean_title(value)
+        if not cleaned:
+            raise ValueError("A sheet's name can't be empty.")
+        return cleaned
+
+
+# PUT on the title rather than PATCH on the sheet: PATCH is outside the
+# methods CORS allows, here and at the API gateway (infra/modules/serverless).
+@app.put("/api/sheets/{job_id}/title")
+def rename_sheet(job_id: str, body: RenameRequest, user_id: str = Depends(get_signed_in_user_id)):
+    """Give one of the reader's own sheets a new title. Only the title
+    changes - the uploaded filename, and with it every stored file, stays as
+    it was (see TITLE_MAX_LENGTH). Answers with the sheet as GET does."""
+    if user_id is None:
+        raise HTTPException(401, "Sign in to rename a sheet.")
+    if job_id == DEMO_JOB_ID:
+        raise HTTPException(403, "The demo sheet can't be renamed.")
+    job = _owned_job_or_404(job_id, user_id)
+    if job["status"] == "deleting":
+        raise HTTPException(404, "no such job")
+    db.update_annotation_job(job_id, title=body.title)
+    return job_status(job_id, user_id)
 
 
 @app.post("/api/sheets/{job_id}/retry", status_code=202)
@@ -863,7 +933,7 @@ def job_assets(job_id: str, user_id: str = Depends(get_current_user_id)):
                 "labels": f"/api/sheets/{job_id}/labels" if has_labels else None,
                 "musicxml": f"/api/sheets/{job_id}/musicxml" if has_musicxml else None,
                 "original_type": original_type}
-    stem = Path(job["sheet_name"]).stem
+    stem = sheet_title(job)
     disposition = _content_disposition("attachment", f"{stem} (annotated).pdf", f"{_ascii_stem(stem)} (annotated).pdf")
     return JSONResponse({"direct": True,
                          "pdf": storage.presign_artifact(job, "output", disposition),
@@ -877,7 +947,7 @@ def job_assets(job_id: str, user_id: str = Depends(get_current_user_id)):
 
 
 def _musicxml_disposition(job):
-    stem = Path(job["sheet_name"]).stem
+    stem = sheet_title(job)
     return _content_disposition("attachment", f"{stem}.mxl", f"{_ascii_stem(stem)}.mxl")
 
 
@@ -906,7 +976,7 @@ def job_download(job_id: str, inline: bool = False, user_id: str = Depends(get_c
     sheet = db.get_music_sheet(job["music_sheet_id"])
     sheet_name = sheet["sheet_name"] if sheet else job["music_sheet_id"]
     disposition = "inline" if inline else "attachment"
-    stem = Path(sheet_name).stem
+    stem = sheet_title(job, sheet_name)
     filename = f"{stem} (annotated).pdf"
     ascii_filename = f"{_ascii_stem(stem)} (annotated).pdf"
     if SERVERLESS:

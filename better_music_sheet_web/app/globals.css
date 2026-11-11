@@ -1358,3 +1358,26 @@ main:has(.page-fixer) { z-index: 45; }
 .page-fixer .link-button { color: #e9d8bd; }
 .page-fixer .btn-pill.ghost { color: #f7efe3; border-color: #8a7660; }
 .page-fixer .btn-pill.ghost:hover:not(:disabled) { background: rgba(255, 255, 255, 0.08); }
+
+/* Renaming a sheet (app/rename-sheet.tsx): a pencil in the Library row's
+   actions, and beside the sheet's own title. */
+.rename-icon {
+  width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.title-rename {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px; padding: 0; border: none; border-radius: 999px;
+  background: transparent; color: var(--ink-soft); cursor: pointer;
+}
+.title-rename:hover { background: var(--paper-deep); color: var(--ink); }
+/* The name asked for when the pages are photos (app/upload-form.tsx). */
+.sheet-name-field { margin-top: 20px; }
+.sheet-name-field label { display: block; margin-bottom: 6px; font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.sheet-name-field input {
+  width: 100%; height: 44px; padding: 0 14px; border-radius: 10px;
+  border: 1px solid var(--paper-deep); background: var(--card); color: var(--ink);
+  font-size: 15px; font-family: inherit;
+}
+.sheet-name-field input:focus { outline: none; border-color: var(--accent); }
+.sheet-name-field .modal-hint { margin-top: 6px; }

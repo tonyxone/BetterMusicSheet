@@ -17,6 +17,7 @@ import { BackButton } from "../../back-button";
 import { PageLoading } from "../../page-loading";
 import { useI18n } from "@/lib/i18n/client";
 import { translateKnown } from "@/lib/i18n/known-text";
+import { sheetTitle } from "@/lib/sheet-title";
 
 // pdf.js stays out of the static export's prerender pass, as elsewhere.
 const PdfPages = dynamic(() => import("../../sheet-viewer/pdf-pages").then((m) => m.PdfPages), { ssr: false });
@@ -84,7 +85,7 @@ function WaitingForNames({ job, jobId }: { job: AnnotationJob; jobId: string }) 
       <div className="result-head">
         <div className="page-title-row">
           <BackButton />
-          <h2 className="serif">{job.sheet_name}</h2>
+          <h2 className="serif">{sheetTitle(job)}</h2>
         </div>
       </div>
       <div className={`names-banner${failed ? " failed" : ""}`} role="status">

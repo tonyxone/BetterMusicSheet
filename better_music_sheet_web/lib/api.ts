@@ -13,7 +13,12 @@ export type AnnotationJob = {
   job_id: string;
   music_sheet_id: string;
   status: "uploading" | "queued" | "processing" | "done" | "failed";
+  /** The file as uploaded ("Scan.jpg"): where its type comes from. */
   sheet_name?: string;
+  /** What the reader calls the sheet - chosen on upload or renamed later,
+   * else the filename's stem. Absent from older backends; show it through
+   * lib/sheet-title.ts's sheetTitle(). */
+  title?: string | null;
   error: string | null;
   stage: string | null;
   labeled_groups: number | null;
