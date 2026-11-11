@@ -128,7 +128,7 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
                   {user && (
                     <button
                       type="button"
-                      className="history-action"
+                      className="history-action history-rename"
                       onClick={() => setRenameTarget(job)}
                       title={fmt(t.renameNamed, { name: sheetTitle(job) || m.common.sheet })}
                       aria-label={fmt(t.renameNamed, { name: sheetTitle(job) || m.common.sheet })}

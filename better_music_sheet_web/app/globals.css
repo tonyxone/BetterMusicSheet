@@ -380,6 +380,9 @@ details.options[open] summary::before { content: "▾ "; }
   .history-actions { gap: 8px; }
   .history-action { width: 36px; height: 36px; }
   .history-play { width: 52px; }
+  /* A third button leaves the name no room at all: on a phone a sheet is
+     renamed from its own page (the pencil beside its title) instead. */
+  .history-rename { display: none; }
   /* The timestamp is long enough to wrap to three lines in the narrow card,
      which triples the row height for information nobody reads word by word.
      Clip it instead - the date, the part that identifies the upload, stays. */
