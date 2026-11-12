@@ -241,8 +241,9 @@ export const en = {
     freeLimitBody:
       "The free plan keeps one sheet at a time. Delete your current sheet to upload this one, or go Premium to keep " +
       "as many as you like.",
-    /** The name asked for when the pages are photos (a photo's filename
-     * says nothing about the music). {date} is the date and time now. */
+    /** The name asked for before uploading, offered as the file's own name.
+     * scanTitle is offered instead for a camera shot, whose file name says
+     * nothing; {date} is the date and time now. */
     sheetName: "Sheet name",
     sheetNameHint: "Shown in your Library. You can rename it later.",
     scanTitle: "Scan {date}",

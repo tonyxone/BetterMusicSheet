@@ -1,5 +1,6 @@
-// What a sheet is called. Its title is chosen when uploading photos and can
-// be changed later (PUT /api/sheets/{id}/title); sheet_name stays the file as
+// What a sheet is called. Its title is chosen when uploading - offered as
+// the file's own name, or "Scan <date>" for a camera shot - and can be changed
+// later (PUT /api/sheets/{id}/title); sheet_name stays the file as
 // uploaded, which is what its type and download extension come from. Plain
 // functions, so the rules have a test that needs no component.
 
@@ -24,6 +25,26 @@ export function defaultScanTitle(template: string, date: Date, tag: string): str
 type Named = { title?: string | null; sheet_name?: string | null };
 
 const EXTENSION = /\.[^./\\]+$/;
+
+/** Names that say nothing about the music: what a phone's camera calls a
+ * shot it hands straight to the page ("image.jpg", "image (2).jpg", a bare
+ * timestamp), and the fallback a straightened page gets ("Page"). "IMG_2041"
+ * is kept - it at least finds the photo again in the camera roll. */
+const GENERIC_NAME = /^(?:image|photo|picture|page|camera|capture)?[\s_-]*(?:\(\d+\)|\d+)?$/i;
+
+/** A file's name as a title: without its extension, cleaned like a title.
+ * Empty when that leaves nothing worth offering (GENERIC_NAME). */
+export function titleFromFileName(name: string): string {
+  const stem = cleanTitle(name.replace(EXTENSION, ""));
+  return GENERIC_NAME.test(stem) ? "" : stem.slice(0, TITLE_MAX_LENGTH);
+}
+
+/** The name offered for what was chosen to upload: the first file's own
+ * name (a PDF's, or the first photo's), else "Scan <date>" - see
+ * defaultScanTitle for ``template``, ``date`` and ``tag``. */
+export function defaultSheetName(files: { name: string }[], template: string, date: Date, tag: string): string {
+  return titleFromFileName(files[0]?.name ?? "") || defaultScanTitle(template, date, tag);
+}
 
 /** What to show for a sheet. The backend always sends a title (the
  * filename's stem when none was chosen); one from before it did is called

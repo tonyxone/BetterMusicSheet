@@ -12,7 +12,7 @@ import { resolveUploadAttempt } from "@/lib/upload-gate";
 import { addFiles, combinePhotos, isPdf, isPhoto, moveFile, removeFile } from "@/lib/photo-pages";
 import { originOf, type PageFix } from "@/lib/page-photo";
 import { checkUpload, type UploadCheck } from "@/lib/staff-check";
-import { cleanTitle, defaultScanTitle, TITLE_MAX_LENGTH } from "@/lib/sheet-title";
+import { cleanTitle, defaultSheetName, TITLE_MAX_LENGTH } from "@/lib/sheet-title";
 import { PremiumWindow } from "./(en)/subscription/premium-window";
 import { PageFixer } from "./page-fixer";
 import { useI18n } from "@/lib/i18n/client";
@@ -54,10 +54,12 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
   // One PDF, or one or more photos of the same score in page order - see
   // lib/photo-pages.ts. Several photos are put together into one sheet.
   const [files, setFiles] = useState<File[]>([]);
-  // What to call a sheet of photos - their filenames say nothing about the
-  // music. Offered as "Scan <date>" when the first photo comes in; null
-  // while there are none.
+  // What to call the sheet. Offered as the first file's name - or "Scan
+  // <date>" for a camera shot, which has none worth keeping - and offered
+  // afresh as the files change, until the reader types a name of their own.
+  // Null while nothing is chosen.
   const [title, setTitle] = useState<string | null>(null);
+  const [titleTyped, setTitleTyped] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [preparing, setPreparing] = useState(false);
   const [style, setStyle] = useState<"unicode" | "ascii">("unicode");
@@ -103,12 +105,16 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
   const photos = files.length > 0 && files.every(isPhoto);
   const file = files.length === 1 ? files[0] : null;
 
-  /** Every change to the chosen files comes through here, so a sheet of
-   * photos always has a name to edit before it is uploaded. */
+  /** Every change to the chosen files comes through here, so whatever is
+   * chosen always has a name to edit before it is uploaded. */
   function changeFiles(next: File[]) {
     setFiles(next);
-    if (!next.length || !next.every(isPhoto)) setTitle(null);
-    else if (title === null) setTitle(defaultScanTitle(t.scanTitle, new Date(), tag));
+    if (!next.length) {
+      setTitle(null);
+      setTitleTyped(false);
+    } else if (!titleTyped) {
+      setTitle(defaultSheetName(next, t.scanTitle, new Date(), tag));
+    }
   }
 
   function choose(incoming: FileList | File[] | null) {
@@ -159,9 +165,8 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
       const job_id = await uploadSheet(upload, {
         style, octave, notation, font_size: fontSize, auto_retry: autoRetry, dpi: dpi ? Number(dpi) : null,
         color,
-        // A PDF goes by its filename. Photos by the name given them - or,
-        // emptied, the one they were offered.
-        title: photos ? cleanTitle(title ?? "") || defaultScanTitle(t.scanTitle, new Date(), tag) : null,
+        // The name given - or, emptied, the one that was offered.
+        title: cleanTitle(title ?? "") || defaultSheetName(files, t.scanTitle, new Date(), tag),
       });
       router.push(path(`/sheets?job=${job_id}`));
     } catch (err) {
@@ -282,11 +287,11 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
           </div>
         )}
 
-        {photos && (
+        {files.length > 0 && (
           <div className="sheet-name-field">
             <label htmlFor="sheet-name">{t.sheetName}</label>
             <input id="sheet-name" type="text" value={title ?? ""} maxLength={TITLE_MAX_LENGTH}
-              disabled={submitting} onChange={(e) => setTitle(e.target.value)}
+              disabled={submitting} onChange={(e) => { setTitle(e.target.value); setTitleTyped(true); }}
               onFocus={(e) => e.currentTarget.select()} />
             <span className="modal-hint">{t.sheetNameHint}</span>
           </div>
