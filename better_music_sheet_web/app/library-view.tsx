@@ -12,6 +12,9 @@ import { noteCountLabel } from "@/lib/note-count";
 import { useI18n } from "@/lib/i18n/client";
 import { fmt, rich } from "@/lib/i18n/format";
 import { translateKnown } from "@/lib/i18n/known-text";
+import { sheetTitle } from "@/lib/sheet-title";
+import { useAuth } from "./auth-context";
+import { RenameIcon, RenameSheetDialog } from "./rename-sheet";
 
 // A sheet can be opened as soon as its upload finishes; its badge
 // (m.library.status) describes its note names, which may still be coming - or
@@ -29,6 +32,10 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
   const t = m.library;
   const [jobs, setJobs] = useState<AnnotationJob[] | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AnnotationJob | null>(null);
+  const [renameTarget, setRenameTarget] = useState<AnnotationJob | null>(null);
+  // Renaming changes the account's own sheet, so it needs one signed in
+  // (a guest's library is read-only that way; the server agrees).
+  const { user } = useAuth();
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
@@ -98,7 +105,7 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
                 <Link href={path(`/sheets?job=${job.job_id}`)} className="history-row-link">
                   <div className="history-icon">📄</div>
                   <div className="history-info">
-                    <div className="history-title">{job.sheet_name}</div>
+                    <div className="history-title">{sheetTitle(job)}</div>
                     {noteCountLabel(job, t, tag) && <div className="history-meta">{noteCountLabel(job, t, tag)}</div>}
                   </div>
                   <span className={`history-badge ${job.status}`}>{t.status[job.status]}</span>
@@ -118,6 +125,17 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
                       <KeyboardIcon size={40} />
                     </Link>
                   )}
+                  {user && (
+                    <button
+                      type="button"
+                      className="history-action history-rename"
+                      onClick={() => setRenameTarget(job)}
+                      title={fmt(t.renameNamed, { name: sheetTitle(job) || m.common.sheet })}
+                      aria-label={fmt(t.renameNamed, { name: sheetTitle(job) || m.common.sheet })}
+                    >
+                      <RenameIcon />
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="history-action history-delete"
@@ -126,9 +144,9 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
                     title={
                       isActive(job)
                         ? t.waitToDelete
-                        : fmt(t.deleteNamed, { name: job.sheet_name || m.common.sheet })
+                        : fmt(t.deleteNamed, { name: sheetTitle(job) || m.common.sheet })
                     }
-                    aria-label={fmt(t.deleteNamed, { name: job.sheet_name || m.common.sheet })}
+                    aria-label={fmt(t.deleteNamed, { name: sheetTitle(job) || m.common.sheet })}
                   >
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                       <path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5m4-5v5" />
@@ -177,6 +195,14 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
         {m.common.upload}
       </Link>
 
+      {renameTarget && (
+        <RenameSheetDialog job={renameTarget} onClose={() => setRenameTarget(null)}
+          onRenamed={(renamed) => {
+            setJobs((current) => current?.map((job) => (job.job_id === renamed.job_id ? renamed : job)) ?? current);
+            setRenameTarget(null);
+          }} />
+      )}
+
       {deleteTarget && (
         <div className="modal-backdrop" onMouseDown={(event) => {
           if (event.target === event.currentTarget) closeDelete();
@@ -196,7 +222,7 @@ export function LibraryView({ showBack = false }: { showBack?: boolean }) {
             </button>
             <h2 id="delete-title" className="modal-title">{t.deleteTitle}</h2>
             <p className="modal-sub">
-              {rich(t.deleteBody, {}, { name: <strong>{deleteTarget.sheet_name || m.common.untitledSheet}</strong> })}
+              {rich(t.deleteBody, {}, { name: <strong>{sheetTitle(deleteTarget) || m.common.untitledSheet}</strong> })}
             </p>
             {deleteError && <div className="modal-error">{deleteError}</div>}
             <div className="modal-actions">

@@ -12,6 +12,7 @@ import { resolveUploadAttempt } from "@/lib/upload-gate";
 import { addFiles, combinePhotos, isPdf, isPhoto, moveFile, removeFile } from "@/lib/photo-pages";
 import { originOf, type PageFix } from "@/lib/page-photo";
 import { checkUpload, type UploadCheck } from "@/lib/staff-check";
+import { cleanTitle, defaultSheetName, TITLE_MAX_LENGTH } from "@/lib/sheet-title";
 import { PremiumWindow } from "./(en)/subscription/premium-window";
 import { PageFixer } from "./page-fixer";
 import { useI18n } from "@/lib/i18n/client";
@@ -53,6 +54,12 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
   // One PDF, or one or more photos of the same score in page order - see
   // lib/photo-pages.ts. Several photos are put together into one sheet.
   const [files, setFiles] = useState<File[]>([]);
+  // What to call the sheet. Offered as the first file's name - or "Scan
+  // <date>" for a camera shot, which has none worth keeping - and offered
+  // afresh as the files change, until the reader types a name of their own.
+  // Null while nothing is chosen.
+  const [title, setTitle] = useState<string | null>(null);
+  const [titleTyped, setTitleTyped] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [preparing, setPreparing] = useState(false);
   const [style, setStyle] = useState<"unicode" | "ascii">("unicode");
@@ -98,9 +105,21 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
   const photos = files.length > 0 && files.every(isPhoto);
   const file = files.length === 1 ? files[0] : null;
 
+  /** Every change to the chosen files comes through here, so whatever is
+   * chosen always has a name to edit before it is uploaded. */
+  function changeFiles(next: File[]) {
+    setFiles(next);
+    if (!next.length) {
+      setTitle(null);
+      setTitleTyped(false);
+    } else if (!titleTyped) {
+      setTitle(defaultSheetName(next, t.scanTitle, new Date(), tag));
+    }
+  }
+
   function choose(incoming: FileList | File[] | null) {
     const result = addFiles(files, Array.from(incoming ?? []));
-    setFiles(result.files);
+    changeFiles(result.files);
     setError(result.error && translateKnown(result.error, m));
   }
 
@@ -108,7 +127,7 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
    * the camera, goes after the pages already there. */
   function fitted(page: File) {
     if (fixing?.index == null) choose([page]);
-    else setFiles(files.map((f, i) => (i === fixing.index ? page : f)));
+    else changeFiles(files.map((f, i) => (i === fixing.index ? page : f)));
     setFixing(null);
   }
 
@@ -146,6 +165,8 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
       const job_id = await uploadSheet(upload, {
         style, octave, notation, font_size: fontSize, auto_retry: autoRetry, dpi: dpi ? Number(dpi) : null,
         color,
+        // The name given - or, emptied, the one that was offered.
+        title: cleanTitle(title ?? "") || defaultSheetName(files, t.scanTitle, new Date(), tag),
       });
       router.push(path(`/sheets?job=${job_id}`));
     } catch (err) {
@@ -256,13 +277,23 @@ export function UploadForm({ heading = true }: { heading?: boolean } = {}) {
         </p>
 
         {photos ? (
-          <PhotoPages files={files} onChange={setFiles} onStraighten={straighten} disabled={submitting} />
+          <PhotoPages files={files} onChange={changeFiles} onStraighten={straighten} disabled={submitting} />
         ) : files.length > 0 && (
           <div className="picked-file">
             <button type="button" className="link-button" disabled={submitting}
-              onClick={() => { setFiles([]); setError(null); }}>
+              onClick={() => { changeFiles([]); setError(null); }}>
               {t.removeFile}
             </button>
+          </div>
+        )}
+
+        {files.length > 0 && (
+          <div className="sheet-name-field">
+            <label htmlFor="sheet-name">{t.sheetName}</label>
+            <input id="sheet-name" type="text" value={title ?? ""} maxLength={TITLE_MAX_LENGTH}
+              disabled={submitting} onChange={(e) => { setTitle(e.target.value); setTitleTyped(true); }}
+              onFocus={(e) => e.currentTarget.select()} />
+            <span className="modal-hint">{t.sheetNameHint}</span>
           </div>
         )}
 

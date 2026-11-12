@@ -1,6 +1,7 @@
 "use client";
 
 import { clientApiFetch } from "./client-api";
+import type { AnnotationJob } from "./api";
 
 /** What /assets reports. `original` is the file as uploaded and may be absent
  * (an older sheet, or one whose upload was cleaned up); `original_type` says
@@ -92,6 +93,28 @@ export async function uploadSheet(file: File, options: Record<string, string | n
   // reconciliation own delivery if the browser closes or this request fails.
   await clientApiFetch(`/api/uploads/${job_id}/complete`, { method: "POST" }).catch(() => undefined);
   return job_id;
+}
+
+/** A request about one sheet the server refused: its status, and its own
+ * message when it sent one as text (a validation error sends a list). */
+export class SheetRequestError extends Error {
+  constructor(readonly status: number, readonly detail: string | null) {
+    super(detail ?? `Request failed (${status})`);
+  }
+}
+
+/** Give a sheet of the reader's own a new title; answers with the sheet as
+ * GET /api/sheets/{id} does. */
+export async function renameSheet(jobId: string, title: string): Promise<AnnotationJob> {
+  const response = await clientApiFetch(`/api/sheets/${jobId}/title`, {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+  const body = await response.json().catch(() => null) as (AnnotationJob & { detail?: unknown }) | null;
+  if (!response.ok || !body) {
+    throw new SheetRequestError(response.status, typeof body?.detail === "string" ? body.detail : null);
+  }
+  return body;
 }
 
 async function requireSuccess(response: Response, fallback: string) {

@@ -42,6 +42,7 @@ import { PageLoading } from "../../page-loading";
 import { useI18n } from "@/lib/i18n/client";
 import { fmt, rich } from "@/lib/i18n/format";
 import type { Messages } from "@/lib/i18n/messages/en";
+import { sheetTitle } from "@/lib/sheet-title";
 
 // ssr:false is required, not just an optimization: both touch WebGL/Worker
 // APIs that don't exist during the static export's prerender pass.
@@ -318,12 +319,12 @@ function SheetPicker({ onPick }: { onPick: (jobId: string) => void }) {
             <button
               key={job.job_id}
               className="history-row"
-              title={fmt(m.play.practiceNamed, { name: job.sheet_name || m.common.thisSheet })}
+              title={fmt(m.play.practiceNamed, { name: sheetTitle(job) || m.common.thisSheet })}
               onClick={() => onPick(job.job_id)}
             >
               <div className="history-icon">🎹</div>
               <div className="history-info">
-                <div className="history-title">{job.sheet_name}</div>
+                <div className="history-title">{sheetTitle(job)}</div>
                 <div className="history-meta">{new Date(job.created_at * 1000).toLocaleString(tag)}</div>
               </div>
             </button>

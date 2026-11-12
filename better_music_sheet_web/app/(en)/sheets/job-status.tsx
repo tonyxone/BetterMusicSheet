@@ -9,7 +9,7 @@ import { fetchSheetAssets, fetchSheetFile } from "@/lib/sheet-files";
 import { SheetToggle, type SheetVariant } from "../../sheet-toggle";
 import { KeyboardIcon } from "../../keyboard-icon";
 import { BackButton } from "../../back-button";
-import { isActive, type AnnotationJob } from "@/lib/api";
+import { DEMO_JOB_ID, isActive, type AnnotationJob } from "@/lib/api";
 import { countUsage, useUsage } from "@/lib/usage";
 import { usePreference } from "@/lib/preferences";
 import type { CustomizedExport } from "../../sheet-viewer/sheet-editor";
@@ -18,6 +18,9 @@ import { useI18n } from "@/lib/i18n/client";
 import { fmt, rich } from "@/lib/i18n/format";
 import { translateKnown } from "@/lib/i18n/known-text";
 import { namesProgress, namesStage } from "@/lib/names-progress";
+import { sheetTitle, uploadExtension } from "@/lib/sheet-title";
+import { useAuth } from "../../auth-context";
+import { RenameIcon, RenameSheetDialog } from "../../rename-sheet";
 
 // pdf.js and the editor stay out of every other route's bundle, and out of
 // the static export's prerender pass, which has no canvas or worker.
@@ -53,6 +56,11 @@ export function JobStatus() {
   // Bumped to start checking again once a retry puts a failed sheet back in
   // the queue - the check stops by itself when a sheet finishes or fails.
   const [pollRound, setPollRound] = useState(0);
+  const [renaming, setRenaming] = useState(false);
+  // Only an account's own sheet can be renamed (the server checks it is
+  // theirs); the sample belongs to no one.
+  const { user } = useAuth();
+  const canRename = !!user && jobId !== DEMO_JOB_ID;
 
   const done = job?.status === "done";
   // The upload can be read long before the names are ready, and still can
@@ -121,7 +129,7 @@ export function JobStatus() {
             {t.annotationFailed}
           </h1>
         </div>
-        <p style={{ marginTop: 6, color: "var(--ink-soft)" }}>{job.sheet_name}</p>
+        <p style={{ marginTop: 6, color: "var(--ink-soft)" }}>{sheetTitle(job)}</p>
         <p style={{ marginTop: 12, color: "var(--ink-soft)" }}>{translateKnown(job.error, m)}</p>
         <Link href={path("/upload")} style={{ marginTop: 24, display: "inline-block", color: "var(--accent)", textDecoration: "underline" }}>
           {t.tryAnother}
@@ -145,12 +153,12 @@ export function JobStatus() {
             {t.annotating}
           </h2>
         </div>
-        <p style={{ marginTop: 6, color: "var(--ink-soft)" }}>{job.sheet_name}</p>
+        <p style={{ marginTop: 6, color: "var(--ink-soft)" }}>{sheetTitle(job)}</p>
         <div className="stage-card" style={{ marginTop: 30 }}>
           <div className="stage-spinner" />
           <div className="stage-text">{translateKnown(job.stage, m) || t.queued}</div>
         </div>
-        <CancelAnnotation jobId={jobId} sheetName={job.sheet_name} cancellingRef={cancellingRef} />
+        <CancelAnnotation jobId={jobId} sheetName={sheetTitle(job)} cancellingRef={cancellingRef} />
       </div>
     );
   }
@@ -167,7 +175,13 @@ export function JobStatus() {
       <div className="result-head">
         <div className="page-title-row">
           <BackButton />
-          <h2 className="serif">{job.sheet_name}</h2>
+          <h2 className="serif">{sheetTitle(job)}</h2>
+          {canRename && (
+            <button type="button" className="title-rename" onClick={() => setRenaming(true)}
+              title={m.sheet.rename.button} aria-label={fmt(m.library.renameNamed, { name: sheetTitle(job) })}>
+              <RenameIcon />
+            </button>
+          )}
         </div>
         <div className="result-actions">
           {/* Open to every plan: without Premium, Play plays the first lines
@@ -180,7 +194,7 @@ export function JobStatus() {
           >
             <KeyboardIcon size={44} />
           </Link>
-          <DownloadMenu jobId={jobId} sheetName={job.sheet_name} originalMissing={!!originalMissing}
+          <DownloadMenu jobId={jobId} job={job} originalMissing={!!originalMissing}
             customizedRef={customizedRef} variant={shown} annotatedReady={done} />
         </div>
       </div>
@@ -195,6 +209,10 @@ export function JobStatus() {
           variantToggle={<SheetToggle value={shown} onChange={setVariant} unavailable={originalMissing}
             annotatedUnavailable={namesUnavailable} />} />
       </div>
+      {renaming && (
+        <RenameSheetDialog job={job} onClose={() => setRenaming(false)}
+          onRenamed={(renamed) => { setJob(renamed); setRenaming(false); }} />
+      )}
     </div>
   );
 }
@@ -250,7 +268,7 @@ function NamesBanner({ job, jobId, cancellingRef, onRetried }: {
         <strong>{t.addingNames}</strong> {translateKnown(job.stage, m)}
         <div className="names-banner-sub">{t.addingNamesSub}</div>
       </div>
-      <CancelAnnotation jobId={jobId} sheetName={job.sheet_name} cancellingRef={cancellingRef} inline />
+      <CancelAnnotation jobId={jobId} sheetName={sheetTitle(job)} cancellingRef={cancellingRef} inline />
       <NamesProgressBar stage={job.stage} />
     </div>
   );
@@ -383,9 +401,9 @@ function saveBlob(blob: Blob, filename: string) {
 // A plain <a href> can't be pointed at a fetch() call, and we want the
 // browser's "save as" filename to be the real sheet name, not the job id -
 // so fetch the bytes ourselves and hand the browser a blob URL to save.
-function DownloadMenu({ jobId, sheetName, originalMissing, customizedRef, variant, annotatedReady }: {
+function DownloadMenu({ jobId, job, originalMissing, customizedRef, variant, annotatedReady }: {
   jobId: string;
-  sheetName?: string;
+  job: AnnotationJob;
   originalMissing: boolean;
   customizedRef: MutableRefObject<CustomizedExport | null>;
   /** Customized follows the preview: with the note names or without. */
@@ -399,7 +417,9 @@ function DownloadMenu({ jobId, sheetName, originalMissing, customizedRef, varian
   const [busy, setBusy] = useState<DownloadKind | null>(null);
   const [error, setError] = useState<DownloadKind | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const stem = (sheetName || jobId).replace(/\.[^.]+$/, "");
+  // Named after the sheet's title; the original keeps the extension of
+  // the file that was uploaded.
+  const stem = sheetTitle(job) || jobId;
   // The MusicXML is stored a few seconds after the names are done, so ask
   // again each time the menu opens rather than once with the page. Until an
   // answer arrives the option stays enabled; a click checks for itself.
@@ -451,7 +471,7 @@ function DownloadMenu({ jobId, sheetName, originalMissing, customizedRef, varian
       // 500 previously reached the user as a silently broken file.
       if (!res.ok) throw new Error(`download failed (${res.status})`);
       const blob = await res.blob();
-      saveBlob(blob, kind === "original" ? (sheetName || `${stem}.pdf`)
+      saveBlob(blob, kind === "original" ? `${stem}${uploadExtension(job) || ".pdf"}`
         : kind === "musicxml" ? fmt(t.musicxmlFile, { stem }) : fmt(t.annotatedFile, { stem }));
     } catch (err) {
       console.error(`Downloading the ${kind} sheet failed:`, err);

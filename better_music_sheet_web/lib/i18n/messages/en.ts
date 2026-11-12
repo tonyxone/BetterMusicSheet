@@ -241,6 +241,12 @@ export const en = {
     freeLimitBody:
       "The free plan keeps one sheet at a time. Delete your current sheet to upload this one, or go Premium to keep " +
       "as many as you like.",
+    /** The name asked for before uploading, offered as the file's own name.
+     * scanTitle is offered instead for a camera shot, whose file name says
+     * nothing; {date} is the date and time now. */
+    sheetName: "Sheet name",
+    sheetNameHint: "Shown in your Library. You can rename it later.",
+    scanTitle: "Scan {date}",
     pagesInOrder: "Pages, in order",
     dragHint: "Drag the pages into order.",
     /** Before and after the number in "Page 3". */
@@ -296,6 +302,7 @@ export const en = {
     previousPage: "Previous page",
     nextPage: "Next page",
     pageOf: "Page {page} of {count}",
+    renameNamed: "Rename {name}",
     deleteTitle: "Delete this sheet?",
     deleteBody: "{name} will be removed from your Library.",
     keepSheet: "Keep this sheet",
@@ -340,6 +347,17 @@ export const en = {
     keepGoing: "Keep going",
     cancelling: "Cancelling…",
     stopAndRemove: "Stop and remove",
+    /** Renaming a sheet, from the Library or the sheet itself (app/rename-sheet.tsx). */
+    rename: {
+      button: "Rename",
+      title: "Rename this sheet",
+      label: "Name",
+      save: "Save",
+      saving: "Saving…",
+      empty: "Enter a name for this sheet.",
+      failed: "Could not rename this sheet.",
+      failedStatus: "Could not rename this sheet ({status}).",
+    },
     dragToResize: "Drag to resize",
     download: {
       customized: "Customized",
@@ -827,6 +845,8 @@ export const en = {
       waitForUpload: "Wait for your current upload to finish before deleting your account.",
       changed: "This sheet changed; refresh and try again.",
       demoDelete: "The demo sheet can't be deleted.",
+      signInToRename: "Sign in to rename a sheet.",
+      demoRename: "The demo sheet can't be renamed.",
       notWaiting: "This sheet isn't waiting to be tried again.",
       tooManyDrawings: "Too many drawings on this sheet to save. Erase some and try again.",
       refresh: "Please refresh the page to use the updated upload form.",
