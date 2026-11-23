@@ -81,6 +81,22 @@ jobs:
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
+      - name: Use the classic Docker image store
+        # Docker 29 on the runners stores images in containerd, whose push asks
+        # ECR for the image manifest first. That read needs ecr:BatchGetImage,
+        # which the deploy role does not have, so the push failed with 403.
+        # The classic store pushes the way every earlier release did.
+        run: |
+          cfg=/etc/docker/daemon.json
+          if [ -s "$cfg" ]; then
+            sudo jq '.features["containerd-snapshotter"] = false' "$cfg" | sudo tee "$cfg.new" > /dev/null
+            sudo mv "$cfg.new" "$cfg"
+          else
+            echo '{"features": {"containerd-snapshotter": false}}' | sudo tee "$cfg" > /dev/null
+          fi
+          sudo systemctl restart docker
+          docker info --format 'Storage driver: {{.Driver}}'
+
       - name: Fetch Audiveris (Linux build)
         env:
           # The folder holding the one build to ship, e.g. s3://audiveris/.
