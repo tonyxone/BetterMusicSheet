@@ -70,3 +70,14 @@ resource "aws_route53_record" "web_www" {
     evaluate_target_health = false
   }
 }
+
+# Google Search Console domain verification. Created by hand first so it could
+# be verified right away; allow_overwrite lets the next apply adopt it.
+resource "aws_route53_record" "google_site_verification" {
+  zone_id         = data.aws_route53_zone.root.zone_id
+  name            = var.domain_name
+  type            = "TXT"
+  ttl             = 300
+  records         = ["google-site-verification=46QS91kGkIIEVIUgzQGij60ufblnz7qYHQZ3cn9cswY"]
+  allow_overwrite = true
+}
